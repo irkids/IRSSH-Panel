@@ -1,0 +1,184 @@
+---
+# Initial server setup playbook
+- name: IRSSH Panel Server Setup
+  hosts: all
+  become: true
+  vars:
+    panel_dir: /opt/irssh-panel
+    config_dir: "{{ panel_dir }}/config"
+    modules_dir: "{{ panel_dir }}/modules"
+    log_dir: /var/log/irssh
+    db_name: irssh_panel
+    db_user: irssh_admin
+    db_pass: "{{ lookup('password', '/dev/null length=32 chars=ascii_letters,digits,punctuation') }}"
+    admin_pass: "{{ lookup('password', '/dev/null length=16 chars=ascii_letters,digits,punctuation') }}"
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install system dependencies
+      apt:
+        name:
+          - python3
+          - python3-pip
+          - python3-venv
+          - postgresql
+          - postgresql-contrib
+          - nginx
+          - certbot
+          - python3-certbot-nginx
+          - git
+          - curl
+          - tar
+          - unzip
+          - supervisor
+          - ufw
+        state: present
+
+    - name: Create required directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ panel_dir }}"
+        - "{{ config_dir }}"
+        - "{{ modules_dir }}"
+        - "{{ log_dir }}"
+
+    - name: Configure PostgreSQL
+      block:
+        - name: Ensure PostgreSQL is started
+          service:
+            name: postgresql
+            state: started
+            enabled: yes
+
+        - name: Create database user
+          postgresql_user:
+            name: "{{ db_user }}"
+            password: "{{ db_pass }}"
+            state: present
+          become: true
+          become_user: postgres
+
+        - name: Create database
+          postgresql_db:
+            name: "{{ db_name }}"
+            owner: "{{ db_user }}"
+            state: present
+          become: true
+          become_user: postgres
+
+        - name: Save database configuration
+          template:
+            src: database.env.j2
+            dest: "{{ config_dir }}/database.env"
+            mode: '0600'
+
+    - name: Setup Python environment
+      block:
+        - name: Create virtual environment
+          command:
+            cmd: python3 -m venv "{{ panel_dir }}/venv"
+            creates: "{{ panel_dir }}/venv"
+
+        - name: Install Python packages
+          pip:
+            name:
+              - fastapi[all]
+              - uvicorn[standard]
+              - sqlalchemy[asyncio]
+              - psycopg2-binary
+              - python-jose[cryptography]
+              - passlib[bcrypt]
+              - python-multipart
+              - aiofiles
+              - python-telegram-bot
+              - psutil
+              - geoip2
+              - asyncpg
+            virtualenv: "{{ panel_dir }}/venv"
+            state: present
+
+    - name: Configure Nginx
+      template:
+        src: nginx.conf.j2
+        dest: /etc/nginx/sites-available/irssh-panel
+        mode: '0644'
+
+    - name: Enable Nginx site
+      file:
+        src: /etc/nginx/sites-available/irssh-panel
+        dest: /etc/nginx/sites-enabled/irssh-panel
+        state: link
+
+    - name: Remove default Nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+
+    - name: Configure systemd service
+      template:
+        src: irssh-panel.service.j2
+        dest: /etc/systemd/system/irssh-panel.service
+        mode: '0644'
+
+    - name: Configure UFW firewall
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: "{{ 'tcp' if item in ['80', '443'] else 'udp' }}"
+      loop:
+        - '80'    # HTTP
+        - '443'   # HTTPS
+        - '22'    # SSH
+        - '500'   # IKEv2
+        - '4500'  # IKEv2 NAT-T
+        - '1701'  # L2TP
+        - '51820' # WireGuard
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+
+    - name: Create admin user
+      template:
+        src: create_admin.py.j2
+        dest: "{{ panel_dir }}/create_admin.py"
+        mode: '0600'
+
+    - name: Execute admin user creation
+      command:
+        cmd: "{{ panel_dir }}/venv/bin/python {{ panel_dir }}/create_admin.py"
+
+    - name: Remove admin creation script
+      file:
+        path: "{{ panel_dir }}/create_admin.py"
+        state: absent
+
+    - name: Start and enable services
+      systemd:
+        name: "{{ item }}"
+        state: started
+        enabled: yes
+        daemon_reload: yes
+      loop:
+        - postgresql
+        - nginx
+        - irssh-panel
+
+    - name: Setup backup cron job
+      cron:
+        name: "IRSSH Panel Backup"
+        hour: "0"
+        minute: "0"
+        job: "curl -X POST http://localhost:8000/api/settings/backup -H 'Content-Type: application/json' -d '{\"components\": [\"database\", \"config\", \"certificates\"], \"cleanup\": true}'"
+
+    - name: Setup log rotation
+      template:
+        src: logrotate.conf.j2
+        dest: /etc/logrotate.d/irssh-panel
+        mode: '0644'
