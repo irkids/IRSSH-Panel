@@ -1,19 +1,30 @@
-# roles/protocols/templates/ssh/sshd_config.j2
+# ansible/roles/protocols/templates/ssh/sshd_config.j2
 Port {{ ssh_port }}
 Protocol 2
+HostKey /etc/ssh/ssh_host_rsa_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
 HostKey /etc/ssh/ssh_host_ed25519_key
+
+# Authentication
 PermitRootLogin no
-MaxAuthTries 6
 PubkeyAuthentication yes
 PasswordAuthentication {{ 'yes' if ssh_password_auth else 'no' }}
 PermitEmptyPasswords no
 ChallengeResponseAuthentication no
-UsePAM yes
+
+# Security
+Banner /etc/ssh/banner
 X11Forwarding no
 PrintMotd no
-Banner /etc/ssh/banner
-AcceptEnv LANG LC_*
-Subsystem sftp /usr/lib/openssh/sftp-server
-AllowGroups {{ ssh_allowed_groups | join(' ') }}
-ClientAliveInterval 300
-ClientAliveCountMax 2
+MaxAuthTries {{ ssh_max_auth_tries }}
+LoginGraceTime {{ ssh_login_grace_time }}
+MaxStartups 10:30:60
+
+# Logging
+SyslogFacility AUTH
+LogLevel {{ ssh_log_level }}
+
+# Ciphers and algorithms
+Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com
+MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+KexAlgorithms curve25519-sha256@libssh.org,diffie-hellman-group16-sha512
