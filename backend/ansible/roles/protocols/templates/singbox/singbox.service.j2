@@ -1,0 +1,17 @@
+# ansible/roles/protocols/templates/singbox/singbox.service.j2
+[Unit]
+Description=SingBox Service
+Documentation=https://sing-box.sagernet.org
+After=network.target nss-lookup.target
+
+[Service]
+User=root
+Group=root
+Type=simple
+ExecStart={{ singbox_install_dir }}/sing-box run -c {{ singbox_config_dir }}/config.json
+Restart=on-failure
+RestartSec=10s
+LimitNOFILE=infinity
+
+[Install]
+WantedBy=multi-user.target
