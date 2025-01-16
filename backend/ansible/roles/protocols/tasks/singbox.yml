@@ -1,0 +1,70 @@
+# ansible/roles/protocols/tasks/singbox.yml
+---
+- name: Install required packages
+  apt:
+    name:
+      - curl
+      - wget
+      - tar
+      - unzip
+      - jq
+    state: present
+  tags: singbox
+
+- name: Create SingBox directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ singbox_config_dir }}"
+    - "{{ singbox_cert_dir }}"
+    - "{{ singbox_log_dir }}"
+  tags: singbox
+
+- name: Download SingBox binary
+  get_url:
+    url: "{{ singbox_download_url }}"
+    dest: "/tmp/singbox.tar.gz"
+    mode: '0644'
+  tags: singbox
+
+- name: Extract SingBox binary
+  unarchive:
+    src: "/tmp/singbox.tar.gz"
+    dest: "{{ singbox_install_dir }}"
+    remote_src: yes
+  tags: singbox
+
+- name: Copy SingBox configuration
+  template:
+    src: singbox/config.json.j2
+    dest: "{{ singbox_config_dir }}/config.json"
+    mode: '0644'
+  notify: restart singbox
+  tags: singbox
+
+- name: Setup SingBox service
+  template:
+    src: singbox/singbox.service.j2
+    dest: /etc/systemd/system/singbox.service
+    mode: '0644'
+  notify:
+    - reload systemd
+    - restart singbox
+  tags: singbox
+
+- name: Ensure firewall rules
+  ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: "{{ 'tcp' if 'tcp' in item else 'udp' }}"
+  loop: "{{ singbox_ports }}"
+  tags: singbox
+
+- name: Start and enable SingBox service
+  systemd:
+    name: singbox
+    state: started
+    enabled: yes
+  tags: singbox
