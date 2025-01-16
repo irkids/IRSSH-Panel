@@ -107,3 +107,73 @@ wireguard_table: off
 wireguard_disable_ipv6: true
 wireguard_post_up: "iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o {{ ansible_default_ipv4.interface }} -j MASQUERADE"
 wireguard_post_down: "iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o {{ ansible_default_ipv4.interface }} -j MASQUERADE"
+
+# ansible/roles/protocols/defaults/main.yml
+
+# Global settings
+protocols_enabled:
+  - ssh
+  - l2tp
+  - ikev2
+  - cisco
+  - wireguard
+  - singbox
+
+monitoring_interval: 60
+log_retention_days: 30
+backup_enabled: true
+
+# SSH Configuration
+ssh_port: 22
+ssh_max_auth_tries: 3
+ssh_password_auth: false
+ssh_root_login: false
+ssh_banner_enabled: true
+
+# L2TP/IPSec
+l2tp_port: 1701
+ipsec_psk: "{{ vault_ipsec_psk }}"
+l2tp_local_ip: "10.10.10.1"
+l2tp_ip_range: "10.10.10.100-10.10.10.200"
+
+# IKEv2
+ikev2_port: 500
+ikev2_natt_port: 4500
+ikev2_cipher_suite: "aes256gcm16-prfsha512-ecp384"
+ikev2_dns_servers:
+  - 8.8.8.8
+  - 8.8.4.4
+
+# Cisco AnyConnect
+cisco_port: 443
+cisco_dpd_timeout: 60
+cisco_max_clients: 100
+cisco_cert_path: "/etc/ocserv/server-cert.pem"
+cisco_key_path: "/etc/ocserv/server-key.pem"
+
+# WireGuard
+wg_port: 51820
+wg_interface: "wg0"
+wg_address: "10.20.30.1/24"
+wg_mtu: 1420
+wg_persistent_keepalive: 25
+
+# SingBox Configuration
+singbox:
+  shadowsocks:
+    enabled: true
+    port: 8388
+    method: "chacha20-ietf-poly1305"
+  tuic:
+    enabled: true
+    port: 8443
+    congestion_control: "bbr"
+  vless:
+    enabled: true
+    port: 443
+    flow: "xtls-rprx-vision"
+  hysteria2:
+    enabled: true
+    port: 8080
+    up_mbps: 100
+    down_mbps: 100
