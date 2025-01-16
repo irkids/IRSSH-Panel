@@ -1,0 +1,82 @@
+# roles/protocols/tasks/l2tp.yml
+---
+- name: Install L2TP/IPSec packages
+  apt:
+    name:
+      - xl2tpd
+      - strongswan
+      - libstrongswan-standard-plugins
+      - strongswan-libcharon
+      - libcharon-extra-plugins
+      - libcharon-standard-plugins
+    state: present
+    update_cache: yes
+
+- name: Configure xl2tpd
+  template:
+    src: l2tp/xl2tpd.conf.j2
+    dest: /etc/xl2tpd/xl2tpd.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart xl2tpd
+
+- name: Configure IPSec
+  template:
+    src: l2tp/ipsec.conf.j2
+    dest: /etc/ipsec.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart strongswan
+
+- name: Configure IPSec secrets
+  template:
+    src: l2tp/ipsec.secrets.j2
+    dest: /etc/ipsec.secrets
+    owner: root
+    group: root
+    mode: '0600'
+  notify: restart strongswan
+
+- name: Configure PPP options
+  template:
+    src: l2tp/options.xl2tpd.j2
+    dest: /etc/ppp/options.xl2tpd
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Configure sysctl for IPSec
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: yes
+  with_items:
+    - { key: "net.ipv4.ip_forward", value: "1" }
+    - { key: "net.ipv4.conf.all.accept_redirects", value: "0" }
+    - { key: "net.ipv4.conf.all.send_redirects", value: "0" }
+    - { key: "net.ipv4.conf.default.rp_filter", value: "0" }
+    - { key: "net.ipv4.conf.default.accept_source_route", value: "0" }
+    - { key: "net.ipv4.conf.default.send_redirects", value: "0" }
+    - { key: "net.ipv4.icmp_ignore_bogus_error_responses", value: "1" }
+
+- name: Configure UFW for L2TP/IPSec
+  ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: "{{ item.proto }}"
+  with_items:
+    - { port: 500, proto: udp }
+    - { port: 4500, proto: udp }
+    - { port: 1701, proto: udp }
+
+- name: Start and enable services
+  systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: yes
+  with_items:
+    - strongswan
+    - xl2tpd
