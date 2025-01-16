@@ -1,0 +1,154 @@
+# roles/wireguard/tasks/main.yml
+---
+- name: Include OS-specific variables
+  include_vars: "{{ ansible_os_family }}.yml"
+  tags: [wireguard, setup]
+
+- name: Ensure system is updated
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  when: ansible_os_family == "Debian"
+  tags: [wireguard, setup]
+
+- name: Install required packages
+  apt:
+    name:
+      - wireguard
+      - ufw
+      - fail2ban
+      - qrencode
+      - iptables-persistent
+    state: present
+  when: ansible_os_family == "Debian"
+  tags: [wireguard, setup]
+
+- name: Enable IP forwarding
+  sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    state: present
+    sysctl_file: /etc/sysctl.d/99-wireguard.conf
+    reload: yes
+  tags: [wireguard, setup]
+
+- name: Create WireGuard directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0700"
+    owner: root
+    group: root
+  loop:
+    - "{{ wireguard_config_dir }}"
+    - "{{ wireguard_client_configs_dir }}"
+    - "{{ wireguard_backup_dir }}"
+  tags: [wireguard, setup]
+
+- name: Generate WireGuard server keys
+  shell: |
+    cd {{ wireguard_config_dir }}
+    umask 077
+    wg genkey | tee server.key | wg pubkey > server.pub
+  args:
+    creates: "{{ wireguard_config_dir }}/server.key"
+  tags: [wireguard, setup]
+
+- name: Read server private key
+  slurp:
+    src: "{{ wireguard_config_dir }}/server.key"
+  register: server_private_key
+  tags: [wireguard, setup]
+
+- name: Read server public key
+  slurp:
+    src: "{{ wireguard_config_dir }}/server.pub"
+  register: server_public_key
+  tags: [wireguard, setup]
+
+- name: Configure WireGuard interface
+  template:
+    src: wg0.conf.j2
+    dest: "{{ wireguard_config_dir }}/{{ wireguard_interface }}.conf"
+    owner: root
+    group: root
+    mode: "0600"
+  notify: restart wireguard
+  tags: [wireguard, config]
+
+- name: Setup UFW rules
+  ufw:
+    rule: allow
+    port: "{{ wireguard_port }}"
+    proto: udp
+  when: wireguard_ufw_rules_enabled
+  notify: reload ufw
+  tags: [wireguard, firewall]
+
+- name: Configure fail2ban for WireGuard
+  template:
+    src: fail2ban/wireguard.conf.j2
+    dest: /etc/fail2ban/jail.d/wireguard.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: wireguard_fail2ban_enabled
+  notify: restart fail2ban
+  tags: [wireguard, security]
+
+- name: Configure system optimizations
+  template:
+    src: sysctl/wireguard.conf.j2
+    dest: /etc/sysctl.d/99-wireguard.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: wireguard_sysctl_settings_enabled
+  notify: reload sysctl
+  tags: [wireguard, performance]
+
+- name: Enable and start WireGuard
+  systemd:
+    name: "wg-quick@{{ wireguard_interface }}"
+    state: started
+    enabled: yes
+  tags: [wireguard, service]
+
+- name: Configure backup job
+  cron:
+    name: "WireGuard Backup"
+    minute: "0"
+    hour: "3"
+    job: |
+      tar czf {{ wireguard_backup_dir }}/wireguard-$(date +\\%Y\\%m\\%d).tar.gz {{ wireguard_config_dir }} && \
+      find {{ wireguard_backup_dir }} -type f -mtime +{{ wireguard_backup_retention }} -delete
+  when: wireguard_backup_enabled
+  tags: [wireguard, backup]
+
+- name: Setup monitoring
+  template:
+    src: monitoring/wireguard.sh.j2
+    dest: /usr/local/bin/monitor-wireguard
+    mode: "0755"
+    owner: root
+    group: root
+  when: wireguard_monitoring_enabled
+  tags: [wireguard, monitoring]
+
+- name: Configure monitoring cron job
+  cron:
+    name: "WireGuard Monitoring"
+    minute: "*/5"
+    job: "/usr/local/bin/monitor-wireguard"
+  when: wireguard_monitoring_enabled
+  tags: [wireguard, monitoring]
+
+- name: Setup API integration
+  template:
+    src: api/wireguard-api.py.j2
+    dest: /usr/local/bin/wireguard-api
+    mode: "0755"
+    owner: root
+    group: root
+  when: irssh_panel_api_enabled
+  tags: [wireguard, api]
