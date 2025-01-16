@@ -28,3 +28,17 @@ conn L2TP-PSK
     dpddelay=30s
     dpdtimeout=120s
     rekey=no
+
+    leftprotoport=17/1701
+    rightprotoport=17/1701
+    type=transport
+    auth=esp
+    ike=aes256-sha2_256-modp2048!
+    esp=aes256-sha2_256!
+    auto=add
+    rightsubnet=0.0.0.0/0
+    right=%any
+    leftfirewall=yes
+    dpddelay=10
+    dpdtimeout=90
+    dpdaction=clear
