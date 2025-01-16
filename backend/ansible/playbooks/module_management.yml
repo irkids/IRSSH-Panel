@@ -1,0 +1,160 @@
+---
+# Protocol modules management playbook
+- name: IRSSH Panel Module Management
+  hosts: all
+  become: true
+  vars:
+    panel_dir: /opt/irssh-panel
+    modules_dir: "{{ panel_dir }}/modules"
+    repo_base_url: "https://raw.githubusercontent.com/irkids/Optimize2Ubuntu/refs/heads/main"
+    modules:
+      - name: vpnserver
+        script: vpnserver-script.py
+        type: python
+      - name: port
+        script: port-script.py
+        type: python
+      - name: ssh
+        script: ssh-script.py
+        type: python
+      - name: l2tp
+        script: l2tpv3-script.sh
+        type: shell
+      - name: ikev2
+        script: ikev2-script.py
+        type: python
+      - name: cisco
+        script: cisco-script.sh
+        type: shell
+      - name: wireguard
+        script: wire-script.sh
+        type: shell
+      - name: singbox
+        script: singbox-script.sh
+        type: shell
+      - name: badvpn
+        script: badvpn-script.sh
+        type: shell
+      - name: dropbear
+        script: dropbear-script.sh
+        type: shell
+      - name: webport
+        script: webport-script.sh
+        type: shell
+
+  tasks:
+    - name: Ensure modules directory exists
+      file:
+        path: "{{ modules_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Download module scripts
+      get_url:
+        url: "{{ repo_base_url }}/{{ item.script }}"
+        dest: "{{ modules_dir }}/{{ item.script }}"
+        mode: '0755'
+      loop: "{{ modules }}"
+
+    - name: Fix line endings for shell scripts
+      shell: 
+        cmd: sed -i 's/\r$//' {{ modules_dir }}/{{ item.script }}
+      when: item.type == 'shell'
+      loop: "{{ modules }}"
+
+    - name: Initialize VPN server
+      command:
+        cmd: "{{ modules_dir }}/vpnserver-script.py init"
+      register: vpn_init
+      changed_when: vpn_init.rc == 0
+      failed_when: vpn_init.rc != 0 and vpn_init.rc != 1
+
+    - name: Optimize ports
+      command:
+        cmd: "{{ modules_dir }}/port-script.py optimize"
+      register: port_opt
+      changed_when: port_opt.rc == 0
+
+    - name: Update protocol ports
+      command:
+        cmd: "{{ modules_dir }}/{{ item.script }} update-port {{ lookup('pipe', modules_dir + '/port-script.py get-port ' + item.name) }}"
+      loop: "{{ modules }}"
+      when: item.name != 'port' and item.name != 'vpnserver' and item.name != 'webport'
+      register: port_update
+      changed_when: port_update.rc == 0
+      failed_when: port_update.rc != 0 and port_update.rc != 1
+
+    - name: Initialize SSH module
+      command:
+        cmd: "{{ modules_dir }}/ssh-script.py init"
+      register: ssh_init
+      changed_when: ssh_init.rc == 0
+
+    - name: Initialize L2TP module
+      command:
+        cmd: "{{ modules_dir }}/l2tpv3-script.sh init"
+      register: l2tp_init
+      changed_when: l2tp_init.rc == 0
+
+    - name: Initialize IKEv2 module
+      command:
+        cmd: "{{ modules_dir }}/ikev2-script.py init"
+      register: ikev2_init
+      changed_when: ikev2_init.rc == 0
+
+    - name: Initialize Cisco module
+      command:
+        cmd: "{{ modules_dir }}/cisco-script.sh init"
+      register: cisco_init
+      changed_when: cisco_init.rc == 0
+
+    - name: Initialize WireGuard module
+      command:
+        cmd: "{{ modules_dir }}/wire-script.sh init"
+      register: wg_init
+      changed_when: wg_init.rc == 0
+
+    - name: Initialize SingBox module
+      command:
+        cmd: "{{ modules_dir }}/singbox-script.sh init"
+      register: singbox_init
+      changed_when: singbox_init.rc == 0
+
+    - name: Setup BadVPN UDP Gateway
+      command:
+        cmd: "{{ modules_dir }}/badvpn-script.sh install"
+      register: badvpn_init
+      changed_when: badvpn_init.rc == 0
+
+    - name: Setup Dropbear
+      command:
+        cmd: "{{ modules_dir }}/dropbear-script.sh install"
+      register: dropbear_init
+      changed_when: dropbear_init.rc == 0
+
+    - name: Configure web ports
+      command:
+        cmd: "{{ modules_dir }}/webport-script.sh configure"
+      register: webport_init
+      changed_when: webport_init.rc == 0
+
+    - name: Check module statuses
+      command:
+        cmd: "{{ modules_dir }}/{{ item.script }} status"
+      loop: "{{ modules }}"
+      register: module_status
+      changed_when: false
+      failed_when: false
+
+    - name: Display module status summary
+      debug:
+        msg: "{{ item.cmd | basename }} status: {{ 'OK' if item.rc == 0 else 'Failed' }}"
+      loop: "{{ module_status.results }}"
+
+    - name: Create module status report
+      template:
+        src: module_status.j2
+        dest: "{{ panel_dir }}/module_status.json"
+        mode: '0644'
+      vars:
+        status_results: "{{ module_status.results }}"
