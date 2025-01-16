@@ -1,0 +1,13 @@
+# roles/protocols/meta/main.yml
+---
+dependencies: []
+galaxy_info:
+  author: IRSSH Team
+  description: L2TP/IPSec protocol configuration for IRSSH Panel
+  license: MIT
+  min_ansible_version: 2.9
+  platforms:
+    - name: Ubuntu
+      versions:
+        - focal
+        - jammy
