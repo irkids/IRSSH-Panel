@@ -1,0 +1,19 @@
+# roles/protocols/templates/ssh/sshd_config.j2
+Port {{ ssh_port }}
+Protocol 2
+HostKey /etc/ssh/ssh_host_ed25519_key
+PermitRootLogin no
+MaxAuthTries 6
+PubkeyAuthentication yes
+PasswordAuthentication {{ 'yes' if ssh_password_auth else 'no' }}
+PermitEmptyPasswords no
+ChallengeResponseAuthentication no
+UsePAM yes
+X11Forwarding no
+PrintMotd no
+Banner /etc/ssh/banner
+AcceptEnv LANG LC_*
+Subsystem sftp /usr/lib/openssh/sftp-server
+AllowGroups {{ ssh_allowed_groups | join(' ') }}
+ClientAliveInterval 300
+ClientAliveCountMax 2
