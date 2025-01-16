@@ -1,0 +1,23 @@
+# Templates/ikev2/strongswan.conf.j2
+config setup
+    charondebug="ike 2, knl 2, cfg 2"
+    uniqueids=never
+
+conn %default
+    keyexchange=ikev2
+    ike=aes256-sha256-modp2048,aes128-sha256-modp2048,aes256-sha1-modp2048!
+    esp=aes256gcm16-modp2048,aes128gcm16-modp2048,aes256-sha256-modp2048!
+    dpdaction=clear
+    dpddelay=300s
+    rekey=no
+    compress=no
+    leftsubnet=0.0.0.0/0
+    leftcert=server.cert.pem
+    leftsendcert=always
+    leftid={{ vpn_cert_cn }}
+    right=%any
+    rightauth=eap-mschapv2
+    rightsourceip={{ vpn_network }}
+    rightdns={{ vpn_dns_servers | join(',') }}
+    eap_identity=%identity
+    auto=add
