@@ -1,0 +1,79 @@
+# inventory/hosts
+
+[irssh_servers]
+server1 ansible_host=server1.example.com
+server2 ansible_host=server2.example.com
+
+[irssh_servers:vars]
+ansible_python_interpreter=/usr/bin/python3
+ansible_user=root
+ansible_ssh_private_key_file=~/.ssh/id_rsa
+
+[master]
+server1 ansible_host=server1.example.com
+
+[backup]
+server2 ansible_host=server2.example.com
+
+# inventory/group_vars/all.yml
+---
+# General settings
+irssh_panel_dir: /opt/irssh-panel
+irssh_log_dir: /var/log/irssh
+irssh_backup_dir: /opt/irssh-panel/backups
+
+# Database settings
+postgres_version: 14
+postgres_data_dir: /var/lib/postgresql/14/main
+postgres_backup_dir: "{{ irssh_backup_dir }}/database"
+
+# Protocol settings
+protocol_ports:
+  ssh: 22
+  l2tp: 1701
+  ikev2: 500
+  cisco: 443
+  wireguard: 51820
+  singbox: 8388
+
+# Monitoring settings
+monitoring:
+  check_interval: 60
+  disk_warning_threshold: 85
+  cpu_warning_threshold: 80
+  memory_warning_threshold: 80
+
+# Backup settings
+backup:
+  retention_days: 7
+  compression: true
+  include_logs: false
+
+# Security settings
+security:
+  allowed_ssh_users:
+    - root
+    - admin
+  firewall_allowed_ports:
+    - 22
+    - 80
+    - 443
+    - 500
+    - 4500
+    - 1701
+    - 51820
+    - 8388
+
+# Notification settings
+notifications:
+  telegram_enabled: false
+  telegram_bot_token: ""
+  telegram_chat_id: ""
+
+# SSL/TLS settings
+ssl:
+  provider: letsencrypt
+  email: admin@example.com
+  domains:
+    - vpn.example.com
+  staging: false
