@@ -1,0 +1,11 @@
+# roles/protocols/handlers/main.yml
+---
+- name: restart xl2tpd
+  systemd:
+    name: xl2tpd
+    state: restarted
+
+- name: restart strongswan
+  systemd:
+    name: strongswan
+    state: restarted
