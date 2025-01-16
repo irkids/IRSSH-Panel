@@ -1,0 +1,43 @@
+# ansible/roles/protocols/templates/cisco/ocserv.conf.j2
+auth = "{{ cisco_anyconnect.auth_method }}"
+tcp-port = {{ cisco_port }}
+udp-port = {{ cisco_port }}
+run-as-user = nobody
+run-as-group = daemon
+socket-file = /var/run/ocserv-socket
+chroot-dir = /var/lib/ocserv
+isolate-workers = true
+max-clients = {{ cisco_anyconnect.max_clients }}
+max-same-clients = {{ cisco_anyconnect.max_same_clients }}
+switch-to-tcp-timeout = 25
+keepalive = 32400
+dpd = 90
+mobile-dpd = 1800
+try-mtu-discovery = true
+server-cert = {{ cisco_anyconnect.server_cert }}
+server-key = {{ cisco_anyconnect.server_key }}
+dh-params = {{ cisco_anyconnect.dh_params }}
+tls-priorities = "NORMAL:%SERVER_PRECEDENCE:%COMPAT:-RSA:-VERS-SSL3.0"
+auth-timeout = 240
+min-reauth-time = 300
+max-ban-score = 80
+ban-reset-time = 300
+cookie-timeout = 300
+deny-roaming = false
+rekey-time = 172800
+rekey-method = ssl
+use-seccomp = true
+device = vpns
+predictable-ips = true
+default-domain = vpn.local
+ipv4-network = 192.168.1.0
+ipv4-netmask = 255.255.255.0
+dns = {{ cisco_anyconnect.dns_servers | join('\ndns = ') }}
+
+{% if cisco_anyconnect.routes %}
+route = {{ cisco_anyconnect.routes | join('\nroute = ') }}
+{% endif %}
+
+{% if cisco_anyconnect.no_routes %}
+no-route = {{ cisco_anyconnect.no_routes | join('\nno-route = ') }}
+{% endif %}
