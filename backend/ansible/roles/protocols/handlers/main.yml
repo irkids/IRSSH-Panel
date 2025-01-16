@@ -1,5 +1,12 @@
 # roles/protocols/handlers/main.yml
 ---
+- name: restart ssh
+  systemd:
+    name: ssh
+    state: restarted
+
+# roles/protocols/handlers/main.yml
+---
 - name: restart xl2tpd
   systemd:
     name: xl2tpd
