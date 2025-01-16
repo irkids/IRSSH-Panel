@@ -41,3 +41,38 @@ certificate_info:
   common_name: "{{ ansible_fqdn }}"
   email: admin@example.com
   
+# vars/main.yml
+---
+# Server Network Configuration
+wireguard_server_ip: "{{ ansible_default_ipv4.address }}"
+wireguard_server_port: "{{ wireguard_port }}"
+wireguard_server_subnet: "10.10.0.0/24"
+
+# Client Configuration
+wireguard_client_dns:
+  - "8.8.8.8"
+  - "8.8.4.4"
+wireguard_client_allowed_ips:
+  - "0.0.0.0/0"
+  - "::/0"
+
+# Backup Configuration
+wireguard_backup_dir: "/etc/wireguard/backup"
+wireguard_backup_retention: 7  # days
+
+# Monitoring Configuration
+wireguard_monitor_interval: 300  # seconds
+wireguard_monitor_log_dir: "/var/log/wireguard"
+wireguard_monitor_alert_threshold:
+  memory: 90  # percentage
+  cpu: 90     # percentage
+  peers: 100  # maximum number of peers
+
+# Performance Tuning
+wireguard_kernel_params:
+  net.ipv4.ip_forward: 1
+  net.ipv4.conf.all.src_valid_mark: 1
+  net.ipv6.conf.all.forwarding: 1
+  net.ipv4.tcp_congestion_control: bbr
+  net.core.default_qdisc: fq
+  net.ipv4.tcp_fastopen: 3
