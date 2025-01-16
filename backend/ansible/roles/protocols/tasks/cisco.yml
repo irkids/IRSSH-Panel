@@ -1,0 +1,58 @@
+# ansible/roles/protocols/tasks/cisco.yml
+---
+- name: Install Cisco AnyConnect dependencies
+  apt:
+    name:
+      - ocserv
+      - gnutls-bin
+      - iptables-persistent
+    state: present
+    update_cache: yes
+
+- name: Create certificate directory
+  file:
+    path: /etc/ocserv/ssl
+    state: directory
+    mode: '0755'
+
+- name: Generate server certificate
+  shell: |
+    certtool --generate-privkey --outfile {{ cisco_anyconnect.server_key }}
+    certtool --generate-self-signed --load-privkey {{ cisco_anyconnect.server_key }} \
+             --template /etc/ocserv/cert.template --outfile {{ cisco_anyconnect.server_cert }}
+  args:
+    creates: "{{ cisco_anyconnect.server_cert }}"
+
+- name: Generate DH parameters
+  shell: certtool --generate-dh-params --outfile {{ cisco_anyconnect.dh_params }}
+  args:
+    creates: "{{ cisco_anyconnect.dh_params }}"
+
+- name: Configure ocserv
+  template:
+    src: cisco/ocserv.conf.j2
+    dest: /etc/ocserv/ocserv.conf
+    mode: '0644'
+  notify: restart ocserv
+
+- name: Enable IP forwarding
+  sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    state: present
+    reload: yes
+
+- name: Configure firewall for Cisco AnyConnect
+  iptables:
+    table: nat
+    chain: POSTROUTING
+    source: 192.168.1.0/24
+    out_interface: "{{ ansible_default_ipv4.interface }}"
+    jump: MASQUERADE
+  notify: restart ocserv
+
+- name: Start and enable ocserv
+  service:
+    name: ocserv
+    state: started
+    enabled: yes
