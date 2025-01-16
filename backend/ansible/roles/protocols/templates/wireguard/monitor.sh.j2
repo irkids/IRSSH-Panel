@@ -1,0 +1,89 @@
+# templates/wireguard/monitor.sh.j2
+#!/bin/bash
+
+# Configuration
+INTERFACE="{{ wireguard_interface }}"
+LOG_FILE="/var/log/wireguard-monitor.log"
+STATS_FILE="/var/log/wireguard-stats.json"
+MAX_LOG_SIZE=10485760  # 10MB
+
+# Logging function
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+# Rotate log if needed
+if [ -f "$LOG_FILE" ] && [ $(stat -f%z "$LOG_FILE") -gt $MAX_LOG_SIZE ]; then
+    mv "$LOG_FILE" "$LOG_FILE.old"
+fi
+
+# Check if interface exists
+if ! ip link show "$INTERFACE" > /dev/null 2>&1; then
+    log "ERROR: Interface $INTERFACE not found"
+    exit 1
+fi
+
+# Get interface status
+STATUS=$(wg show "$INTERFACE")
+if [ $? -ne 0 ]; then
+    log "ERROR: Failed to get interface status"
+    exit 1
+fi
+
+# Parse and collect statistics
+PEERS=$(echo "$STATUS" | grep -c "peer:")
+HANDSHAKES=$(echo "$STATUS" | grep "latest handshake:" | wc -l)
+ACTIVE_PEERS=0
+TOTAL_RECEIVED=0
+TOTAL_SENT=0
+
+while read -r line; do
+    if [[ $line =~ "latest handshake: "[0-9] ]]; then
+        seconds=${line##*: }
+        if [ "$seconds" -lt 180 ]; then  # Active in last 3 minutes
+            ACTIVE_PEERS=$((ACTIVE_PEERS + 1))
+        fi
+    fi
+    if [[ $line =~ "transfer: "[0-9] ]]; then
+        received=$(echo $line | awk '{print $2}' | sed 's/B//')
+        sent=$(echo $line | awk '{print $4}' | sed 's/B//')
+        TOTAL_RECEIVED=$((TOTAL_RECEIVED + received))
+        TOTAL_SENT=$((TOTAL_SENT + sent))
+    fi
+done <<< "$STATUS"
+
+# Create JSON stats
+cat > "$STATS_FILE" << EOF
+{
+    "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+    "interface": "$INTERFACE",
+    "total_peers": $PEERS,
+    "active_peers": $ACTIVE_PEERS,
+    "total_received": $TOTAL_RECEIVED,
+    "total_sent": $TOTAL_SENT,
+    "memory_usage": $(free | grep Mem | awk '{print $3/$2 * 100.0}'),
+    "cpu_usage": $(top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}')
+}
+EOF
+
+# Log summary
+log "Status check completed - $ACTIVE_PEERS/$PEERS peers active"
+
+# Check for issues
+if [ $ACTIVE_PEERS -eq 0 ] && [ $PEERS -gt 0 ]; then
+    log "WARNING: No active peers detected"
+fi
+
+# Memory check
+MEM_USAGE=$(free | grep Mem | awk '{print $3/$2 * 100.0}')
+if (( $(echo "$MEM_USAGE > 90" | bc -l) )); then
+    log "WARNING: High memory usage: ${MEM_USAGE}%"
+fi
+
+# CPU check
+CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}')
+if (( $(echo "$CPU_USAGE > 90" | bc -l) )); then
+    log "WARNING: High CPU usage: ${CPU_USAGE}%"
+fi
+
+exit 0
