@@ -1,0 +1,36 @@
+# ansible/roles/database/tasks/configure.yml
+---
+- name: Configure PostgreSQL access
+  template:
+    src: pg_hba.conf.j2
+    dest: "/etc/postgresql/{{ postgresql_version }}/main/pg_hba.conf"
+    owner: postgres
+    group: postgres
+    mode: '0600'
+  notify: restart postgresql
+
+- name: Configure PostgreSQL settings
+  template:
+    src: postgresql.conf.j2
+    dest: "/etc/postgresql/{{ postgresql_version }}/main/postgresql.conf"
+    owner: postgres
+    group: postgres
+    mode: '0600'
+  notify: restart postgresql
+
+- name: Create PostgreSQL user
+  postgresql_user:
+    name: "{{ db_user }}"
+    password: "{{ db_password }}"
+    role_attr_flags: CREATEDB,NOSUPERUSER
+  become: yes
+  become_user: postgres
+
+- name: Create PostgreSQL database
+  postgresql_db:
+    name: "{{ db_name }}"
+    owner: "{{ db_user }}"
+    encoding: UTF8
+    template: template0
+  become: yes
+  become_user: postgres
