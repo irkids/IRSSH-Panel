@@ -1,0 +1,36 @@
+# ansible/roles/database/tasks/secure.yml
+---
+- name: Set PostgreSQL password
+  postgresql_user:
+    name: postgres
+    password: "{{ postgres_password }}"
+  become: yes
+  become_user: postgres
+  no_log: true
+
+- name: Configure SSL
+  block:
+    - name: Generate SSL certificate
+      command: >
+        openssl req -new -x509 -days 365 -nodes
+        -out /etc/postgresql/{{ postgresql_version }}/main/server.crt
+        -keyout /etc/postgresql/{{ postgresql_version }}/main/server.key
+        -subj "/CN={{ ansible_fqdn }}"
+      args:
+        creates: /etc/postgresql/{{ postgresql_version }}/main/server.crt
+
+    - name: Set SSL certificate permissions
+      file:
+        path: "/etc/postgresql/{{ postgresql_version }}/main/{{ item }}"
+        owner: postgres
+        group: postgres
+        mode: '0600'
+      loop:
+        - server.crt
+        - server.key
+
+- name: Configure firewall
+  ufw:
+    rule: allow
+    port: "{{ postgresql_port }}"
+    proto: tcp
