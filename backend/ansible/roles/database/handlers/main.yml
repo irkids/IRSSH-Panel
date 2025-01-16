@@ -1,0 +1,40 @@
+# roles/database/handlers/main.yml
+
+- name: restart postgresql
+  service:
+    name: postgresql
+    state: restarted
+  become: true
+
+- name: reload postgresql
+  service:
+    name: postgresql
+    state: reloaded
+  become: true
+
+- name: restart postgresql exporter
+  service:
+    name: postgres_exporter
+    state: restarted
+  become: true
+  when: postgresql_exporter_enabled
+
+- name: validate postgresql configuration
+  command: postgresql-{{ postgresql_version }}/bin/pg_ctl -D /var/lib/postgresql/{{ postgresql_version }}/main check
+  become: true
+  become_user: postgres
+  register: config_check
+  changed_when: false
+  listen: "check postgresql config"
+
+- name: run database migrations
+  command: "psql -d {{ db_name }} -f /tmp/migrations.sql"
+  become: true
+  become_user: postgres
+  when: db_migrations_available | default(false)
+
+- name: cleanup old backups
+  shell: |
+    find {{ backup_directory }} -type f -name '*.sql.gz' -mtime +{{ backup_retention_days }} -delete
+  become: true
+  when: backup_enabled
