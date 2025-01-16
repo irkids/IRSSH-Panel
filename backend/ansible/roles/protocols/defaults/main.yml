@@ -18,3 +18,27 @@ l2tp_ip_range: 10.10.10.0/24
 l2tp_dns_1: 8.8.8.8
 l2tp_dns_2: 8.8.4.4
 ipsec_psk: "your_pre_shared_key"
+
+# ansible/roles/protocols/defaults/main.yml
+---
+# Default protocol ports
+ssh_port: 22
+l2tp_port: 1701
+ikev2_port: 500
+cisco_port: 443
+wireguard_port: 51820
+singbox_port: 8388
+
+# Cisco AnyConnect specific defaults
+cisco_anyconnect:
+  max_clients: 10
+  max_same_clients: 2
+  server_cert: "/etc/ocserv/server-cert.pem"
+  server_key: "/etc/ocserv/server-key.pem"
+  dh_params: "/etc/ocserv/dh.pem"
+  auth_method: "password"
+  dns_servers:
+    - "8.8.8.8"
+    - "8.8.4.4"
+  routes: []
+  no_routes: []
