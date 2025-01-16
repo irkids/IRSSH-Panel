@@ -25,3 +25,19 @@ enabled_protocols:
   - singbox
 
 vpn_users: []  # Will be populated by the panel
+
+# ansible/roles/protocols/vars/main.yml
+---
+ocserv_packages:
+  - ocserv
+  - gnutls-bin
+  - iptables-persistent
+
+certificate_info:
+  country: US
+  state: State
+  locality: City
+  organization: IRSSH Panel
+  common_name: "{{ ansible_fqdn }}"
+  email: admin@example.com
+  
