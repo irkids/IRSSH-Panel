@@ -1,0 +1,70 @@
+# Tasks/ikev2.yml
+---
+- name: Install required packages
+  apt:
+    name:
+      - strongswan
+      - strongswan-pki
+      - libcharon-extra-plugins
+      - libcharon-extauth-plugins
+      - libstrongswan-extra-plugins
+    state: present
+    update_cache: yes
+
+- name: Create certificates directory
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  with_items:
+    - /etc/ipsec.d/private
+    - /etc/ipsec.d/certs
+    - /etc/ipsec.d/cacerts
+
+- name: Generate CA private key
+  command: strongswan pki --gen --type rsa --size 4096 --outform pem > /etc/ipsec.d/private/ca.key
+  args:
+    creates: /etc/ipsec.d/private/ca.key
+
+- name: Generate CA certificate
+  command: >
+    strongswan pki --self --ca --lifetime {{ vpn_cert_validity_days }}
+    --in /etc/ipsec.d/private/ca.key --type rsa
+    --dn "CN={{ vpn_cert_cn }}, O={{ vpn_cert_org }}, C={{ vpn_cert_country }}"
+    --outform pem > /etc/ipsec.d/cacerts/ca.crt
+  args:
+    creates: /etc/ipsec.d/cacerts/ca.crt
+
+- name: Configure strongSwan
+  template:
+    src: ikev2/strongswan.conf.j2
+    dest: /etc/strongswan.conf
+    mode: '0644'
+  notify: Restart strongSwan
+
+- name: Configure IPsec secrets
+  template:
+    src: ikev2/ipsec.secrets.j2
+    dest: /etc/ipsec.secrets
+    mode: '0600'
+  notify: Restart strongSwan
+
+- name: Enable IP forwarding
+  sysctl:
+    name: net.ipv4.ip_forward
+    value: 1
+    state: present
+    reload: yes
+
+- name: Configure iptables
+  template:
+    src: ikev2/iptables-rules.j2
+    dest: /etc/iptables/rules.v4
+    mode: '0644'
+  notify: Reload iptables
+
+- name: Ensure strongSwan service is enabled and started
+  service:
+    name: strongswan
+    state: started
+    enabled: yes
