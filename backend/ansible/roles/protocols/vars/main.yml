@@ -13,3 +13,15 @@ ssh_ciphers:
 ssh_macs:
   - hmac-sha2-512-etm@openssh.com
   - hmac-sha2-256-etm@openssh.com
+
+# Vars/main.yml
+---
+enabled_protocols:
+  - ssh
+  - l2tp
+  - ikev2
+  - cisco
+  - wireguard
+  - singbox
+
+vpn_users: []  # Will be populated by the panel
