@@ -1,77 +1,110 @@
+# playbooks/maintenance.yml
+
 ---
-# System maintenance playbook
 - name: IRSSH Panel System Maintenance
   hosts: all
   become: true
-  vars:
-    panel_dir: /opt/irssh-panel
-    log_dir: /var/log/irssh
-    backup_dir: "{{ panel_dir }}/backups"
-    db_name: irssh_panel
-    log_retention_days: 30
-    backup_retention_days: 7
+  gather_facts: true
+
+  pre_tasks:
+    - name: Check system requirements
+      ansible.builtin.include_role:
+        name: common
+        tasks_from: check_requirements.yml
+
+  roles:
+    - role: common/update
+      tags: ['update']
     
+    - role: common/cleanup
+      tags: ['cleanup']
+    
+    - role: database/backup
+      tags: ['backup']
+    
+    - role: database/optimize
+      tags: ['optimize']
+    
+    - role: protocols/check
+      tags: ['protocols']
+
   tasks:
-    - name: Check system health
-      block:
-        - name: Check disk space
-          shell: df -h / | awk 'NR==2 {print $5}' | sed 's/%//'
-          register: disk_usage
-          changed_when: false
+    - name: Check system services
+      ansible.builtin.service_facts:
+      register: service_state
 
-        - name: Check memory usage
-          shell: free | awk '/Mem:/ {printf("%.0f", $3/$2 * 100)}'
-          register: memory_usage
-          changed_when: false
+    - name: Validate service status
+      ansible.builtin.assert:
+        that:
+          - "service_state.ansible_facts.services['irssh-panel.service'].state == 'running'"
+          - "service_state.ansible_facts.services['postgresql.service'].state == 'running'"
+          - "service_state.ansible_facts.services['nginx.service'].state == 'running'"
+        fail_msg: "Critical services are not running"
+        success_msg: "All services are running correctly"
 
-        - name: Check CPU load
-          shell: uptime | awk -F'load average:' '{ print $2 }' | awk -F, '{ print $1 }'
-          register: cpu_load
-          changed_when: false
+    - name: Check disk space
+      ansible.builtin.shell: df -h /
+      register: disk_space
+      changed_when: false
 
-        - name: Alert if resources are critical
-          debug:
-            msg: "Warning: {{ item.name }} usage is critical ({{ item.value }}%)"
-          when: item.value|int > item.threshold|int
-          loop:
-            - { name: "Disk", value: "{{ disk_usage.stdout }}", threshold: 90 }
-            - { name: "Memory", value: "{{ memory_usage.stdout }}", threshold: 90 }
-
-    - name: Optimize database
-      block:
-        - name: Vacuum database
-          command: vacuumdb -z -d {{ db_name }}
-          become: true
-          become_user: postgres
-          register: vacuum_result
-          changed_when: vacuum_result.rc == 0
-
-        - name: Analyze database
-          command: vacuumdb -a -d {{ db_name }}
-          become: true
-          become_user: postgres
-          register: analyze_result
-          changed_when: analyze_result.rc == 0
+    - name: Alert on low disk space
+      ansible.builtin.debug:
+        msg: "Warning: Low disk space on /"
+      when: disk_space.stdout_lines[1].split()[-2].rstrip('%')|int > 85
 
     - name: Clean old logs
-      block:
-        - name: Find old log files
-          find:
-            paths: "{{ log_dir }}"
-            patterns: "*.log*"
-            age: "{{ log_retention_days }}d"
-          register: old_logs
+      ansible.builtin.shell: |
+        find /var/log/irssh -name "*.log" -mtime +30 -delete
+      args:
+        executable: /bin/bash
+      register: log_cleanup
+      changed_when: log_cleanup.rc == 0
 
-        - name: Remove old log files
-          file:
-            path: "{{ item.path }}"
-            state: absent
-          loop: "{{ old_logs.files }}"
+    - name: Clean temporary files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      with_fileglob:
+        - "/tmp/irssh-*"
+        - "/tmp/backup-*"
 
-    - name: Manage backups
-      block:
-        - name: Create backup directory
-          file:
-            path: "{{ backup_dir }}"
-            state: directory
-            mode: '0
+    - name: Check protocol configurations
+      ansible.builtin.shell: |
+        for script in /opt/irssh-panel/modules/*-script.*; do
+          if [ -x "$script" ]; then
+            $script check || echo "Warning: $script check failed"
+          fi
+        done
+      register: protocol_check
+      changed_when: false
+
+    - name: Update protocol ports if needed
+      ansible.builtin.shell: |
+        /opt/irssh-panel/modules/port-script.py optimize
+      register: port_update
+      changed_when: port_update.rc == 0
+
+    - name: Generate system report
+      ansible.builtin.template:
+        src: templates/maintenance_report.j2
+        dest: /var/log/irssh/maintenance-{{ ansible_date_time.date }}.log
+
+  handlers:
+    - name: Restart services
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: restarted
+      with_items:
+        - irssh-panel
+        - nginx
+
+  post_tasks:
+    - name: Send notification
+      ansible.builtin.uri:
+        url: "{{ telegram_webhook_url }}"
+        method: POST
+        body_format: json
+        body:
+          chat_id: "{{ telegram_chat_id }}"
+          text: "Maintenance completed on {{ inventory_hostname }}"
+      when: telegram_webhook_url is defined
