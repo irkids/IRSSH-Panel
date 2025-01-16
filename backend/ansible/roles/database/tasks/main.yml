@@ -1,0 +1,153 @@
+# roles/database/tasks/main.yml
+
+- name: Include installation tasks
+  include_tasks: install.yml
+  tags: [postgresql, install]
+
+- name: Include configuration tasks
+  include_tasks: configure.yml
+  tags: [postgresql, configure]
+
+- name: Include security tasks
+  include_tasks: secure.yml
+  tags: [postgresql, security]
+
+- name: Include backup tasks
+  include_tasks: backup.yml
+  tags: [postgresql, backup]
+  when: backup_enabled
+
+# roles/database/tasks/install.yml
+---
+- name: Add PostgreSQL repository
+  apt_repository:
+    repo: "deb http://apt.postgresql.org/pub/repos/apt {{ ansible_distribution_release }}-pgdg main"
+    state: present
+  become: true
+
+- name: Add PostgreSQL repository key
+  apt_key:
+    url: "https://www.postgresql.org/media/keys/ACCC4CF8.asc"
+    state: present
+  become: true
+
+- name: Install PostgreSQL packages
+  apt:
+    name: "{{ postgresql_packages }}"
+    state: present
+    update_cache: yes
+  become: true
+
+- name: Ensure PostgreSQL service is running
+  service:
+    name: postgresql
+    state: started
+    enabled: yes
+  become: true
+
+# roles/database/tasks/configure.yml
+---
+- name: Configure postgresql.conf
+  template:
+    src: postgresql.conf.j2
+    dest: "/etc/postgresql/{{ postgresql_version }}/main/postgresql.conf"
+    owner: postgres
+    group: postgres
+    mode: '0644'
+  notify: restart postgresql
+  become: true
+
+- name: Configure pg_hba.conf
+  template:
+    src: pg_hba.conf.j2
+    dest: "/etc/postgresql/{{ postgresql_version }}/main/pg_hba.conf"
+    owner: postgres
+    group: postgres
+    mode: '0640'
+  notify: reload postgresql
+  become: true
+
+- name: Create database
+  postgresql_db:
+    name: "{{ db_name }}"
+    encoding: UTF-8
+    template: template0
+  become: true
+  become_user: postgres
+
+- name: Create database user
+  postgresql_user:
+    name: "{{ db_user }}"
+    password: "{{ db_password }}"
+    db: "{{ db_name }}"
+    priv: ALL
+    encrypted: yes
+  become: true
+  become_user: postgres
+
+# roles/database/tasks/secure.yml
+---
+- name: Set PostgreSQL password
+  postgresql_user:
+    name: postgres
+    password: "{{ postgresql_superuser_password }}"
+  become: true
+  become_user: postgres
+  when: postgresql_superuser_password is defined
+
+- name: Configure SSL
+  block:
+    - name: Generate SSL certificate and key
+      command: >
+        openssl req -new -x509 -days 365 -nodes
+        -out /etc/postgresql/{{ postgresql_version }}/main/server.crt
+        -keyout /etc/postgresql/{{ postgresql_version }}/main/server.key
+        -subj "/CN={{ ansible_fqdn }}"
+      args:
+        creates: /etc/postgresql/{{ postgresql_version }}/main/server.crt
+      when: postgresql_ssl_enabled
+      notify: restart postgresql
+
+    - name: Set SSL file permissions
+      file:
+        path: "{{ item }}"
+        owner: postgres
+        group: postgres
+        mode: '0600'
+      with_items:
+        - "/etc/postgresql/{{ postgresql_version }}/main/server.crt"
+        - "/etc/postgresql/{{ postgresql_version }}/main/server.key"
+      when: postgresql_ssl_enabled
+  become: true
+
+# roles/database/tasks/backup.yml
+---
+- name: Create backup directory
+  file:
+    path: "{{ backup_directory }}"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: '0700'
+  become: true
+
+- name: Install backup script
+  template:
+    src: backup.sh.j2
+    dest: /usr/local/bin/postgresql-backup
+    owner: root
+    group: root
+    mode: '0755'
+  become: true
+
+- name: Setup backup cron job
+  cron:
+    name: "PostgreSQL Backup"
+    job: "/usr/local/bin/postgresql-backup"
+    user: postgres
+    minute: "{{ backup_schedule.split(' ')[0] }}"
+    hour: "{{ backup_schedule.split(' ')[1] }}"
+    day: "{{ backup_schedule.split(' ')[2] }}"
+    month: "{{ backup_schedule.split(' ')[3] }}"
+    weekday: "{{ backup_schedule.split(' ')[4] }}"
+  become: true
