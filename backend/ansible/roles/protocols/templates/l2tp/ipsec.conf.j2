@@ -1,0 +1,30 @@
+# roles/protocols/templates/l2tp/ipsec.conf.j2
+config setup
+    charondebug="ike 2, knl 2, cfg 2, net 2, esp 2, dmn 2"
+    uniqueids=no
+
+conn %default
+    ikelifetime=60m
+    keylife=20m
+    rekeymargin=3m
+    keyingtries=1
+    keyexchange=ikev1
+    authby=secret
+    ike=aes256-sha256-modp2048,aes128-sha1-modp2048,3des-sha1-modp2048!
+    esp=aes256-sha256,aes128-sha1,3des-sha1!
+
+conn L2TP-PSK
+    keyexchange=ikev1
+    left=%defaultroute
+    leftauth=psk
+    leftsubnet=0.0.0.0/0
+    leftfirewall=yes
+    right=%any
+    rightauth=psk
+    rightsubnet=0.0.0.0/0
+    rightsourceip={{ l2tp_ip_range }}
+    auto=add
+    dpdaction=clear
+    dpddelay=30s
+    dpdtimeout=120s
+    rekey=no
