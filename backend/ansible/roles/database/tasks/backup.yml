@@ -1,0 +1,23 @@
+# ansible/roles/database/tasks/backup.yml
+---
+- name: Create backup directory
+  file:
+    path: "{{ backup_path }}"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: '0700'
+
+- name: Install backup script
+  template:
+    src: backup.sh.j2
+    dest: /usr/local/bin/postgres-backup
+    mode: '0755'
+
+- name: Configure backup cron job
+  cron:
+    name: "PostgreSQL backup"
+    job: "/usr/local/bin/postgres-backup"
+    hour: "{{ backup_hour }}"
+    minute: "{{ backup_minute }}"
+    user: postgres
