@@ -1,33 +1,105 @@
 # ansible/roles/protocols/templates/singbox/config.json.j2
 {
   "log": {
-    "level": "info",
+    "level": "{{ singbox_log_level | default('info') }}",
+    "output": "{{ singbox_log_dir }}/singbox.log",
     "timestamp": true
+  },
+  "dns": {
+    "servers": {{ singbox_dns_servers | to_json }},
+    "strategy": "{{ singbox_dns_strategy | default('ipv4_only') }}"
   },
   "inbounds": [
     {
-      "type": "mixed",
-      "tag": "mixed-in",
-      "listen": "::",
-      "listen_port": {{ singbox_port }},
-      "sniff": true,
-      "sniff_override_destination": false,
-      "domain_strategy": "prefer_ipv4"
-    },
-    {
       "type": "shadowsocks",
-      "tag": "shadowsocks-in",
+      "tag": "ss-in",
       "listen": "::",
-      "listen_port": {{ shadowsocks_port }},
-      "method": "{{ shadowsocks_method }}",
-      "password": "{{ shadowsocks_password }}"
+      "listen_port": {{ singbox_ss_port }},
+      "method": "{{ singbox_ss_method }}",
+      "password": "{{ singbox_ss_password }}"
     },
     {
-      "type": "vmess",
-      "tag": "vmess-in",
+      "type": "vless",
+      "tag": "vless-in",
       "listen": "::",
-      "listen_port": {{ vmess_port }},
+      "listen_port": {{ singbox_vless_port }},
       "users": [
         {
-          "name": "default",
-          "uuid": "{{ vmess
+          "uuid": "{{ singbox_vless_uuid }}",
+          "flow": "xtls-rprx-vision"
+        }
+      ],
+      "tls": {
+        "enabled": true,
+        "server_name": "{{ singbox_server_name }}",
+        "certificate_path": "{{ singbox_cert_dir }}/fullchain.pem",
+        "key_path": "{{ singbox_cert_dir }}/privkey.pem"
+      }
+    },
+    {
+      "type": "tuic",
+      "tag": "tuic-in",
+      "listen": "::",
+      "listen_port": {{ singbox_tuic_port }},
+      "users": [
+        {
+          "uuid": "{{ singbox_tuic_uuid }}",
+          "password": "{{ singbox_tuic_password }}"
+        }
+      ],
+      "congestion_control": "{{ singbox_tuic_cc | default('bbr') }}",
+      "tls": {
+        "enabled": true,
+        "server_name": "{{ singbox_server_name }}",
+        "certificate_path": "{{ singbox_cert_dir }}/fullchain.pem",
+        "key_path": "{{ singbox_cert_dir }}/privkey.pem"
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "hysteria2-in",
+      "listen": "::",
+      "listen_port": {{ singbox_hysteria_port }},
+      "up_mbps": {{ singbox_hysteria_up_mbps }},
+      "down_mbps": {{ singbox_hysteria_down_mbps }},
+      "users": [
+        {
+          "password": "{{ singbox_hysteria_password }}"
+        }
+      ],
+      "tls": {
+        "enabled": true,
+        "server_name": "{{ singbox_server_name }}",
+        "certificate_path": "{{ singbox_cert_dir }}/fullchain.pem",
+        "key_path": "{{ singbox_cert_dir }}/privkey.pem"
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "block"
+    },
+    {
+      "type": "dns",
+      "tag": "dns-out"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "protocol": "dns",
+        "outbound": "dns-out"
+      },
+      {
+        "geoip": ["private"],
+        "outbound": "block"
+      }
+    ],
+    "final": "direct"
+  }
+}
