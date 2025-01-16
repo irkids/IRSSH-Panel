@@ -1,0 +1,15 @@
+# ansible/roles/database/templates/backup.sh.j2
+#!/bin/bash
+
+BACKUP_DIR="{{ backup_path }}"
+BACKUP_NAME="postgres_$(date +%Y%m%d_%H%M%S).sql"
+BACKUP_DAYS="{{ backup_retention_days }}"
+
+# Create backup
+pg_dumpall -U postgres > "$BACKUP_DIR/$BACKUP_NAME"
+
+# Compress backup
+gzip "$BACKUP_DIR/$BACKUP_NAME"
+
+# Remove old backups
+find "$BACKUP_DIR" -type f -name "postgres_*.sql.gz" -mtime +$BACKUP_DAYS -delete
