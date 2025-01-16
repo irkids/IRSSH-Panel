@@ -1,0 +1,13 @@
+# ansible/roles/database/vars/main.yml
+---
+postgresql_version: 14
+postgresql_port: 5432
+backup_path: /var/lib/postgresql/backups
+backup_retention_days: 7
+backup_hour: 2
+backup_minute: 0
+
+postgresql_allowed_hosts:
+  - "10.0.0.0/8"
+  - "172.16.0.0/12"
+  - "192.168.0.0/16"
