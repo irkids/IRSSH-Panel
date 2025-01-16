@@ -1,0 +1,164 @@
+# roles/common/tasks/main.yml
+---
+- name: Include OS-specific variables
+  ansible.builtin.include_vars: "{{ ansible_os_family }}.yml"
+
+- name: Update system packages
+  ansible.builtin.apt:
+    update_cache: yes
+    upgrade: safe
+  when: ansible_os_family == "Debian"
+
+- name: Install common packages
+  ansible.builtin.package:
+    name: "{{ item }}"
+    state: present
+  with_items: "{{ common_packages }}"
+
+- name: Configure system timezone
+  ansible.builtin.timezone:
+    name: "{{ timezone }}"
+
+- name: Configure system hostname
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+
+- name: Configure firewall
+  ansible.builtin.include_tasks: firewall.yml
+
+- name: Configure system limits
+  ansible.builtin.include_tasks: limits.yml
+
+- name: Configure security
+  ansible.builtin.include_tasks: security.yml
+
+# roles/common/tasks/firewall.yml
+---
+- name: Install UFW
+  ansible.builtin.package:
+    name: ufw
+    state: present
+
+- name: Configure UFW defaults
+  ansible.builtin.ufw:
+    direction: "{{ item.direction }}"
+    policy: "{{ item.policy }}"
+  with_items:
+    - { direction: 'incoming', policy: 'deny' }
+    - { direction: 'outgoing', policy: 'allow' }
+
+- name: Allow SSH
+  ansible.builtin.ufw:
+    rule: allow
+    port: ssh
+    proto: tcp
+
+- name: Configure allowed ports
+  ansible.builtin.ufw:
+    rule: allow
+    port: "{{ item }}"
+  with_items: "{{ security.firewall_allowed_ports }}"
+
+- name: Enable UFW
+  ansible.builtin.ufw:
+    state: enabled
+
+# roles/common/tasks/limits.yml
+---
+- name: Configure system limits
+  ansible.builtin.pam_limits:
+    domain: "*"
+    limit_type: "{{ item.type }}"
+    limit_item: "{{ item.item }}"
+    value: "{{ item.value }}"
+  with_items:
+    - { type: '-', item: 'nofile', value: '65535' }
+    - { type: '-', item: 'nproc', value: '65535' }
+    - { type: '-', item: 'memlock', value: 'unlimited' }
+
+- name: Configure sysctl parameters
+  ansible.builtin.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    sysctl_set: yes
+    state: present
+    reload: yes
+  with_items:
+    - { name: 'net.ipv4.ip_forward', value: '1' }
+    - { name: 'net.ipv4.conf.all.accept_redirects', value: '0' }
+    - { name: 'net.ipv4.conf.all.send_redirects', value: '0' }
+    - { name: 'net.ipv4.ip_nonlocal_bind', value: '1' }
+    - { name: 'net.core.somaxconn', value: '65535' }
+
+# roles/common/tasks/security.yml
+---
+- name: Configure SSH security
+  ansible.builtin.template:
+    src: sshd_config.j2
+    dest: /etc/ssh/sshd_config
+    owner: root
+    group: root
+    mode: '0600'
+  notify: Restart SSH
+
+- name: Configure fail2ban
+  ansible.builtin.include_tasks: fail2ban.yml
+
+- name: Configure automatic security updates
+  ansible.builtin.apt:
+    name: unattended-upgrades
+    state: present
+  when: ansible_os_family == "Debian"
+
+# roles/common/handlers/main.yml
+---
+- name: Restart SSH
+  ansible.builtin.service:
+    name: ssh
+    state: restarted
+
+- name: Restart fail2ban
+  ansible.builtin.service:
+    name: fail2ban
+    state: restarted
+
+# roles/common/defaults/main.yml
+---
+common_packages:
+  - curl
+  - wget
+  - git
+  - htop
+  - vim
+  - tmux
+  - fail2ban
+  - unzip
+  - net-tools
+  - iftop
+  - iotop
+  - nload
+  - mtr
+  - traceroute
+
+timezone: UTC
+
+# roles/common/vars/Debian.yml
+---
+additional_packages:
+  - apt-transport-https
+  - ca-certificates
+  - software-properties-common
+
+# roles/common/templates/sshd_config.j2
+# SSH Configuration
+Port {{ ssh_port | default(22) }}
+Protocol 2
+PermitRootLogin {{ 'yes' if 'root' in security.allowed_ssh_users else 'no' }}
+PasswordAuthentication no
+PubkeyAuthentication yes
+PermitEmptyPasswords no
+X11Forwarding no
+MaxAuthTries 3
+ClientAliveInterval 300
+ClientAliveCountMax 2
+AllowUsers {{ security.allowed_ssh_users | join(' ') }}
