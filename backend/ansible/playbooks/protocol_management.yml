@@ -1,0 +1,111 @@
+# backend/ansible/playbooks/protocol_management.yml
+
+---
+- name: Protocol Management Playbook
+  hosts: all
+  become: yes
+  vars_files:
+    - ../vars/main.yml
+
+  pre_tasks:
+    - name: Update package cache
+      apt:
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+
+  roles:
+    - role: common
+      tags: [common]
+      
+    - role: ssh
+      tags: [ssh]
+      when: enable_ssh | default(true)
+      
+    - role: l2tp
+      tags: [l2tp]
+      when: enable_l2tp | default(true)
+      
+    - role: ikev2
+      tags: [ikev2]
+      when: enable_ikev2 | default(true)
+      
+    - role: cisco
+      tags: [cisco]
+      when: enable_cisco | default(true)
+      
+    - role: wireguard
+      tags: [wireguard]
+      when: enable_wireguard | default(true)
+      
+    - role: singbox
+      tags: [singbox]
+      when: enable_singbox | default(true)
+
+  tasks:
+    - name: Ensure all services are running
+      service:
+        name: "{{ item }}"
+        state: started
+        enabled: yes
+      loop:
+        - ssh
+        - xl2tpd
+        - strongswan
+        - ocserv
+        - wg-quick@wg0
+        - sing-box
+      ignore_errors: yes
+      
+    - name: Configure firewall
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: "{{ item.proto | default('tcp') }}"
+      loop:
+        - { port: '22' }                     # SSH
+        - { port: '1701', proto: 'udp' }     # L2TP
+        - { port: '500', proto: 'udp' }      # IKEv2
+        - { port: '4500', proto: 'udp' }     # IKEv2 NAT-T
+        - { port: '443' }                    # Cisco AnyConnect
+        - { port: '51820', proto: 'udp' }    # WireGuard
+        - { port: '{{ singbox_port }}' }     # SingBox
+
+    - name: Check protocol status
+      command: "systemctl is-active {{ item }}"
+      register: service_status
+      loop:
+        - sshd
+        - xl2tpd
+        - strongswan
+        - ocserv
+        - wg-quick@wg0
+        - sing-box
+      ignore_errors: yes
+      
+    - name: Display protocol status
+      debug:
+        msg: "{{ item.item }} is {{ item.stdout }}"
+      loop: "{{ service_status.results }}"
+      
+    - name: Verify connectivity
+      wait_for:
+        port: "{{ item.port }}"
+        timeout: 10
+      loop:
+        - { port: 22 }
+        - { port: 1701 }
+        - { port: 500 }
+        - { port: 443 }
+        - { port: 51820 }
+        - { port: "{{ singbox_port }}" }
+      ignore_errors: yes
+      
+  post_tasks:
+    - name: Generate protocol status report
+      template:
+        src: ../templates/status_report.j2
+        dest: /var/log/irssh/protocol_status.log
+      
+    - name: Notify on completion
+      debug:
+        msg: "Protocol management completed successfully"
