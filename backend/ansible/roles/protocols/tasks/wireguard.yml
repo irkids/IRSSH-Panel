@@ -152,3 +152,99 @@
     group: root
   when: irssh_panel_api_enabled
   tags: [wireguard, api]
+
+
+- name: Setup automatic backup
+  cron:
+    name: "WireGuard backup"
+    job: "tar czf /etc/wireguard/backup/wg-backup-$(date +\\%Y\\%m\\%d).tar.gz /etc/wireguard/*.conf /etc/wireguard/*key"
+    special_time: daily
+    state: present
+
+    - name: Install WireGuard packages
+  apt:
+    name:
+      - wireguard
+      - wireguard-tools
+      - iptables
+      - qrencode
+    state: present
+    update_cache: yes
+
+- name: Enable IPv4 forwarding
+  sysctl:
+    name: net.ipv4.ip_forward
+    value: 1
+    state: present
+    reload: yes
+  notify: reload sysctl settings
+
+- name: Create WireGuard directory
+  file:
+    path: /etc/wireguard
+    state: directory
+    mode: '0700'
+
+- name: Generate private key
+  shell: wg genkey
+  register: private_key
+  args:
+    creates: "{{ wireguard_private_key_path }}"
+
+- name: Save private key
+  copy:
+    content: "{{ private_key.stdout }}"
+    dest: "{{ wireguard_private_key_path }}"
+    mode: '0600'
+  when: private_key.changed
+
+- name: Generate public key
+  shell: echo "{{ private_key.stdout }}" | wg pubkey
+  register: public_key
+  when: private_key.changed
+
+- name: Save public key
+  copy:
+    content: "{{ public_key.stdout }}"
+    dest: "{{ wireguard_public_key_path }}"
+    mode: '0644'
+  when: public_key.changed
+
+- name: Configure WireGuard interface
+  template:
+    src: wireguard/wg0.conf.j2
+    dest: "/etc/wireguard/{{ wireguard_interface }}.conf"
+    mode: '0600'
+  notify: restart wireguard service
+
+- name: Configure UFW for WireGuard
+  ufw:
+    rule: allow
+    port: "{{ wireguard_port }}"
+    proto: udp
+  notify: reload firewall rules
+
+- name: Enable and start WireGuard service
+  service:
+    name: "wg-quick@{{ wireguard_interface }}"
+    state: started
+    enabled: yes
+
+- name: Install monitoring script
+  template:
+    src: wireguard/monitor.sh.j2
+    dest: /usr/local/bin/wg-monitor
+    mode: '0755'
+
+- name: Setup monitoring cron job
+  cron:
+    name: "WireGuard monitoring"
+    job: "/usr/local/bin/wg-monitor"
+    minute: "*/5"
+    state: present
+
+- name: Create backup directory
+  file:
+    path: /etc/wireguard/backup
+    state: directory
+    mode: '0700'
