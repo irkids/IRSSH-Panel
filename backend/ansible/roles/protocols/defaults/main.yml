@@ -42,3 +42,42 @@ cisco_anyconnect:
     - "8.8.4.4"
   routes: []
   no_routes: []
+
+# roles/wireguard/defaults/main.yml
+---
+wireguard_port: 51820
+wireguard_interface: wg0
+wireguard_address: "10.8.0.1/24"
+wireguard_network: "10.8.0.0/24"
+wireguard_persistent_keepalive: 25
+wireguard_save_config: true
+wireguard_dns_servers: ["1.1.1.1", "1.0.0.1"]
+wireguard_mtu: 1420
+wireguard_allowed_ips: ["0.0.0.0/0", "::/0"]
+wireguard_endpoint: "{{ ansible_default_ipv4.address }}"
+wireguard_log_level: "info"
+wireguard_max_clients: 50
+wireguard_config_dir: "/etc/wireguard"
+wireguard_client_configs_dir: "/etc/wireguard/clients"
+wireguard_systemd_resolved_dns: false
+
+# Security settings
+wireguard_fwmark: "0xca6c"
+wireguard_preshared_key_enabled: true
+wireguard_key_bits: 4096
+
+# Performance settings
+wireguard_ufw_rules_enabled: true
+wireguard_sysctl_settings_enabled: true
+wireguard_fail2ban_enabled: true
+wireguard_monitoring_enabled: true
+
+# Backup settings
+wireguard_backup_enabled: true
+wireguard_backup_dir: "/opt/irssh-panel/backups/wireguard"
+wireguard_backup_retention: 7
+
+# Module integration
+irssh_panel_integration: true
+irssh_panel_api_enabled: true
+irssh_panel_metrics_enabled: true
