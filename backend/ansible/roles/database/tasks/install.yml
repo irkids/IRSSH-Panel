@@ -1,0 +1,26 @@
+# ansible/roles/database/tasks/install.yml
+---
+- name: Install PostgreSQL and dependencies
+  apt:
+    name:
+      - postgresql
+      - postgresql-contrib
+      - python3-psycopg2
+      - libpq-dev
+    state: present
+    update_cache: yes
+
+- name: Ensure PostgreSQL is running and enabled
+  systemd:
+    name: postgresql
+    state: started
+    enabled: yes
+
+- name: Check if PostgreSQL cluster exists
+  stat:
+    path: "/var/lib/postgresql/{{ postgresql_version }}/main/PG_VERSION"
+  register: pgdata
+
+- name: Initialize PostgreSQL cluster if needed
+  command: pg_createcluster {{ postgresql_version }} main
+  when: not pgdata.stat.exists
