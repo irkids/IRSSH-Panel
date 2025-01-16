@@ -1,0 +1,19 @@
+# roles/protocols/templates/l2tp/xl2tpd.conf.j2
+[global]
+ipsec saref = yes
+force userspace = yes
+debug avp = no
+debug network = no
+debug state = no
+debug tunnel = no
+
+[lns default]
+ip range = {{ l2tp_ip_range_start }}-{{ l2tp_ip_range_end }}
+local ip = {{ l2tp_local_ip }}
+require chap = yes
+refuse pap = yes
+require authentication = yes
+name = IRSSH-L2TP
+ppp debug = no
+pppoptfile = /etc/ppp/options.xl2tpd
+length bit = yes
