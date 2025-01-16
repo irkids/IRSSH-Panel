@@ -1,0 +1,33 @@
+# ansible/roles/protocols/templates/singbox/config.json.j2
+{
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "::",
+      "listen_port": {{ singbox_port }},
+      "sniff": true,
+      "sniff_override_destination": false,
+      "domain_strategy": "prefer_ipv4"
+    },
+    {
+      "type": "shadowsocks",
+      "tag": "shadowsocks-in",
+      "listen": "::",
+      "listen_port": {{ shadowsocks_port }},
+      "method": "{{ shadowsocks_method }}",
+      "password": "{{ shadowsocks_password }}"
+    },
+    {
+      "type": "vmess",
+      "tag": "vmess-in",
+      "listen": "::",
+      "listen_port": {{ vmess_port }},
+      "users": [
+        {
+          "name": "default",
+          "uuid": "{{ vmess
