@@ -16,3 +16,35 @@
   systemd:
     name: strongswan
     state: restarted
+
+# ansible/roles/protocols/handlers/main.yml
+---
+- name: restart sshd
+  service:
+    name: sshd
+    state: restarted
+
+- name: restart xl2tpd
+  service:
+    name: xl2tpd
+    state: restarted
+
+- name: restart strongswan
+  service:
+    name: strongswan
+    state: restarted
+
+- name: restart ocserv
+  service:
+    name: ocserv
+    state: restarted
+
+- name: restart wireguard
+  service:
+    name: wg-quick@wg0
+    state: restarted
+
+- name: restart singbox
+  service:
+    name: singbox
+    state: restarted
