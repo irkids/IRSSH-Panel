@@ -1,0 +1,25 @@
+# Tasks/main.yml
+---
+- import_tasks: ssh.yml
+  tags: [ssh]
+  when: "'ssh' in enabled_protocols"
+
+- import_tasks: l2tp.yml
+  tags: [l2tp]
+  when: "'l2tp' in enabled_protocols"
+
+- import_tasks: ikev2.yml
+  tags: [ikev2]
+  when: "'ikev2' in enabled_protocols"
+
+- import_tasks: cisco.yml
+  tags: [cisco]
+  when: "'cisco' in enabled_protocols"
+
+- import_tasks: wireguard.yml
+  tags: [wireguard]
+  when: "'wireguard' in enabled_protocols"
+
+- import_tasks: singbox.yml
+  tags: [singbox]
+  when: "'singbox' in enabled_protocols"
