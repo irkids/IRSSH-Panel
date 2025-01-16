@@ -1,0 +1,10 @@
+# roles/protocols/defaults/main.yml
+---
+# L2TP Configuration
+l2tp_ip_range_start: 10.10.10.100
+l2tp_ip_range_end: 10.10.10.200
+l2tp_local_ip: 10.10.10.1
+l2tp_ip_range: 10.10.10.0/24
+l2tp_dns_1: 8.8.8.8
+l2tp_dns_2: 8.8.4.4
+ipsec_psk: "your_pre_shared_key"
