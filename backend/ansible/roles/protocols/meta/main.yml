@@ -28,6 +28,7 @@ galaxy_info:
 
 # ansible/roles/protocols/meta/main.yml
 ---
+dependencies: []
 galaxy_info:
   author: IRSSH Panel Team
   description: VPN Protocol Management Role
@@ -39,4 +40,32 @@ galaxy_info:
         - focal
         - jammy
 
-dependencies: []
+# meta/main.yml
+---
+galaxy_info:
+  author: IRSSH Admin
+  description: Ansible role for installing and configuring WireGuard VPN server
+  license: MIT
+  min_ansible_version: 2.9
+  platforms:
+    - name: Ubuntu
+      versions:
+        - focal
+        - jammy
+    - name: Debian
+      versions:
+        - bullseye
+        - bookworm
+  
+  galaxy_tags:
+    - wireguard
+    - vpn
+    - networking
+    - security
+    - system
+
+dependencies:
+  - role: common
+    version: "1.0.0"
+  - role: firewall
+    version: "1.0.0"
