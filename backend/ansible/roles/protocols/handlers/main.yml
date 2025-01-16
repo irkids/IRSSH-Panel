@@ -48,3 +48,23 @@
   service:
     name: singbox
     state: restarted
+---
+- name: restart wireguard
+  service:
+    name: wg-quick@{{ wireguard_interface }}
+    state: restarted
+  listen: "restart wireguard service"
+
+- name: reload wireguard
+  shell: wg syncconf {{ wireguard_interface }} <(wg-quick strip {{ wireguard_interface }})
+  listen: "reload wireguard config"
+
+- name: reload sysctl
+  command: sysctl -p
+  listen: "reload sysctl settings"
+
+- name: reload ufw
+  service:
+    name: ufw
+    state: reloaded
+  listen: "reload firewall rules"
