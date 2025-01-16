@@ -1,0 +1,46 @@
+name: Install OpenSSH Server
+  apt:
+    name: openssh-server
+    state: present
+    update_cache: yes
+
+- name: Generate SSH keys if not exist
+  openssh_keypair:
+    path: /etc/ssh/ssh_host_ed25519_key
+    type: ed25519
+  notify: restart ssh
+
+- name: Configure SSH daemon
+  template:
+    src: ssh/sshd_config.j2
+    dest: /etc/ssh/sshd_config
+    owner: root
+    group: root
+    mode: '0600'
+  notify: restart ssh
+
+- name: Set up SSH banner
+  template:
+    src: ssh/banner.j2
+    dest: /etc/ssh/banner
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Create SSH user directory
+  file:
+    path: "{{ ssh_user_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Configure UFW for SSH
+  ufw:
+    rule: allow
+    port: "{{ ssh_port }}"
+    proto: tcp
+
+- name: Start and enable SSH service
+  systemd:
+    name: ssh
+    state: started
+    enabled: yes
