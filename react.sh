@@ -27,8 +27,8 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
 
 # Install specific Node.js version
-nvm install 20
-nvm use 20
+nvm install 18
+nvm use 18
 
 # Clean up previous installation
 log "Cleaning up previous installation..."
@@ -46,6 +46,7 @@ cat > package.json << 'EOL'
   "dependencies": {
     "@headlessui/react": "^1.7.17",
     "@heroicons/react": "^2.1.1",
+    "ajv": "^8.12.0",
     "@testing-library/jest-dom": "^5.17.0",
     "@testing-library/react": "^13.4.0",
     "@testing-library/user-event": "^13.5.0",
@@ -96,6 +97,12 @@ EOL
 
 # Install dependencies
 log "Installing dependencies..."
+npm install --legacy-peer-deps
+
+# Clear npm cache and rebuild
+log "Clearing npm cache and rebuilding..."
+npm cache clean --force
+rm -rf node_modules
 npm install --legacy-peer-deps
 
 # Initialize Tailwind CSS
@@ -169,6 +176,11 @@ root.render(
 reportWebVitals();
 EOL
 
+# Create react-app-env.d.ts
+cat > src/react-app-env.d.ts << 'EOL'
+/// <reference types="react-scripts" />
+EOL
+
 # Create reportWebVitals.ts
 cat > src/reportWebVitals.ts << 'EOL'
 import { ReportHandler } from 'web-vitals';
@@ -186,6 +198,36 @@ const reportWebVitals = (onPerfEntry?: ReportHandler) => {
 };
 
 export default reportWebVitals;
+EOL
+
+# Create tsconfig.json
+cat > tsconfig.json << 'EOL'
+{
+  "compilerOptions": {
+    "target": "es5",
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "noFallthroughCasesInSwitch": true,
+    "module": "esnext",
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx"
+  },
+  "include": [
+    "src"
+  ]
+}
 EOL
 
 # Create public directory
@@ -208,9 +250,25 @@ cat > public/index.html << 'EOL'
 </html>
 EOL
 
+# Create empty public/robots.txt
+touch public/robots.txt
+
+# Create public/manifest.json
+cat > public/manifest.json << 'EOL'
+{
+  "short_name": "IRSSH Panel",
+  "name": "IRSSH Panel - VPN Server Management",
+  "icons": [],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#000000",
+  "background_color": "#ffffff"
+}
+EOL
+
 # Build frontend
 log "Building frontend..."
-npm run build
+CI=false npm run build
 
 # Setup nginx configuration
 log "Configuring nginx..."
