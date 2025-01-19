@@ -1,10 +1,5 @@
 #!/bin/bash
 
-# Configuration
-PANEL_DIR="/opt/irssh-panel"
-FRONTEND_DIR="$PANEL_DIR/frontend"
-NODE_VERSION="18.19.0"
-
 # Colors
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -20,120 +15,67 @@ error() {
     exit 1
 }
 
-# Install Node.js using nvm
+# Configuration
+PANEL_DIR="/opt/irssh-panel"
+FRONTEND_DIR="$PANEL_DIR/frontend"
+
+# Install Node.js
 log "Installing Node.js..."
-if ! command -v nvm &> /dev/null; then
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
-    export NVM_DIR="$HOME/.nvm"
-    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-fi
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
 
-nvm install $NODE_VERSION
-nvm use $NODE_VERSION
+# Install specific Node.js version
+nvm install 20
+nvm use 20
 
-# Remove existing frontend directory
+# Clean up previous installation
 log "Cleaning up previous installation..."
 rm -rf "$FRONTEND_DIR"
+mkdir -p "$FRONTEND_DIR"
 
 # Create new React app
 log "Creating new React app..."
-npx create-react-app "$FRONTEND_DIR" --template typescript
+cd "$PANEL_DIR"
+npx create-react-app frontend --template typescript
 
-# Change to frontend directory
-cd "$FRONTEND_DIR" || error "Failed to change directory"
+cd "$FRONTEND_DIR"
 
-# Install required dependencies
-log "Installing additional dependencies..."
+# Install dependencies with correct versions
+log "Installing dependencies..."
 npm install --save \
-    @headlessui/react \
-    axios \
-    date-fns \
-    lodash \
-    lucide-react \
-    react-router-dom \
-    recharts \
-    @radix-ui/react-dialog \
-    @radix-ui/react-dropdown-menu \
-    @radix-ui/react-label \
-    @radix-ui/react-slot \
-    class-variance-authority \
-    clsx \
-    tailwind-merge \
-    tailwindcss-animate
+    @headlessui/react@1.7.17 \
+    @heroicons/react@2.1.1 \
+    react-router-dom@6.21.1 \
+    recharts@2.10.3 \
+    axios@1.6.4 \
+    @types/node@20.10.6 \
+    @types/react@18.2.47 \
+    @types/react-dom@18.2.18 \
+    typescript@5.3.3
 
 # Install dev dependencies
+log "Installing development dependencies..."
 npm install --save-dev \
-    autoprefixer \
-    postcss \
-    tailwindcss \
-    @types/node \
-    @types/react \
-    @types/react-dom
+    tailwindcss@3.4.1 \
+    postcss@8.4.33 \
+    autoprefixer@10.4.16
 
-# Create tailwind.config.js
+# Initialize Tailwind CSS
 log "Setting up Tailwind CSS..."
-cat > tailwind.config.js << 'EOL'
-/** @type {import('tailwindcss').Config} */
-module.exports = {
-  content: ["./src/**/*.{js,jsx,ts,tsx}"],
-  darkMode: "class",
-  theme: {
-    container: {
-      center: true,
-      padding: "2rem",
-      screens: {
-        "2xl": "1400px",
-      },
-    },
-    extend: {
-      colors: {
-        border: "hsl(var(--border))",
-        input: "hsl(var(--input))",
-        ring: "hsl(var(--ring))",
-        background: "hsl(var(--background))",
-        foreground: "hsl(var(--foreground))",
-        primary: {
-          DEFAULT: "hsl(var(--primary))",
-          foreground: "hsl(var(--primary-foreground))",
-        },
-        secondary: {
-          DEFAULT: "hsl(var(--secondary))",
-          foreground: "hsl(var(--secondary-foreground))",
-        },
-        destructive: {
-          DEFAULT: "hsl(var(--destructive))",
-          foreground: "hsl(var(--destructive-foreground))",
-        },
-        muted: {
-          DEFAULT: "hsl(var(--muted))",
-          foreground: "hsl(var(--muted-foreground))",
-        },
-        accent: {
-          DEFAULT: "hsl(var(--accent))",
-          foreground: "hsl(var(--accent-foreground))",
-        },
-        popover: {
-          DEFAULT: "hsl(var(--popover))",
-          foreground: "hsl(var(--popover-foreground))",
-        },
-        card: {
-          DEFAULT: "hsl(var(--card))",
-          foreground: "hsl(var(--card-foreground))",
-        },
-      },
-    },
-  },
-  plugins: [require("tailwindcss-animate")],
-}
-EOL
+npx tailwindcss init -p
 
-# Create postcss.config.js
-cat > postcss.config.js << 'EOL'
+# Create base Tailwind CSS config
+cat > tailwind.config.js << 'EOL'
 module.exports = {
-  plugins: {
-    tailwindcss: {},
-    autoprefixer: {},
+  content: [
+    "./src/**/*.{js,jsx,ts,tsx}",
+  ],
+  theme: {
+    extend: {},
   },
+  plugins: [],
 }
 EOL
 
@@ -142,63 +84,22 @@ cat > src/index.css << 'EOL'
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
- 
-@layer base {
-  :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
- 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
- 
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
- 
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
- 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
- 
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
- 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
- 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
- 
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
- 
-    --ring: 215 20.2% 65.1%;
- 
-    --radius: 0.5rem;
-  }
-}
- 
-@layer base {
-  * {
-    @apply border-border;
-  }
-  body {
-    @apply bg-background text-foreground;
-  }
-}
 EOL
 
-# Update App.tsx
+# Create base App.tsx
 cat > src/App.tsx << 'EOL'
 import React from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 
 function App() {
   return (
-    <div className="min-h-screen bg-background">
-      <div className="container mx-auto p-4">
-        <h1 className="text-4xl font-bold text-primary">IRSSH Panel</h1>
+    <Router>
+      <div className="min-h-screen bg-gray-100">
+        <Routes>
+          <Route path="/" element={<div className="p-6">Welcome to IRSSH Panel</div>} />
+        </Routes>
       </div>
-    </div>
+    </Router>
   );
 }
 
@@ -207,6 +108,38 @@ EOL
 
 # Build frontend
 log "Building frontend..."
-DISABLE_ESLINT_PLUGIN=true CI=false npm run build || error "Failed to build frontend"
+npm run build
+
+# Setup nginx configuration
+log "Configuring nginx..."
+cat > /etc/nginx/sites-available/irssh-panel << 'EOL'
+server {
+    listen 80;
+    server_name _;
+
+    root /opt/irssh-panel/frontend/build;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api {
+        proxy_pass http://localhost:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+EOL
+
+# Enable nginx site
+ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
+rm -f /etc/nginx/sites-enabled/default
+
+# Restart nginx
+systemctl restart nginx
 
 log "Frontend setup completed successfully!"
