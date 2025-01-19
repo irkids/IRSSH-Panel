@@ -3,6 +3,7 @@
 # Configuration
 PANEL_DIR="/opt/irssh-panel"
 FRONTEND_DIR="$PANEL_DIR/frontend"
+NODE_VERSION="18.19.0"  # LTS version
 
 # Colors
 GREEN='\033[0;32m'
@@ -19,25 +20,21 @@ error() {
     exit 1
 }
 
-# Check if running as root
-if [[ $EUID -ne 0 ]]; then
-    error "This script must be run as root"
-fi
-
-# Install Node.js
+# Install Node.js using nvm
 log "Installing Node.js..."
-if ! command -v node &> /dev/null; then
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-    apt-get install -y nodejs
+if ! command -v nvm &> /dev/null; then
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+    export NVM_DIR="$HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 fi
 
-# Create frontend directory
+nvm install $NODE_VERSION
+nvm use $NODE_VERSION
+
+# Setup frontend directory
 log "Setting up frontend directory..."
 mkdir -p "$FRONTEND_DIR"
 cd "$FRONTEND_DIR" || error "Failed to change directory"
-
-# Clean existing files if any
-rm -rf node_modules package-lock.json .git
 
 # Create package.json
 log "Creating package.json..."
@@ -48,16 +45,32 @@ cat > package.json << 'EOL'
   "private": true,
   "dependencies": {
     "@headlessui/react": "^1.7.17",
-    "@heroicons/react": "^2.1.1",
-    "@tailwindcss/forms": "^0.5.7",
-    "axios": "^1.6.5",
-    "lucide-react": "^0.309.0",
+    "axios": "^1.6.2",
+    "date-fns": "^2.30.0",
+    "lodash": "^4.17.21",
+    "lucide-react": "^0.292.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-router-dom": "^6.21.1",
+    "react-router-dom": "^6.20.0",
     "react-scripts": "5.0.1",
-    "recharts": "^2.10.3",
-    "tailwindcss": "^3.4.1"
+    "recharts": "^2.10.1",
+    "@radix-ui/react-dialog": "^1.0.5",
+    "@radix-ui/react-dropdown-menu": "^2.0.6",
+    "@radix-ui/react-label": "^2.0.2",
+    "@radix-ui/react-slot": "^1.0.2",
+    "class-variance-authority": "^0.7.0",
+    "clsx": "^2.0.0",
+    "tailwind-merge": "^2.0.0",
+    "tailwindcss-animate": "^1.0.7"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/react": "^18.2.39",
+    "@types/react-dom": "^18.2.17",
+    "autoprefixer": "^10.4.16",
+    "postcss": "^8.4.31",
+    "tailwindcss": "^3.3.5",
+    "typescript": "^5.3.2"
   },
   "scripts": {
     "start": "react-scripts start",
@@ -67,8 +80,7 @@ cat > package.json << 'EOL'
   },
   "eslintConfig": {
     "extends": [
-      "react-app",
-      "react-app/jest"
+      "react-app"
     ]
   },
   "browserslist": {
@@ -88,63 +100,69 @@ EOL
 
 # Install dependencies
 log "Installing dependencies..."
-npm install --legacy-peer-deps || error "Failed to install dependencies"
+npm install --legacy-peer-deps
 
-# Create source files
+# Create necessary config files
 log "Creating source files..."
-mkdir -p src
-
-# Create App.js
-cat > src/App.js << 'EOL'
-import React from 'react';
-
-function App() {
-  return (
-    <div className="min-h-screen bg-gray-100">
-      <div className="py-10">
-        <header>
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <h1 className="text-3xl font-bold leading-tight text-gray-900">
-              IRSSH Panel
-            </h1>
-          </div>
-        </header>
-        <main>
-          <div className="max-w-7xl mx-auto sm:px-6 lg:px-8">
-            <div className="px-4 py-8 sm:px-0">
-              <div className="border-4 border-dashed border-gray-200 rounded-lg h-96 flex items-center justify-center">
-                <p className="text-gray-500 text-xl">Welcome to IRSSH Panel</p>
-              </div>
-            </div>
-          </div>
-        </main>
-      </div>
-    </div>
-  );
-}
-
-export default App;
-EOL
-
-# Create index.css
-cat > src/index.css << 'EOL'
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-EOL
 
 # Create tailwind.config.js
 cat > tailwind.config.js << 'EOL'
+/** @type {import('tailwindcss').Config} */
 module.exports = {
-  content: [
-    "./src/**/*.{js,jsx,ts,tsx}",
-  ],
+  darkMode: ["class"],
+  content: ["./src/**/*.{js,jsx,ts,tsx}"],
   theme: {
-    extend: {},
+    container: {
+      center: true,
+      padding: "2rem",
+      screens: {
+        "2xl": "1400px",
+      },
+    },
+    extend: {
+      colors: {
+        border: "hsl(var(--border))",
+        input: "hsl(var(--input))",
+        ring: "hsl(var(--ring))",
+        background: "hsl(var(--background))",
+        foreground: "hsl(var(--foreground))",
+        primary: {
+          DEFAULT: "hsl(var(--primary))",
+          foreground: "hsl(var(--primary-foreground))",
+        },
+        secondary: {
+          DEFAULT: "hsl(var(--secondary))",
+          foreground: "hsl(var(--secondary-foreground))",
+        },
+        destructive: {
+          DEFAULT: "hsl(var(--destructive))",
+          foreground: "hsl(var(--destructive-foreground))",
+        },
+        muted: {
+          DEFAULT: "hsl(var(--muted))",
+          foreground: "hsl(var(--muted-foreground))",
+        },
+        accent: {
+          DEFAULT: "hsl(var(--accent))",
+          foreground: "hsl(var(--accent-foreground))",
+        },
+        popover: {
+          DEFAULT: "hsl(var(--popover))",
+          foreground: "hsl(var(--popover-foreground))",
+        },
+        card: {
+          DEFAULT: "hsl(var(--card))",
+          foreground: "hsl(var(--card-foreground))",
+        },
+      },
+      borderRadius: {
+        lg: "var(--radius)",
+        md: "calc(var(--radius) - 2px)",
+        sm: "calc(var(--radius) - 4px)",
+      },
+    },
   },
-  plugins: [
-    require('@tailwindcss/forms'),
-  ],
+  plugins: [require("tailwindcss-animate")],
 }
 EOL
 
@@ -154,82 +172,46 @@ module.exports = {
   plugins: {
     tailwindcss: {},
     autoprefixer: {},
+  }
+}
+EOL
+
+# Create tsconfig.json
+cat > tsconfig.json << 'EOL'
+{
+  "compilerOptions": {
+    "target": "es5",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "noFallthroughCasesInSwitch": true,
+    "module": "esnext",
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
   },
+  "include": ["src"]
 }
 EOL
 
-# Create index.js
-cat > src/index.js << 'EOL'
-import React from 'react';
-import ReactDOM from 'react-dom/client';
-import './index.css';
-import App from './App';
+# Create src directory structure
+mkdir -p src/{components,pages,utils,hooks,styles}
 
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
-EOL
+# Copy component files
+# Note: Component files should be copied here
 
-# Build the frontend
+# Build frontend
 log "Building frontend..."
-npm run build || error "Failed to build frontend"
-
-# Set permissions
-log "Setting permissions..."
-chown -R www-data:www-data build
-chmod -R 755 build
-
-# Update nginx configuration
-log "Updating Nginx configuration..."
-cat > /etc/nginx/sites-available/irssh-panel << 'EOL'
-server {
-    listen 80;
-    server_name _;
-
-    # Backend API
-    location /api {
-        proxy_pass http://localhost:8000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_cache_bypass $http_upgrade;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    # WebSocket connections
-    location /ws {
-        proxy_pass http://localhost:8000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "Upgrade";
-        proxy_set_header Host $host;
-    }
-
-    # Frontend
-    location / {
-        alias /opt/irssh-panel/frontend/build/;
-        index index.html;
-        try_files $uri $uri/ /index.html =404;
-        add_header Cache-Control "no-cache";
-        expires 0;
-    }
-
-    access_log /var/log/nginx/irssh-access.log;
-    error_log /var/log/nginx/irssh-error.log;
-}
-EOL
-
-# Enable site and restart Nginx
-log "Enabling site and restarting Nginx..."
-ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
-rm -f /etc/nginx/sites-enabled/default
-nginx -t && systemctl restart nginx
+CI=false npm run build || error "Failed to build frontend"
 
 log "Frontend setup completed successfully!"
-log "You can now access the panel at http://YOUR_SERVER_IP"
