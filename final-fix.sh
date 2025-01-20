@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# IRSSH Panel Final Fix Script
+# IRSSH Panel Installation Script with Pydantic Fix
 
 # === Configuration ===
 PANEL_DIR="/opt/irssh-panel"
@@ -82,8 +82,12 @@ mkdir -p "$BACKEND_DIR/app/"{core,api,models,schemas,utils}
 mkdir -p "$BACKEND_DIR/app/api/v1/endpoints"
 mkdir -p "$CONFIG_DIR" "$LOG_DIR"
 
+# === Create config.py with Pydantic Fix ===
 cat > "$BACKEND_DIR/app/core/config.py" << EOL
-from pydantic import BaseSettings
+try:
+    from pydantic_settings import BaseSettings
+except ImportError:
+    from pydantic import BaseSettings
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "IRSSH Panel"
@@ -96,6 +100,38 @@ class Settings(BaseSettings):
 
 settings = Settings()
 EOL
+
+# === Create main.py ===
+cat > "$BACKEND_DIR/app/main.py" << 'EOL'
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from app.api.router import api_router
+
+app = FastAPI(title="IRSSH Panel", version="1.0.0", description="VPN Server Management Panel")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
+
+app.include_router(api_router, prefix="/api")
+
+@app.get("/api/health")
+async def health_check():
+    return {"status": "healthy"}
+EOL
+
+# === Install Python Dependencies ===
+log "Setting up Python virtual environment..."
+python3 -m venv "$VENV_DIR"
+source "$VENV_DIR/bin/activate"
+pip install --upgrade pip
+pip install fastapi[all] uvicorn[standard] sqlalchemy[asyncio] psycopg2-binary \
+    python-jose[cryptography] passlib[bcrypt] python-multipart aiofiles aiohttp \
+    pydantic==1.10.9 || error "Python dependency installation failed"
 
 # === Setup Frontend ===
 log "Setting up frontend..."
