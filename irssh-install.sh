@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# IRSSH Panel Complete Fix and Installation Script
+# IRSSH Panel Complete Fix Script
 
 # === Configuration ===
 PANEL_DIR="/opt/irssh-panel"
@@ -9,7 +9,7 @@ BACKEND_DIR="$PANEL_DIR/backend"
 CONFIG_DIR="$PANEL_DIR/config"
 LOG_DIR="/var/log/irssh"
 VENV_DIR="$PANEL_DIR/venv"
-DOMAIN="panel.example.com"  # تغییر دهید
+DOMAIN="panel.example.com"  # Update with a valid domain for production
 
 # === Colors ===
 GREEN='\033[0;32m'
@@ -34,9 +34,15 @@ fi
 log "Installing system dependencies..."
 apt-get update
 apt-get install -y jq build-essential python3-dev python3-pip python3-venv \
-    libpq-dev nginx supervisor nodejs npm curl certbot python3-certbot-nginx
+    libpq-dev nginx supervisor curl certbot python3-certbot-nginx
 
-# === Setup Directory Structure ===
+# === Fix Node.js and NPM ===
+log "Installing Node.js and cleaning NPM conflicts..."
+apt-get remove --purge -y nodejs npm || true
+curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+apt-get install -y nodejs
+
+# === Setup Project Directories ===
 log "Setting up project directories..."
 mkdir -p "$BACKEND_DIR/app/"{core,api,models,schemas,utils}
 mkdir -p "$BACKEND_DIR/app/api/v1/endpoints"
@@ -155,22 +161,19 @@ supervisorctl restart irssh-panel
 
 # === Build Frontend ===
 log "Setting up and building the frontend..."
+rm -rf "$FRONTEND_DIR/*"
+npx create-react-app "$FRONTEND_DIR" --template typescript
 cd "$FRONTEND_DIR"
-npx create-react-app . --template typescript
 npm install @headlessui/react @heroicons/react axios react-router-dom tailwindcss
 npx tailwindcss init -p
 npm run build
-
-# === SSL Configuration ===
-log "Configuring SSL with Certbot..."
-certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos --email admin@"$DOMAIN"
 
 # === Final Verification ===
 log "Verifying installation..."
 response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/health || echo "000")
 if [[ "$response" == "200" ]]; then
     log "IRSSH Panel is running successfully!"
-    echo "Visit: https://$DOMAIN"
+    echo "Visit: http://$DOMAIN"
 else
     error "API is not responding correctly. Check logs at $LOG_DIR"
 fi
