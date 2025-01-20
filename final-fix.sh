@@ -1,4 +1,3 @@
-
 #!/bin/bash
 
 # IRSSH Panel Final Fix Script
