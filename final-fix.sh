@@ -1,8 +1,14 @@
+
 #!/bin/bash
 
-# IRSSH Panel Installation Script with Pydantic Fix
+# IRSSH Panel Final Fix Script
 
-# === Configuration ===
+# Colors
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+# Configuration
 PANEL_DIR="/opt/irssh-panel"
 FRONTEND_DIR="$PANEL_DIR/frontend"
 BACKEND_DIR="$PANEL_DIR/backend"
@@ -10,11 +16,7 @@ CONFIG_DIR="$PANEL_DIR/config"
 VENV_DIR="$PANEL_DIR/venv"
 LOG_DIR="/var/log/irssh"
 
-# === Colors ===
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-NC='\033[0m'
-
+# Logging
 log() {
     echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"
 }
@@ -24,206 +26,233 @@ error() {
     exit 1
 }
 
-# === Check Root ===
+# Check root
 if [[ $EUID -ne 0 ]]; then
     error "This script must be run as root"
 fi
 
-# === Ask for HTTPS or HTTP ===
-log "Do you want to enable HTTPS? (y/n)"
-read -r ENABLE_HTTPS
-if [[ "$ENABLE_HTTPS" == "y" ]]; then
-    USE_HTTPS=true
-else
-    USE_HTTPS=false
-fi
-
-# === Get Domain or Use IP ===
-read -p "Enter your domain or subdomain (leave blank to use server IP): " DOMAIN
+# Get domain
+read -p "Enter your domain (e.g., panel.example.com): " DOMAIN
 if [[ -z "$DOMAIN" ]]; then
-    DOMAIN=$(curl -s ifconfig.me)
-    log "No domain provided. Using server IP: $DOMAIN"
+    error "Domain cannot be empty"
 fi
 
-# === Get Port ===
-read -p "Enter port for the panel (leave blank for random): " PANEL_PORT
-if [[ -z "$PANEL_PORT" ]]; then
-    PANEL_PORT=$((RANDOM % 9000 + 10000)) # Random 5-digit port
-    log "No port provided. Using random port: $PANEL_PORT"
-fi
-
-# === Get Admin Credentials ===
-read -p "Enter admin username: " ADMIN_USER
-if [[ -z "$ADMIN_USER" ]]; then
-    ADMIN_USER="admin"
-    log "No username provided. Using default: admin"
-fi
-
-read -sp "Enter admin password: " ADMIN_PASS
-if [[ -z "$ADMIN_PASS" ]]; then
-    ADMIN_PASS="password"
-    log "No password provided. Using default: password"
-fi
-echo
-
-# === Install Dependencies ===
-log "Installing system dependencies..."
-apt-get update
-apt-get install -y jq build-essential python3-dev python3-pip python3-venv \
-    libpq-dev nginx supervisor curl || error "Dependency installation failed"
-
-if $USE_HTTPS; then
-    apt-get install -y certbot python3-certbot-nginx || error "Certbot installation failed"
-fi
-
-# === Setup Backend ===
-log "Setting up backend..."
+# Fix backend structure
+log "Fixing backend structure..."
 mkdir -p "$BACKEND_DIR/app/"{core,api,models,schemas,utils}
 mkdir -p "$BACKEND_DIR/app/api/v1/endpoints"
-mkdir -p "$CONFIG_DIR" "$LOG_DIR"
 
-# === Create config.py with Pydantic Fix ===
-cat > "$BACKEND_DIR/app/core/config.py" << EOL
-try:
-    from pydantic_settings import BaseSettings
-except ImportError:
-    from pydantic import BaseSettings
+# Create necessary backend files
+log "Creating backend files..."
 
-class Settings(BaseSettings):
-    PROJECT_NAME: str = "IRSSH Panel"
-    VERSION: str = "1.0.0"
-    DESCRIPTION: str = "VPN Server Management Panel"
-    ADMIN_USERNAME: str = "$ADMIN_USER"
-    ADMIN_PASSWORD: str = "$ADMIN_PASS"
-    DOMAIN: str = "$DOMAIN"
-    PANEL_PORT: int = $PANEL_PORT
+# Create router.py
+cat > "$BACKEND_DIR/app/api/router.py" << 'EOL'
+from fastapi import APIRouter, Depends, HTTPException
+from app.core import security
+from app.api.v1.endpoints import auth, users, protocols
 
-settings = Settings()
-EOL
+api_router = APIRouter()
 
-# === Create main.py ===
-cat > "$BACKEND_DIR/app/main.py" << 'EOL'
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from app.api.router import api_router
+api_router.include_router(auth.router, prefix="/auth", tags=["authentication"])
+api_router.include_router(users.router, prefix="/users", tags=["users"])
+api_router.include_router(protocols.router, prefix="/protocols", tags=["protocols"])
 
-app = FastAPI(title="IRSSH Panel", version="1.0.0", description="VPN Server Management Panel")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"]
-)
-
-app.include_router(api_router, prefix="/api")
-
-@app.get("/api/health")
-async def health_check():
+@api_router.get("/health")
+def health_check():
     return {"status": "healthy"}
 EOL
 
-# === Install Python Dependencies ===
-log "Setting up Python virtual environment..."
-python3 -m venv "$VENV_DIR"
-source "$VENV_DIR/bin/activate"
-pip install --upgrade pip
-pip install fastapi[all] uvicorn[standard] sqlalchemy[asyncio] psycopg2-binary \
-    python-jose[cryptography] passlib[bcrypt] python-multipart aiofiles aiohttp \
-    pydantic==1.10.9 || error "Python dependency installation failed"
+# Create auth.py
+cat > "$BACKEND_DIR/app/api/v1/endpoints/auth.py" << 'EOL'
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
 
-# === Setup Frontend ===
-log "Setting up frontend..."
-rm -rf "$FRONTEND_DIR"
-mkdir -p "$FRONTEND_DIR"
-npx create-react-app "$FRONTEND_DIR" --template typescript --use-npm
+router = APIRouter()
+
+@router.post("/login")
+async def login():
+    return {"message": "Login endpoint"}
+
+@router.post("/logout")
+async def logout():
+    return {"message": "Logout endpoint"}
+EOL
+
+# Create users.py
+cat > "$BACKEND_DIR/app/api/v1/endpoints/users.py" << 'EOL'
+from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.get("/")
+async def get_users():
+    return {"message": "Users list endpoint"}
+EOL
+
+# Create protocols.py
+cat > "$BACKEND_DIR/app/api/v1/endpoints/protocols.py" << 'EOL'
+from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.get("/")
+async def get_protocols():
+    return {"message": "Protocols list endpoint"}
+EOL
+
+# Fix frontend
+log "Fixing frontend..."
 cd "$FRONTEND_DIR"
-npm install @headlessui/react @heroicons/react axios react-router-dom tailwindcss
-npx tailwindcss init -p
 
+# Update package.json
+cat > "$FRONTEND_DIR/package.json" << EOL
+{
+  "name": "irssh-panel",
+  "version": "1.0.0",
+  "private": true,
+  "homepage": "https://$DOMAIN",
+  "dependencies": {
+    "@headlessui/react": "^1.7.0",
+    "@heroicons/react": "^2.0.0",
+    "axios": "^1.6.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.21.0",
+    "react-scripts": "5.0.1",
+    "tailwindcss": "^3.4.0"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
+  }
+}
+EOL
+
+# Create index.html
+cat > "$FRONTEND_DIR/public/index.html" << EOL
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="description" content="IRSSH Panel" />
+    <title>IRSSH Panel</title>
+  </head>
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+  </body>
+</html>
+EOL
+
+# Create App.js
 cat > "$FRONTEND_DIR/src/App.js" << 'EOL'
 import React from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 
 function Dashboard() {
-    return <h1 className="text-3xl font-bold text-center mt-10">Welcome to IRSSH Panel</h1>;
+  return <h1 className="text-3xl font-bold text-center mt-10">Welcome to IRSSH Panel</h1>;
 }
 
 function App() {
-    return (
-        <div className="min-h-screen bg-gray-100">
-            <Dashboard />
-        </div>
-    );
+  return (
+    <Router>
+      <div className="min-h-screen bg-gray-100">
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+        </Routes>
+      </div>
+    </Router>
+  );
 }
 
 export default App;
 EOL
 
+# Create index.js
+cat > "$FRONTEND_DIR/src/index.js" << 'EOL'
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import './index.css';
+import App from './App';
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+EOL
+
+# Create index.css with Tailwind
+cat > "$FRONTEND_DIR/src/index.css" << 'EOL'
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+EOL
+
+# Configure tailwind.config.js
+cat > "$FRONTEND_DIR/tailwind.config.js" << 'EOL'
+module.exports = {
+  content: [
+    "./src/**/*.{js,jsx,ts,tsx}",
+  ],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+}
+EOL
+
+# Install dependencies and build
+log "Installing frontend dependencies..."
+npm install
 npm run build
 
-# === Configure Nginx ===
-log "Configuring Nginx..."
-if $USE_HTTPS; then
-    cat > /etc/nginx/sites-available/irssh-panel << EOL
+# Fix Nginx configuration
+log "Updating Nginx configuration..."
+cat > /etc/nginx/sites-available/irssh-panel << EOL
 server {
-    listen $PANEL_PORT ssl;
-    server_name $DOMAIN;
-
-    ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
-
-    root $FRONTEND_DIR/build;
-    index index.html;
-
-    location / {
-        try_files \$uri /index.html;
-    }
-
-    location /api {
-        proxy_pass http://localhost:8000/api;
-    }
-
-    client_max_body_size 100M;
-}
-EOL
-else
-    cat > /etc/nginx/sites-available/irssh-panel << EOL
-server {
-    listen $PANEL_PORT;
     server_name $DOMAIN;
 
     root $FRONTEND_DIR/build;
     index index.html;
 
     location / {
-        try_files \$uri /index.html;
+        try_files \$uri \$uri/ /index.html;
     }
 
     location /api {
-        proxy_pass http://localhost:8000/api;
+        proxy_pass http://localhost:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+
+        # CORS headers
+        add_header 'Access-Control-Allow-Origin' '*' always;
+        add_header 'Access-Control-Allow-Methods' 'GET, POST, PUT, DELETE, OPTIONS' always;
+        add_header 'Access-Control-Allow-Headers' '*' always;
+        add_header 'Access-Control-Expose-Headers' '*' always;
     }
 
     client_max_body_size 100M;
 }
 EOL
-fi
 
-ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
-systemctl reload nginx || error "Nginx configuration failed"
+# Restart services
+log "Restarting services..."
+systemctl restart nginx
+supervisorctl restart irssh-panel
 
-# === Enable HTTPS with Certbot ===
-if $USE_HTTPS; then
-    log "Enabling HTTPS with Certbot..."
-    certbot --nginx -d $DOMAIN --non-interactive --agree-tos --email your-email@example.com || error "Certbot failed to issue certificate"
-fi
-
-# === Final Message ===
-log "Installation completed successfully!"
-if $USE_HTTPS; then
-    echo "Access your panel at: https://$DOMAIN:$PANEL_PORT"
-    echo "API Endpoint: https://$DOMAIN:$PANEL_PORT/api"
-else
-    echo "Access your panel at: http://$DOMAIN:$PANEL_PORT"
-    echo "API Endpoint: http://$DOMAIN:$PANEL_PORT/api"
-fi
+# Final message
+log "Fix completed! Please check:"
+echo "1. Frontend: https://$DOMAIN"
+echo "2. API: https://$DOMAIN/api/health"
+echo "3. Logs: $LOG_DIR/uvicorn.err.log"
