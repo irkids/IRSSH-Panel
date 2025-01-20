@@ -348,6 +348,148 @@ start_services() {
 main() {
     log "Starting IRSSH Panel installation..."
     
+    setup_backend() {
+    log "Setting up backend..."
+    
+    # Create app directory structure
+    mkdir -p "$PANEL_DIR/app"
+    mkdir -p "$PANEL_DIR/app/api/v1/endpoints"
+    mkdir -p "$PANEL_DIR/app/core"
+    mkdir -p "$PANEL_DIR/app/models"
+    mkdir -p "$PANEL_DIR/app/schemas"
+    mkdir -p "$PANEL_DIR/app/utils"
+
+    # Create __init__.py files
+    touch "$PANEL_DIR/app/__init__.py"
+    touch "$PANEL_DIR/app/api/__init__.py"
+    touch "$PANEL_DIR/app/api/v1/__init__.py"
+    touch "$PANEL_DIR/app/api/v1/endpoints/__init__.py"
+    touch "$PANEL_DIR/app/core/__init__.py"
+    touch "$PANEL_DIR/app/models/__init__.py"
+    touch "$PANEL_DIR/app/schemas/__init__.py"
+    touch "$PANEL_DIR/app/utils/__init__.py"
+
+    # Download core backend files from repository
+    BACKEND_FILES=(
+        "app/main.py"
+        "app/core/config.py"
+        "app/core/database.py"
+        "app/core/security.py"
+        "app/core/logger.py"
+        "app/models/models.py"
+        "app/api/deps.py"
+        "app/api/router.py"
+        "app/api/v1/endpoints/auth.py"
+        "app/api/v1/endpoints/users.py"
+        "app/api/v1/endpoints/protocols.py"
+        "app/api/v1/endpoints/settings.py"
+        "app/api/v1/endpoints/monitoring.py"
+    )
+
+    for file in "${BACKEND_FILES[@]}"; do
+        log "Downloading $file..."
+        dir=$(dirname "$PANEL_DIR/$file")
+        mkdir -p "$dir"
+        curl -o "$PANEL_DIR/$file" "$GITHUB_RAW/backend/$file" || warn "Failed to download $file"
+    done
+
+    # Set correct permissions
+    chown -R www-data:www-data "$PANEL_DIR/app"
+    chmod -R 755 "$PANEL_DIR/app"
+
+    # Create main.py if download failed
+    if [ ! -f "$PANEL_DIR/app/main.py" ]; then
+        log "Creating fallback main.py..."
+        cat > "$PANEL_DIR/app/main.py" << 'EOL'
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from app.core.config import settings
+from app.core.database import init_db
+from app.api.router import api_router
+
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    version=settings.VERSION,
+    description=settings.DESCRIPTION
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.on_event("startup")
+async def startup_event():
+    await init_db()
+
+app.include_router(api_router, prefix="/api")
+
+@app.get("/")
+async def root():
+    return {"message": "IRSSH Panel API"}
+EOL
+    fi
+
+    # Create minimal models.py if download failed
+    if [ ! -f "$PANEL_DIR/app/models/models.py" ]; then
+        log "Creating fallback models.py..."
+        cat > "$PANEL_DIR/app/models/models.py" << 'EOL'
+from sqlalchemy import Column, Integer, String, Boolean, DateTime
+from app.core.database import Base
+from datetime import datetime
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True)
+    hashed_password = Column(String)
+    email = Column(String, unique=True, index=True, nullable=True)
+    is_admin = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+EOL
+    fi
+
+    # Create config.py if download failed
+    if [ ! -f "$PANEL_DIR/app/core/config.py" ]; then
+        log "Creating fallback config.py..."
+        cat > "$PANEL_DIR/app/core/config.py" << 'EOL'
+import os
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    PROJECT_NAME: str = "IRSSH Panel"
+    VERSION: str = "1.0.0"
+    DESCRIPTION: str = "VPN Server Management Panel"
+
+    MODULES_DIR: str = "/opt/irssh-panel/modules"
+    LOG_DIR: str = "/var/log/irssh"
+
+    # Load database config from env file
+    with open('/opt/irssh-panel/config/database.env', 'r') as f:
+        for line in f:
+            if '=' in line:
+                key, value = line.strip().split('=', 1)
+                os.environ[key] = value
+
+    DB_HOST: str = os.getenv("DB_HOST", "localhost")
+    DB_PORT: int = int(os.getenv("DB_PORT", "5432"))
+    DB_USER: str = os.getenv("DB_USER", "irssh_admin")
+    DB_PASS: str = os.getenv("DB_PASS", "")
+    DB_NAME: str = os.getenv("DB_NAME", "irssh_panel")
+
+    @property
+    def DATABASE_URI(self) -> str:
+        return f"postgresql://{self.DB_USER}:{self.DB_PASS}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+
+settings = Settings()
+EOL
+    fi
+
+    log "Backend setup completed"
+}
     preinstall_checks
     prepare_system
     setup_database
