@@ -1,13 +1,11 @@
 #!/bin/bash
 
-# IRSSH Panel Complete Setup Script
-
 # Configuration
 PANEL_DIR="/opt/irssh-panel"
 FRONTEND_DIR="$PANEL_DIR/frontend"
 BACKEND_DIR="$PANEL_DIR/backend"
 CONFIG_DIR="$PANEL_DIR/config"
-DOMAIN=""  # Will be set during execution
+DOMAIN=""
 
 # Colors
 GREEN='\033[0;32m'
@@ -29,28 +27,10 @@ if [[ $EUID -ne 0 ]]; then
     error "This script must be run as root"
 fi
 
-# Check if first installation is complete
-if [ ! -d "$PANEL_DIR" ]; then
-    error "Please run the main installation script first"
-fi
-
-# Setup Backend Structure
-log "Setting up backend structure..."
-mkdir -p "$BACKEND_DIR/app/"{core,api,models,schemas,utils}
-mkdir -p "$BACKEND_DIR/app/api/v1/endpoints"
-
-# Create __init__.py files
-touch "$BACKEND_DIR/app/__init__.py"
-touch "$BACKEND_DIR/app/core/__init__.py"
-touch "$BACKEND_DIR/app/api/__init__.py"
-touch "$BACKEND_DIR/app/api/v1/__init__.py"
-touch "$BACKEND_DIR/app/models/__init__.py"
-touch "$BACKEND_DIR/app/schemas/__init__.py"
-touch "$BACKEND_DIR/app/utils/__init__.py"
-
-# Copy backend files
-log "Copying backend files..."
-cp -r /root/irssh-panel/backend/* "$BACKEND_DIR/"
+# Install additional Python packages
+log "Installing additional Python packages..."
+source "$PANEL_DIR/venv/bin/activate"
+pip install prometheus_client psutil geoip2 python-telegram-bot asyncio aiohttp
 
 # Setup Frontend
 log "Setting up frontend..."
@@ -63,37 +43,151 @@ if ! command -v node &> /dev/null; then
     apt-get install -y nodejs
 fi
 
-# Create React App
+# Create React App with specific versions
 log "Creating React application..."
-npx create-react-app frontend --template typescript
-
+mkdir -p "$FRONTEND_DIR"
 cd "$FRONTEND_DIR"
 
-# Install frontend dependencies
-log "Installing frontend dependencies..."
-npm install \
-    @headlessui/react \
-    @heroicons/react \
-    axios \
-    react-router-dom \
-    recharts \
-    tailwindcss \
-    @tailwindcss/forms \
-    @types/recharts \
-    lucide-react \
-    @types/node \
-    @types/react \
-    @types/react-dom \
-    postcss \
-    autoprefixer
+# Initialize package.json with specific versions
+cat > package.json << EOL
+{
+  "name": "irssh-panel-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@headlessui/react": "^1.7.17",
+    "@heroicons/react": "^2.1.1",
+    "@tailwindcss/forms": "^0.5.7",
+    "@testing-library/jest-dom": "^5.17.0",
+    "@testing-library/react": "^13.4.0",
+    "@testing-library/user-event": "^13.5.0",
+    "@types/jest": "^27.5.2",
+    "@types/node": "^16.18.70",
+    "@types/react": "^18.2.47",
+    "@types/react-dom": "^18.2.18",
+    "axios": "^1.6.5",
+    "lucide-react": "^0.309.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.21.1",
+    "react-scripts": "5.0.1",
+    "recharts": "^2.10.3",
+    "typescript": "^4.9.5",
+    "web-vitals": "^2.1.4"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.16",
+    "postcss": "^8.4.33",
+    "tailwindcss": "^3.4.1"
+  }
+}
+EOL
 
-# Copy frontend files
-log "Copying frontend files..."
-cp -r /root/irssh-panel/frontend/src/* "$FRONTEND_DIR/src/"
+# Install dependencies with legacy peer deps
+log "Installing frontend dependencies..."
+npm install --legacy-peer-deps
 
 # Setup Tailwind CSS
 log "Configuring Tailwind CSS..."
-npx tailwindcss init -p
+cat > tailwind.config.js << EOL
+module.exports = {
+  content: ["./src/**/*.{js,jsx,ts,tsx}"],
+  theme: {
+    extend: {},
+  },
+  plugins: [
+    require('@tailwindcss/forms'),
+  ],
+}
+EOL
+
+cat > postcss.config.js << EOL
+module.exports = {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+}
+EOL
+
+# Create basic React files
+mkdir -p src/components src/pages src/utils
+
+# Copy frontend files if they exist
+if [ -d "/root/irssh-panel/frontend/src" ]; then
+    log "Copying frontend files..."
+    cp -r /root/irssh-panel/frontend/src/* "$FRONTEND_DIR/src/"
+else
+    log "Creating basic frontend structure..."
+    # Create index.tsx
+    cat > src/index.tsx << 'EOL'
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import './index.css';
+import App from './App';
+
+const root = ReactDOM.createRoot(
+  document.getElementById('root') as HTMLElement
+);
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+EOL
+
+    # Create index.css with Tailwind
+    cat > src/index.css << 'EOL'
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+EOL
+
+    # Create basic App.tsx
+    cat > src/App.tsx << 'EOL'
+import React from 'react';
+
+function App() {
+  return (
+    <div className="min-h-screen bg-gray-100">
+      <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+        <div className="px-4 py-6 sm:px-0">
+          <h1 className="text-3xl font-bold text-gray-900">
+            IRSSH Panel
+          </h1>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default App;
+EOL
+fi
 
 # Build frontend
 log "Building frontend..."
@@ -121,7 +215,6 @@ server {
         add_header X-Frame-Options "SAMEORIGIN";
         add_header X-Content-Type-Options "nosniff";
         add_header X-XSS-Protection "1; mode=block";
-        add_header Content-Security-Policy "default-src 'self' 'unsafe-inline' 'unsafe-eval'; img-src 'self' data: https:; connect-src 'self' wss://$DOMAIN;";
     }
 
     location /api {
@@ -134,12 +227,6 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-
-        # CORS headers
-        add_header 'Access-Control-Allow-Origin' 'https://$DOMAIN' always;
-        add_header 'Access-Control-Allow-Methods' 'GET, POST, PUT, DELETE, OPTIONS' always;
-        add_header 'Access-Control-Allow-Headers' 'DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization' always;
-        add_header 'Access-Control-Expose-Headers' 'Content-Length,Content-Range' always;
     }
 
     location /ws {
@@ -148,13 +235,9 @@ server {
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     }
 
     client_max_body_size 100M;
-    keepalive_timeout 65;
-    server_tokens off;
 }
 EOL
 
@@ -164,53 +247,39 @@ ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
 log "Setting up SSL with Certbot..."
 certbot --nginx -d $DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN
 
-# Update CORS settings in backend
-log "Updating CORS settings..."
-cat > "$CONFIG_DIR/cors.env" << EOL
-ALLOWED_ORIGINS=["https://$DOMAIN"]
-ALLOWED_METHODS=["*"]
-ALLOWED_HEADERS=["*"]
-ALLOW_CREDENTIALS=true
-EOL
-
-# Initialize and configure modules
+# Initialize modules
 log "Setting up modules..."
-for module in ssh l2tp ikev2 cisco wireguard singbox; do
-    log "Initializing $module module..."
-    "$PANEL_DIR/modules/$module-script.py" init || error "Failed to initialize $module module"
-    
-    # Generate default configuration
-    "$PANEL_DIR/modules/$module-script.py" generate-config > "$CONFIG_DIR/$module.json"
-    
-    # Set correct permissions
-    chmod 600 "$CONFIG_DIR/$module.json"
-done
+cd "$PANEL_DIR/modules"
 
-# Setup automatic module updates
-log "Setting up automatic module updates..."
-cat > /etc/cron.daily/irssh-modules << EOL
-#!/bin/bash
-cd $PANEL_DIR/modules
-for script in *-script.py *-script.sh; do
-    if [ -f "\$script" ]; then
-        ./\$script update
+# Download GeoLite2 database
+log "Downloading GeoLite2 database..."
+mkdir -p "$PANEL_DIR/data"
+wget -O "$PANEL_DIR/data/GeoLite2-City.mmdb" "https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-City.mmdb"
+
+# Initialize each module
+for script in *-script.*; do
+    if [ -f "$script" ]; then
+        log "Initializing $script..."
+        chmod +x "$script"
+        if [[ "$script" == *.py ]]; then
+            python3 "$script" init || log "Warning: Failed to initialize $script"
+        else
+            bash "$script" init || log "Warning: Failed to initialize $script"
+        fi
     fi
 done
-EOL
-
-chmod +x /etc/cron.daily/irssh-modules
 
 # Restart services
 log "Restarting services..."
 systemctl restart nginx
-supervisorctl restart irssh-panel
-systemctl restart irssh-tasks
+supervisorctl reread
+supervisorctl update
+supervisorctl restart all
 
 # Final checks
 log "Performing final checks..."
 curl -s -o /dev/null -w "%{http_code}" https://$DOMAIN/api/health
 
-# Installation complete
 log "Setup completed successfully!"
 echo
 echo "Your IRSSH Panel is now available at: https://$DOMAIN"
@@ -219,11 +288,3 @@ echo "Please verify the following:"
 echo "1. Frontend is accessible at https://$DOMAIN"
 echo "2. API is accessible at https://$DOMAIN/api"
 echo "3. All modules are running correctly"
-echo
-echo "Next steps:"
-echo "1. Login with admin credentials"
-echo "2. Change the default admin password"
-echo "3. Configure each module as needed"
-echo "4. Set up monitoring alerts"
-echo
-echo "For support, check the documentation or contact support."
