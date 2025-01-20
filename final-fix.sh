@@ -2,12 +2,7 @@
 
 # IRSSH Panel Final Fix Script
 
-# Colors
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-NC='\033[0m'
-
-# Configuration
+# === Configuration ===
 PANEL_DIR="/opt/irssh-panel"
 FRONTEND_DIR="$PANEL_DIR/frontend"
 BACKEND_DIR="$PANEL_DIR/backend"
@@ -15,7 +10,11 @@ CONFIG_DIR="$PANEL_DIR/config"
 VENV_DIR="$PANEL_DIR/venv"
 LOG_DIR="/var/log/irssh"
 
-# Logging
+# === Colors ===
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m'
+
 log() {
     echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"
 }
@@ -25,233 +24,186 @@ error() {
     exit 1
 }
 
-# Check root
+# === Check Root ===
 if [[ $EUID -ne 0 ]]; then
     error "This script must be run as root"
 fi
 
-# Get domain
+# === Get Domain and Port ===
 read -p "Enter your domain (e.g., panel.example.com): " DOMAIN
 if [[ -z "$DOMAIN" ]]; then
     error "Domain cannot be empty"
 fi
 
-# Fix backend structure
-log "Fixing backend structure..."
+read -p "Enter port for the panel (leave blank for random): " PANEL_PORT
+if [[ -z "$PANEL_PORT" ]]; then
+    PANEL_PORT=$((RANDOM % 9000 + 10000)) # Random 5-digit port
+    log "No port provided. Using random port: $PANEL_PORT"
+fi
+
+# === Get Admin Credentials ===
+read -p "Enter admin username: " ADMIN_USER
+if [[ -z "$ADMIN_USER" ]]; then
+    ADMIN_USER="admin"
+    log "No username provided. Using default: admin"
+fi
+
+read -sp "Enter admin password: " ADMIN_PASS
+if [[ -z "$ADMIN_PASS" ]]; then
+    ADMIN_PASS="password"
+    log "No password provided. Using default: password"
+fi
+echo
+
+# === Install Dependencies ===
+log "Installing system dependencies..."
+apt-get update
+apt-get install -y jq build-essential python3-dev python3-pip python3-venv \
+    libpq-dev nginx supervisor curl certbot python3-certbot-nginx || error "Dependency installation failed"
+
+# === Setup Backend ===
+log "Setting up backend directories and files..."
 mkdir -p "$BACKEND_DIR/app/"{core,api,models,schemas,utils}
 mkdir -p "$BACKEND_DIR/app/api/v1/endpoints"
+mkdir -p "$CONFIG_DIR" "$LOG_DIR"
 
-# Create necessary backend files
-log "Creating backend files..."
+cat > "$BACKEND_DIR/app/core/config.py" << EOL
+from pydantic import BaseSettings
 
-# Create router.py
+class Settings(BaseSettings):
+    PROJECT_NAME: str = "IRSSH Panel"
+    VERSION: str = "1.0.0"
+    DESCRIPTION: str = "VPN Server Management Panel"
+    ADMIN_USERNAME: str = "$ADMIN_USER"
+    ADMIN_PASSWORD: str = "$ADMIN_PASS"
+    DOMAIN: str = "$DOMAIN"
+    PANEL_PORT: int = $PANEL_PORT
+
+settings = Settings()
+EOL
+
 cat > "$BACKEND_DIR/app/api/router.py" << 'EOL'
-from fastapi import APIRouter, Depends, HTTPException
-from app.core import security
-from app.api.v1.endpoints import auth, users, protocols
+from fastapi import APIRouter
+from app.api.v1.endpoints import auth
 
 api_router = APIRouter()
-
 api_router.include_router(auth.router, prefix="/auth", tags=["authentication"])
-api_router.include_router(users.router, prefix="/users", tags=["users"])
-api_router.include_router(protocols.router, prefix="/protocols", tags=["protocols"])
 
 @api_router.get("/health")
-def health_check():
+async def health_check():
     return {"status": "healthy"}
 EOL
 
-# Create auth.py
 cat > "$BACKEND_DIR/app/api/v1/endpoints/auth.py" << 'EOL'
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from datetime import datetime, timedelta
+import jwt
+from app.core.config import settings
 
 router = APIRouter()
+
+SECRET_KEY = "your_secret_key"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 @router.post("/login")
-async def login():
-    return {"message": "Login endpoint"}
-
-@router.post("/logout")
-async def logout():
-    return {"message": "Logout endpoint"}
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    if form_data.username != settings.ADMIN_USERNAME or form_data.password != settings.ADMIN_PASSWORD:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+        )
+    access_token = create_access_token({"sub": form_data.username})
+    return {"access_token": access_token, "token_type": "bearer"}
 EOL
 
-# Create users.py
-cat > "$BACKEND_DIR/app/api/v1/endpoints/users.py" << 'EOL'
-from fastapi import APIRouter
-
-router = APIRouter()
-
-@router.get("/")
-async def get_users():
-    return {"message": "Users list endpoint"}
-EOL
-
-# Create protocols.py
-cat > "$BACKEND_DIR/app/api/v1/endpoints/protocols.py" << 'EOL'
-from fastapi import APIRouter
-
-router = APIRouter()
-
-@router.get("/")
-async def get_protocols():
-    return {"message": "Protocols list endpoint"}
-EOL
-
-# Fix frontend
-log "Fixing frontend..."
+# === Setup Frontend ===
+log "Setting up frontend..."
+rm -rf "$FRONTEND_DIR"
+mkdir -p "$FRONTEND_DIR"
+npx create-react-app "$FRONTEND_DIR" --template typescript --use-npm
 cd "$FRONTEND_DIR"
+npm install @headlessui/react @heroicons/react axios react-router-dom tailwindcss
+npx tailwindcss init -p
 
-# Update package.json
-cat > "$FRONTEND_DIR/package.json" << EOL
-{
-  "name": "irssh-panel",
-  "version": "1.0.0",
-  "private": true,
-  "homepage": "https://$DOMAIN",
-  "dependencies": {
-    "@headlessui/react": "^1.7.0",
-    "@heroicons/react": "^2.0.0",
-    "axios": "^1.6.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-router-dom": "^6.21.0",
-    "react-scripts": "5.0.1",
-    "tailwindcss": "^3.4.0"
-  },
-  "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
-    "eject": "react-scripts eject"
-  }
-}
-EOL
-
-# Create index.html
-cat > "$FRONTEND_DIR/public/index.html" << EOL
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#000000" />
-    <meta name="description" content="IRSSH Panel" />
-    <title>IRSSH Panel</title>
-  </head>
-  <body>
-    <noscript>You need to enable JavaScript to run this app.</noscript>
-    <div id="root"></div>
-  </body>
-</html>
-EOL
-
-# Create App.js
 cat > "$FRONTEND_DIR/src/App.js" << 'EOL'
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 
 function Dashboard() {
-  return <h1 className="text-3xl font-bold text-center mt-10">Welcome to IRSSH Panel</h1>;
+    return <h1 className="text-3xl font-bold text-center mt-10">Welcome to IRSSH Panel</h1>;
 }
 
 function App() {
-  return (
-    <Router>
-      <div className="min-h-screen bg-gray-100">
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-        </Routes>
-      </div>
-    </Router>
-  );
+    return (
+        <div className="min-h-screen bg-gray-100">
+            <Dashboard />
+        </div>
+    );
 }
 
 export default App;
 EOL
 
-# Create index.js
-cat > "$FRONTEND_DIR/src/index.js" << 'EOL'
-import React from 'react';
-import ReactDOM from 'react-dom/client';
-import './index.css';
-import App from './App';
-
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
-EOL
-
-# Create index.css with Tailwind
-cat > "$FRONTEND_DIR/src/index.css" << 'EOL'
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-EOL
-
-# Configure tailwind.config.js
-cat > "$FRONTEND_DIR/tailwind.config.js" << 'EOL'
-module.exports = {
-  content: [
-    "./src/**/*.{js,jsx,ts,tsx}",
-  ],
-  theme: {
-    extend: {},
-  },
-  plugins: [],
-}
-EOL
-
-# Install dependencies and build
-log "Installing frontend dependencies..."
-npm install
 npm run build
 
-# Fix Nginx configuration
-log "Updating Nginx configuration..."
+# === Configure Nginx ===
+log "Configuring Nginx..."
 cat > /etc/nginx/sites-available/irssh-panel << EOL
 server {
+    listen $PANEL_PORT ssl;
     server_name $DOMAIN;
+
+    ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$DOMAIN/privkey.pem;
 
     root $FRONTEND_DIR/build;
     index index.html;
 
     location / {
-        try_files \$uri \$uri/ /index.html;
+        try_files \$uri /index.html;
     }
 
     location /api {
-        proxy_pass http://localhost:8000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-
-        # CORS headers
-        add_header 'Access-Control-Allow-Origin' '*' always;
-        add_header 'Access-Control-Allow-Methods' 'GET, POST, PUT, DELETE, OPTIONS' always;
-        add_header 'Access-Control-Allow-Headers' '*' always;
-        add_header 'Access-Control-Expose-Headers' '*' always;
+        proxy_pass http://localhost:8000/api;
     }
 
     client_max_body_size 100M;
 }
 EOL
 
-# Restart services
-log "Restarting services..."
-systemctl restart nginx
+ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
+systemctl reload nginx
+
+# === Configure Supervisor ===
+log "Configuring Supervisor..."
+cat > /etc/supervisor/conf.d/irssh-panel.conf << EOL
+[program:irssh-panel]
+directory=$BACKEND_DIR
+command=$VENV_DIR/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+user=root
+autostart=true
+autorestart=true
+stderr_logfile=$LOG_DIR/uvicorn.err.log
+stdout_logfile=$LOG_DIR/uvicorn.out.log
+environment=PYTHONPATH="$BACKEND_DIR"
+EOL
+
+supervisorctl reread
+supervisorctl update
 supervisorctl restart irssh-panel
 
-# Final message
-log "Fix completed! Please check:"
-echo "1. Frontend: https://$DOMAIN"
-echo "2. API: https://$DOMAIN/api/health"
-echo "3. Logs: $LOG_DIR/uvicorn.err.log"
+# === Enable HTTPS with Certbot ===
+log "Enabling HTTPS with Certbot..."
+certbot --nginx -d $DOMAIN --non-interactive --agree-tos --email your-email@example.com || error "Certbot failed to issue certificate"
+
+# === Final Message ===
+log "Installation completed successfully!"
+echo "Access your panel at: https://$DOMAIN:$PANEL_PORT"
+echo "API Endpoint: https://$DOMAIN:$PANEL_PORT/api"
