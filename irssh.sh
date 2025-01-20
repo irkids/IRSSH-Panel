@@ -1,167 +1,188 @@
 #!/bin/bash
 
-# IRSSH Panel - Unified Setup Script
-# Version: 1.0.0
-# This script handles complete setup of IRSSH Panel including server initialization,
-# panel installation, and module configuration.
+# IRSSH Panel Installation Script
 
 # Configuration
 PANEL_DIR="/opt/irssh-panel"
 CONFIG_DIR="$PANEL_DIR/config"
 MODULES_DIR="$PANEL_DIR/modules"
 LOG_DIR="/var/log/irssh"
-BACKUP_DIR="$PANEL_DIR/backups"
-REPO_URL="https://raw.githubusercontent.com/irkids/Optimize2Ubuntu/refs/heads/main"
+DB_NAME="irssh_panel"
+DB_USER="irssh_admin"
+DB_PASS=$(openssl rand -base64 32)
+ADMIN_PASS=$(openssl rand -base64 16)
+GITHUB_RAW="https://raw.githubusercontent.com/irkids/Optimize2Ubuntu/refs/heads/main"
 
-# Colors and Styling
+# Colors
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
 NC='\033[0m'
-BOLD='\033[1m'
 
 # Logging
 log() {
-    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1" | tee -a $LOG_DIR/install.log
-}
-
-error() {
-    echo -e "${RED}[$(date +'%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1" | tee -a $LOG_DIR/install.log
-    exit 1
+    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"
 }
 
 warn() {
-    echo -e "${YELLOW}[$(date +'%Y-%m-%d %H:%M:%S')] WARNING:${NC} $1" | tee -a $LOG_DIR/install.log
+    echo -e "${YELLOW}[$(date +'%Y-%m-%d %H:%M:%S')] WARNING:${NC} $1"
 }
 
-# Check system requirements
-check_requirements() {
-    log "Checking system requirements..."
+error() {
+    echo -e "${RED}[$(date +'%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1"
+    exit 1
+}
+
+# Pre-installation checks
+preinstall_checks() {
+    log "Running pre-installation checks..."
     
-    # Check OS
-    if [ ! -f /etc/lsb-release ]; then
-        error "This script requires Ubuntu 20.04 or higher"
+    # Check if running as root
+    if [[ $EUID -ne 0 ]]; then
+        error "This script must be run as root"
     fi
 
-    # Check memory
+    # Check system memory
     total_mem=$(free -m | awk '/^Mem:/{print $2}')
     if [ $total_mem -lt 1024 ]; then
-        error "Minimum 1GB RAM required"
+        error "Minimum 1GB of RAM required. Current: ${total_mem}MB"
     fi
 
     # Check disk space
     free_space=$(df -m / | awk 'NR==2{print $4}')
     if [ $free_space -lt 5120 ]; then
-        error "Minimum 5GB free space required"
+        error "Minimum 5GB of free disk space required. Current: ${free_space}MB"
     fi
 
-    # Check if root
-    if [[ $EUID -ne 0 ]]; then
-        error "This script must be run as root"
+    # Disable needrestart interactive prompts
+    if [ -f "/etc/needrestart/needrestart.conf" ]; then
+        sed -i "s/#\$nrconf{restart} = 'i';/\$nrconf{restart} = 'a';/" /etc/needrestart/needrestart.conf
     fi
 }
 
-# Initialize server
-init_server() {
-    log "Initializing server..."
+# System preparation
+prepare_system() {
+    log "Preparing system..."
 
-    # Update system
-    apt-get update
-    apt-get upgrade -y
+    # Update package list
+    apt-get update || error "Failed to update package list"
 
     # Install essential packages
     log "Installing essential packages..."
-    apt-get install -y \
-        curl wget git vim htop tmux zip unzip \
-        net-tools iptables ufw fail2ban ntp \
-        ca-certificates gnupg lsb-release \
-        python3 python3-pip python3-venv \
-        postgresql postgresql-contrib nginx \
-        certbot python3-certbot-nginx supervisor
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        python3 \
+        python3-pip \
+        python3-venv \
+        postgresql \
+        postgresql-contrib \
+        nginx \
+        certbot \
+        python3-certbot-nginx \
+        git \
+        curl \
+        tar \
+        unzip \
+        supervisor \
+        ufw \
+        jq \
+        net-tools \
+        software-properties-common \
+        apt-transport-https \
+        ca-certificates \
+        gnupg \
+        lsb-release \
+        build-essential \
+        libssl-dev \
+        libffi-dev \
+        python3-dev || error "Failed to install essential packages"
 
-    # Configure timezone
-    log "Configuring timezone..."
-    timedatectl set-timezone UTC
-    systemctl restart ntp
-
-    # Configure system limits
-    log "Optimizing system settings..."
-    cat > /etc/sysctl.d/99-irssh.conf << EOL
-# Network optimizations
-net.core.somaxconn = 65535
-net.core.netdev_max_backlog = 262144
-net.ipv4.tcp_max_syn_backlog = 262144
-net.ipv4.tcp_synack_retries = 2
-net.ipv4.tcp_rmem = 4096 87380 16777216
-net.ipv4.tcp_wmem = 4096 87380 16777216
-net.ipv4.tcp_mem = 786432 1048576 26777216
-net.ipv4.tcp_max_tw_buckets = 6000000
-net.ipv4.tcp_fin_timeout = 15
-net.ipv4.ip_local_port_range = 1024 65000
-net.ipv4.tcp_fastopen = 3
-net.core.rmem_max = 16777216
-net.core.wmem_max = 16777216
-
-# Enable BBR
-net.core.default_qdisc = fq
-net.ipv4.tcp_congestion_control = bbr
-EOL
-    sysctl --system
-
-    # Configure firewall
-    log "Configuring firewall..."
-    ufw --force reset
-    ufw default deny incoming
-    ufw default allow outgoing
-    ufw allow ssh
-    ufw allow http
-    ufw allow https
-    ufw --force enable
+    # Create required directories
+    log "Creating directories..."
+    mkdir -p "$PANEL_DIR"
+    mkdir -p "$CONFIG_DIR"
+    mkdir -p "$MODULES_DIR"
+    mkdir -p "$LOG_DIR"
+    
+    # Set correct permissions
+    chown -R www-data:www-data "$PANEL_DIR"
+    chown -R www-data:www-data "$LOG_DIR"
+    chmod -R 755 "$PANEL_DIR"
+    chmod -R 755 "$LOG_DIR"
 }
 
-# Setup Database
+# Database setup
 setup_database() {
-    log "Setting up PostgreSQL database..."
+    log "Setting up PostgreSQL..."
     
-    # Generate secure passwords
-    DB_PASS=$(openssl rand -base64 32)
-    ADMIN_PASS=$(openssl rand -base64 16)
+    if ! systemctl is-active --quiet postgresql; then
+        systemctl start postgresql
+        systemctl enable postgresql
+    fi
+
+    # Create database user and database
+    log "Creating database and user..."
+    sudo -u postgres psql -c "DROP DATABASE IF EXISTS $DB_NAME;"
+    sudo -u postgres psql -c "DROP USER IF EXISTS $DB_USER;"
     
-    # Start PostgreSQL
-    systemctl start postgresql
-    systemctl enable postgresql
-    
-    # Create database and user
-    sudo -u postgres psql -c "CREATE USER irssh_admin WITH PASSWORD '$DB_PASS';"
-    sudo -u postgres psql -c "CREATE DATABASE irssh_panel OWNER irssh_admin;"
-    
-    # Save credentials
-    mkdir -p "$CONFIG_DIR"
+    sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';" || error "Failed to create database user"
+    sudo -u postgres psql -c "CREATE DATABASE $DB_NAME;" || error "Failed to create database"
+    sudo -u postgres psql -c "ALTER DATABASE $DB_NAME OWNER TO $DB_USER;" || error "Failed to set database owner"
+    sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;" || error "Failed to grant privileges"
+
+    # Save database configuration
     cat > "$CONFIG_DIR/database.env" << EOL
 DB_HOST=localhost
 DB_PORT=5432
-DB_NAME=irssh_panel
-DB_USER=irssh_admin
+DB_NAME=$DB_NAME
+DB_USER=$DB_USER
 DB_PASS=$DB_PASS
 EOL
 
-    # Save admin credentials
-    cat > "$CONFIG_DIR/admin.env" << EOL
-ADMIN_USER=admin
-ADMIN_PASS=$ADMIN_PASS
-EOL
+    chmod 600 "$CONFIG_DIR/database.env"
 }
 
-# Install and configure modules
+# Python environment setup
+setup_python_env() {
+    log "Setting up Python environment..."
+    
+    # Create virtual environment
+    python3 -m venv "$PANEL_DIR/venv" || error "Failed to create virtual environment"
+    source "$PANEL_DIR/venv/bin/activate"
+
+    # Upgrade pip
+    pip install --upgrade pip
+
+    # Install Python dependencies
+    log "Installing Python dependencies..."
+    pip install \
+        fastapi[all] \
+        uvicorn[standard] \
+        sqlalchemy[asyncio] \
+        psycopg2-binary \
+        python-jose[cryptography] \
+        passlib[bcrypt] \
+        python-multipart \
+        aiofiles \
+        python-telegram-bot \
+        psutil \
+        geoip2 \
+        asyncpg \
+        python-dotenv \
+        pydantic \
+        pydantic-settings \
+        jinja2 \
+        pytest \
+        pytest-asyncio \
+        requests \
+        websockets \
+        cryptography || error "Failed to install Python dependencies"
+}
+
+# Setup modules
 setup_modules() {
     log "Setting up modules..."
     
-    # Create modules directory
-    mkdir -p "$MODULES_DIR"
-    
-    # Define module list
-    MODULES=(
+    MODULE_SCRIPTS=(
         "vpnserver-script.py"
         "port-script.py"
         "ssh-script.py"
@@ -174,42 +195,23 @@ setup_modules() {
         "dropbear-script.sh"
         "webport-script.sh"
     )
-    
-    # Download and configure each module
-    for module in "${MODULES[@]}"; do
-        log "Installing module: $module"
-        curl -o "$MODULES_DIR/$module" "$REPO_URL/$module"
-        chmod +x "$MODULES_DIR/$module"
-        
-        if [[ "$module" == *.sh ]]; then
-            sed -i 's/\r$//' "$MODULES_DIR/$module"
-        fi
-        
-        # Execute module setup if available
-        if [[ -x "$MODULES_DIR/$module" ]]; then
-            "$MODULES_DIR/$module" setup || warn "Module setup failed: $module"
+
+    for script in "${MODULE_SCRIPTS[@]}"; do
+        log "Downloading $script..."
+        curl -o "$MODULES_DIR/$script" "$GITHUB_RAW/$script" || warn "Failed to download $script"
+        chmod +x "$MODULES_DIR/$script"
+        if [[ "$script" == *.sh ]]; then
+            sed -i 's/\r$//' "$MODULES_DIR/$script"
         fi
     done
 }
 
-# Setup Panel Backend
-setup_backend() {
-    log "Setting up panel backend..."
-    
-    # Create Python virtual environment
-    python3 -m venv "$PANEL_DIR/venv"
-    source "$PANEL_DIR/venv/bin/activate"
-    
-    # Install Python dependencies
-    pip install --upgrade pip
-    pip install \
-        fastapi[all] uvicorn[standard] \
-        sqlalchemy[asyncio] psycopg2-binary \
-        python-jose[cryptography] passlib[bcrypt] \
-        python-multipart aiofiles python-telegram-bot \
-        psutil geoip2 asyncpg
-    
-    # Setup supervisor
+# Configure services
+configure_services() {
+    log "Configuring services..."
+
+    # Supervisor configuration
+    log "Setting up supervisor..."
     cat > /etc/supervisor/conf.d/irssh-panel.conf << EOL
 [program:irssh-panel]
 directory=$PANEL_DIR
@@ -219,138 +221,169 @@ autostart=true
 autorestart=true
 stderr_logfile=$LOG_DIR/uvicorn.err.log
 stdout_logfile=$LOG_DIR/uvicorn.out.log
+environment=
+    PATH="$PANEL_DIR/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    PYTHONPATH="$PANEL_DIR"
 EOL
 
-    supervisorctl reread
-    supervisorctl update
-}
-
-# Setup Panel Frontend
-setup_frontend() {
-    log "Setting up panel frontend..."
-    
-    # Configure Nginx
+    # Nginx configuration
+    log "Configuring Nginx..."
     cat > /etc/nginx/sites-available/irssh-panel << EOL
 server {
     listen 80;
     server_name _;
+    
+    access_log /var/log/nginx/irssh-access.log;
+    error_log /var/log/nginx/irssh-error.log;
+
+    client_max_body_size 100M;
 
     location / {
         root $PANEL_DIR/frontend/build;
         try_files \$uri \$uri/ /index.html;
+        add_header Cache-Control "no-store, no-cache, must-revalidate";
     }
 
     location /api {
-        proxy_pass http://localhost:8000;
+        proxy_pass http://127.0.0.1:8000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection 'upgrade';
         proxy_set_header Host \$host;
         proxy_cache_bypass \$http_upgrade;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        
+        # Add timeouts
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
     }
 
     location /ws {
-        proxy_pass http://localhost:8000;
+        proxy_pass http://127.0.0.1:8000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "Upgrade";
+        proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        
+        # Timeouts
+        proxy_connect_timeout 7d;
+        proxy_send_timeout 7d;
+        proxy_read_timeout 7d;
     }
 }
 EOL
 
+    # Enable site and remove default
     ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
     rm -f /etc/nginx/sites-enabled/default
+
+    # Test nginx configuration
+    nginx -t || error "Nginx configuration test failed"
+}
+
+# Configure firewall
+configure_firewall() {
+    log "Configuring firewall..."
+    
+    ufw allow 'Nginx Full'
+    ufw allow 8000  # API port
+    ufw allow 22    # SSH
+    ufw allow PostgreSQL
+    
+    # Enable firewall
+    ufw --force enable
+}
+
+# Create admin user
+create_admin_user() {
+    log "Creating admin user..."
+    
+    # Create initial admin user
+    cat > "$PANEL_DIR/create_admin.py" << EOL
+from app.models import User
+from app.core.database import get_db
+from app.core.security import get_password_hash
+import asyncio
+
+async def create_admin():
+    async with get_db() as db:
+        admin = User(
+            username="admin",
+            hashed_password=get_password_hash("$ADMIN_PASS"),
+            email="admin@localhost",
+            is_admin=True
+        )
+        db.add(admin)
+        await db.commit()
+
+if __name__ == "__main__":
+    asyncio.run(create_admin())
+EOL
+
+    source "$PANEL_DIR/venv/bin/activate"
+    python3 "$PANEL_DIR/create_admin.py" || warn "Failed to create admin user"
+    rm -f "$PANEL_DIR/create_admin.py"
+}
+
+# Start services
+start_services() {
+    log "Starting services..."
+    
+    systemctl daemon-reload
+    systemctl enable --now supervisor
+    systemctl enable --now nginx
+    
+    supervisorctl reread
+    supervisorctl update
+    supervisorctl restart irssh-panel
     
     systemctl restart nginx
 }
 
-# Setup monitoring and maintenance
-setup_monitoring() {
-    log "Setting up monitoring..."
-    
-    # Create monitoring scripts directory
-    mkdir -p "$PANEL_DIR/scripts"
-    
-    # Create monitoring script
-    cat > "$PANEL_DIR/scripts/monitor.sh" << 'EOL'
-#!/bin/bash
-LOG_FILE="/var/log/irssh/monitor.log"
-
-echo "[$(date)] Starting system check..." >> $LOG_FILE
-
-# Check system resources
-CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}')
-MEM_USAGE=$(free -m | awk 'NR==2{printf "%.2f%%", $3*100/$2 }')
-DISK_USAGE=$(df -h / | awk 'NR==2{print $5}')
-
-echo "CPU Usage: $CPU_USAGE%" >> $LOG_FILE
-echo "Memory Usage: $MEM_USAGE" >> $LOG_FILE
-echo "Disk Usage: $DISK_USAGE" >> $LOG_FILE
-
-# Check services
-services=("postgresql" "nginx" "supervisor")
-for service in "${services[@]}"; do
-    if systemctl is-active --quiet $service; then
-        echo "$service: Running" >> $LOG_FILE
-    else
-        echo "$service: Stopped" >> $LOG_FILE
-        systemctl restart $service
-        echo "Attempted to restart $service" >> $LOG_FILE
-    fi
-done
-
-# Check connections
-echo "Active Connections: $(netstat -an | grep ESTABLISHED | wc -l)" >> $LOG_FILE
-
-# Cleanup old logs
-find /var/log/irssh -type f -name "*.log" -mtime +30 -delete
-EOL
-
-    chmod +x "$PANEL_DIR/scripts/monitor.sh"
-    
-    # Setup cron job
-    cat > /etc/cron.d/irssh << EOL
-*/5 * * * * root $PANEL_DIR/scripts/monitor.sh
-0 3 * * * root apt-get update && apt-get upgrade -y
-EOL
-}
-
-# Main installation function
+# Main installation
 main() {
-    # Create log directory
-    mkdir -p "$LOG_DIR"
-    
-    # Start installation log
     log "Starting IRSSH Panel installation..."
     
-    # Run installation steps
-    check_requirements
-    init_server
+    preinstall_checks
+    prepare_system
     setup_database
+    setup_python_env
     setup_modules
-    setup_backend
-    setup_frontend
-    setup_monitoring
-    
-    # Final steps
+    configure_services
+    configure_firewall
+    create_admin_user
+    start_services
+
+    # Installation cleanup
+    log "Cleaning up..."
+    apt-get clean
+    apt-get autoremove -y
+
+    # Installation complete
     log "Installation completed successfully!"
-    
-    # Show installation info
     echo
-    echo -e "${BOLD}IRSSH Panel Installation Complete${NC}"
-    echo -e "${BLUE}----------------------------------------${NC}"
-    echo "Panel URL: http://$(curl -s ipv4.icanhazip.com)"
-    echo "API URL: http://$(curl -s ipv4.icanhazip.com)/api"
+    echo "IRSSH Panel has been installed with the following credentials:"
     echo
-    echo -e "${YELLOW}Admin Credentials:${NC}"
-    echo "Username: admin"
-    echo "Password: $(cat $CONFIG_DIR/admin.env | grep ADMIN_PASS | cut -d= -f2)"
+    echo "Admin Username: admin"
+    echo "Admin Password: $ADMIN_PASS"
     echo
-    echo -e "${GREEN}Installation logs are available at: $LOG_DIR/install.log${NC}"
+    echo "Database Configuration:"
+    echo "Database Name: $DB_NAME"
+    echo "Database User: $DB_USER"
+    echo "Database Password: $DB_PASS"
     echo
-    echo -e "${RED}IMPORTANT: Please change the admin password after first login!${NC}"
+    echo "Panel URL: http://your-server-ip"
+    echo "API URL: http://your-server-ip/api"
+    echo "Documentation: http://your-server-ip/api/docs"
+    echo
+    echo "For security reasons, please change the admin password after first login."
+    echo
+    echo "Logs can be found in: $LOG_DIR"
 }
 
-# Run main installation
-main "$@"
+# Run installation
+main
