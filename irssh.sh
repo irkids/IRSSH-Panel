@@ -13,6 +13,7 @@ ADMIN_PASS=$(openssl rand -base64 16)
 
 # Colors
 GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
@@ -21,9 +22,25 @@ log() {
     echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"
 }
 
+warn() {
+    echo -e "${YELLOW}[$(date +'%Y-%m-%d %H:%M:%S')] WARNING:${NC} $1"
+}
+
 error() {
     echo -e "${RED}[$(date +'%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1"
     exit 1
+}
+
+# Service check function
+check_service() {
+    local service=$1
+    if ! systemctl is-active --quiet $service; then
+        warn "$service is not running. Attempting to start..."
+        systemctl start $service
+        if ! systemctl is-active --quiet $service; then
+            error "Failed to start $service"
+        fi
+    fi
 }
 
 # Check root
@@ -31,7 +48,17 @@ if [[ $EUID -ne 0 ]]; then
     error "This script must be run as root"
 fi
 
-# Create directories
+# Clean up any existing installation
+log "Cleaning up any existing installation..."
+systemctl stop irssh-panel >/dev/null 2>&1
+supervisorctl stop irssh-panel >/dev/null 2>&1
+rm -rf "$PANEL_DIR"
+rm -rf "$LOG_DIR"
+rm -f /etc/supervisor/conf.d/irssh-panel.conf
+rm -f /etc/nginx/sites-enabled/irssh-panel
+rm -f /etc/nginx/sites-available/irssh-panel
+
+# Create directories with proper permissions
 log "Creating directories..."
 mkdir -p "$PANEL_DIR"
 mkdir -p "$CONFIG_DIR"
@@ -42,9 +69,8 @@ mkdir -p "$APP_DIR/core"
 mkdir -p "$APP_DIR/models"
 mkdir -p "$APP_DIR/schemas"
 mkdir -p "$APP_DIR/utils"
-
-# Create FastAPI app structure
-log "Creating application structure..."
+chown -R root:root "$PANEL_DIR"
+chmod -R 755 "$PANEL_DIR"
 
 # Create __init__.py files
 touch "$APP_DIR/__init__.py"
@@ -56,33 +82,27 @@ touch "$APP_DIR/models/__init__.py"
 touch "$APP_DIR/schemas/__init__.py"
 touch "$APP_DIR/utils/__init__.py"
 
-# Create main.py
-cat > "$APP_DIR/main.py" << 'EOL'
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from app.core.config import settings
-from app.api.v1.api import api_router
-from app.core.database import init_db
+# Create config.py with updated settings
+cat > "$APP_DIR/core/config.py" << EOL
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import List
 
-app = FastAPI(
-    title=settings.PROJECT_NAME,
-    version=settings.VERSION,
-    description=settings.DESCRIPTION
-)
+class Settings(BaseSettings):
+    PROJECT_NAME: str = "IRSSH Panel"
+    VERSION: str = "1.0.0"
+    DESCRIPTION: str = "Advanced VPN Server Management Panel"
+    
+    DATABASE_URL: str = "postgresql+asyncpg://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME"
+    
+    SECRET_KEY: str = "$(openssl rand -hex 32)"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+    
+    MODULES_DIR: str = "$MODULES_DIR"
+    LOG_DIR: str = "$LOG_DIR"
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    model_config = SettingsConfigDict(case_sensitive=True)
 
-app.include_router(api_router, prefix="/api/v1")
-
-@app.on_event("startup")
-async def startup_event():
-    await init_db()
+settings = Settings()
 EOL
 
 # Create database.py
@@ -90,11 +110,23 @@ cat > "$APP_DIR/core/database.py" << 'EOL'
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-
 from app.core.config import settings
 
-engine = create_async_engine(settings.DATABASE_URL, echo=True)
-async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+engine = create_async_engine(
+    settings.DATABASE_URL,
+    echo=True,
+    pool_size=5,
+    max_overflow=10,
+    pool_timeout=30
+)
+
+async_session = sessionmaker(
+    engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+    autocommit=False,
+    autoflush=False
+)
 
 Base = declarative_base()
 
@@ -112,33 +144,10 @@ async def get_db():
             raise
 EOL
 
-# Create config.py
-cat > "$APP_DIR/core/config.py" << EOL
-from pydantic import BaseSettings
-from typing import List
-
-class Settings(BaseSettings):
-    PROJECT_NAME: str = "IRSSH Panel"
-    VERSION: str = "1.0.0"
-    DESCRIPTION: str = "Advanced VPN Server Management Panel"
-    
-    DATABASE_URL: str = "postgresql+asyncpg://$DB_USER:$DB_PASS@localhost:5432/$DB_NAME"
-    
-    SECRET_KEY: str = "$(openssl rand -hex 32)"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
-    
-    MODULES_DIR: str = "$MODULES_DIR"
-    LOG_DIR: str = "$LOG_DIR"
-
-    class Config:
-        case_sensitive = True
-
-settings = Settings()
-EOL
-
 # Create models/user.py
 cat > "$APP_DIR/models/user.py" << 'EOL'
-from sqlalchemy import Boolean, Column, Integer, String
+from sqlalchemy import Boolean, Column, Integer, String, DateTime
+from datetime import datetime
 from app.core.database import Base
 
 class User(Base):
@@ -150,26 +159,43 @@ class User(Base):
     hashed_password = Column(String)
     is_active = Column(Boolean, default=True)
     is_admin = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_login = Column(DateTime, nullable=True)
 EOL
 
-# Create schemas/user.py
-cat > "$APP_DIR/schemas/user.py" << 'EOL'
-from pydantic import BaseModel
+# Create main.py
+cat > "$APP_DIR/main.py" << 'EOL'
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+from app.core.config import settings
+from app.core.database import init_db
 
-class UserBase(BaseModel):
-    username: str
-    email: str | None = None
-    is_active: bool = True
-    is_admin: bool = False
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    await init_db()
+    yield
+    # Shutdown
 
-class UserCreate(UserBase):
-    password: str
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    version=settings.VERSION,
+    description=settings.DESCRIPTION,
+    lifespan=lifespan
+)
 
-class User(UserBase):
-    id: int
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    class Config:
-        orm_mode = True
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
 EOL
 
 # Install system dependencies
@@ -182,19 +208,23 @@ apt-get install -y \
     postgresql \
     postgresql-contrib \
     nginx \
-    supervisor
+    supervisor \
+    curl \
+    git \
+    tar \
+    unzip
 
-# Setup PostgreSQL
+# Check PostgreSQL
 log "Setting up PostgreSQL..."
-systemctl start postgresql
-systemctl enable postgresql
+check_service postgresql
 
 # Create database and user
-sudo -u postgres psql <<EOF
-CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';
-CREATE DATABASE $DB_NAME OWNER $DB_USER;
-GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;
-EOF
+log "Creating database..."
+sudo -u postgres psql -c "DROP DATABASE IF EXISTS $DB_NAME;"
+sudo -u postgres psql -c "DROP USER IF EXISTS $DB_USER;"
+sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
+sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
+sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;"
 
 # Setup Python environment
 log "Setting up Python environment..."
@@ -203,7 +233,7 @@ source "$PANEL_DIR/venv/bin/activate"
 
 # Install Python dependencies
 log "Installing Python dependencies..."
-pip install --upgrade pip
+pip install --upgrade pip wheel setuptools
 pip install \
     fastapi[all] \
     uvicorn[standard] \
@@ -213,9 +243,14 @@ pip install \
     python-jose[cryptography] \
     passlib[bcrypt] \
     python-multipart \
-    aiofiles
+    aiofiles \
+    pydantic-settings \
+    python-dotenv \
+    tenacity \
+    rich
 
 # Create admin user script
+log "Creating admin user script..."
 cat > "$PANEL_DIR/create_admin.py" << EOL
 from app.models.user import User
 from app.core.database import async_session
@@ -244,13 +279,16 @@ log "Configuring supervisor..."
 cat > /etc/supervisor/conf.d/irssh-panel.conf << EOL
 [program:irssh-panel]
 directory=$PANEL_DIR
-command=$PANEL_DIR/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+command=$PANEL_DIR/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
 user=root
 autostart=true
 autorestart=true
 stderr_logfile=$LOG_DIR/uvicorn.err.log
 stdout_logfile=$LOG_DIR/uvicorn.out.log
 environment=PYTHONPATH="$PANEL_DIR"
+
+[supervisord]
+nodaemon=false
 EOL
 
 # Configure Nginx
@@ -260,6 +298,9 @@ server {
     listen 80;
     server_name _;
 
+    access_log /var/log/nginx/irssh-access.log;
+    error_log /var/log/nginx/irssh-error.log;
+
     location / {
         proxy_pass http://localhost:8000;
         proxy_http_version 1.1;
@@ -267,6 +308,14 @@ server {
         proxy_set_header Connection 'upgrade';
         proxy_set_header Host $host;
         proxy_cache_bypass $http_upgrade;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    location /static {
+        alias /opt/irssh-panel/static;
+        expires 30d;
+        add_header Cache-Control "public, no-transform";
     }
 }
 EOL
@@ -279,13 +328,30 @@ log "Creating admin user..."
 source "$PANEL_DIR/venv/bin/activate"
 python3 "$PANEL_DIR/create_admin.py"
 
-# Start services
+# Start and check services
 log "Starting services..."
 systemctl daemon-reload
-systemctl enable --now nginx
 supervisorctl reread
 supervisorctl update
-supervisorctl restart irssh-panel
+systemctl restart nginx
+
+# Check services
+check_service nginx
+if ! supervisorctl status irssh-panel | grep -q "RUNNING"; then
+    error "Failed to start irssh-panel service"
+fi
+
+# Test API
+log "Testing API health..."
+for i in {1..5}; do
+    if curl -s http://localhost:8000/health | grep -q "healthy"; then
+        break
+    fi
+    if [ $i -eq 5 ]; then
+        error "API health check failed"
+    fi
+    sleep 1
+done
 
 # Installation cleanup
 log "Cleaning up..."
@@ -304,8 +370,12 @@ echo "Database Name: $DB_NAME"
 echo "Database User: $DB_USER"
 echo "Database Password: $DB_PASS"
 echo
-echo "Panel URL: http://your-server-ip"
-echo "API URL: http://your-server-ip/api/v1"
+echo "Panel URL: http://$(curl -s ifconfig.me)"
+echo "API URL: http://$(curl -s ifconfig.me)/api"
 echo
 echo "Please change the admin password after first login."
-EOL
+echo
+echo "Logs can be found in:"
+echo "- Application: $LOG_DIR"
+echo "- Nginx: /var/log/nginx/irssh-*.log"
+echo "- Supervisor: /var/log/supervisor/irssh-panel*.log"
