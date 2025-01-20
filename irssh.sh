@@ -348,71 +348,30 @@ start_services() {
 main() {
     log "Starting IRSSH Panel installation..."
     
-    setup_backend() {
+    # Add this function to the installation script
+setup_backend() {
     log "Setting up backend..."
     
     # Create app directory structure
-    mkdir -p "$PANEL_DIR/app"
     mkdir -p "$PANEL_DIR/app/api/v1/endpoints"
     mkdir -p "$PANEL_DIR/app/core"
     mkdir -p "$PANEL_DIR/app/models"
     mkdir -p "$PANEL_DIR/app/schemas"
     mkdir -p "$PANEL_DIR/app/utils"
 
-    # Create __init__.py files
-    touch "$PANEL_DIR/app/__init__.py"
-    touch "$PANEL_DIR/app/api/__init__.py"
-    touch "$PANEL_DIR/app/api/v1/__init__.py"
-    touch "$PANEL_DIR/app/api/v1/endpoints/__init__.py"
-    touch "$PANEL_DIR/app/core/__init__.py"
-    touch "$PANEL_DIR/app/models/__init__.py"
-    touch "$PANEL_DIR/app/schemas/__init__.py"
-    touch "$PANEL_DIR/app/utils/__init__.py"
-
-    # Download core backend files from repository
-    BACKEND_FILES=(
-        "app/main.py"
-        "app/core/config.py"
-        "app/core/database.py"
-        "app/core/security.py"
-        "app/core/logger.py"
-        "app/models/models.py"
-        "app/api/deps.py"
-        "app/api/router.py"
-        "app/api/v1/endpoints/auth.py"
-        "app/api/v1/endpoints/users.py"
-        "app/api/v1/endpoints/protocols.py"
-        "app/api/v1/endpoints/settings.py"
-        "app/api/v1/endpoints/monitoring.py"
-    )
-
-    for file in "${BACKEND_FILES[@]}"; do
-        log "Downloading $file..."
-        dir=$(dirname "$PANEL_DIR/$file")
-        mkdir -p "$dir"
-        curl -o "$PANEL_DIR/$file" "$GITHUB_RAW/backend/$file" || warn "Failed to download $file"
-    done
-
-    # Set correct permissions
-    chown -R www-data:www-data "$PANEL_DIR/app"
-    chmod -R 755 "$PANEL_DIR/app"
-
-    # Create main.py if download failed
-    if [ ! -f "$PANEL_DIR/app/main.py" ]; then
-        log "Creating fallback main.py..."
-        cat > "$PANEL_DIR/app/main.py" << 'EOL'
+    # Create main.py
+    cat > "$PANEL_DIR/app/main.py" << 'EOL'
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.core.config import settings
-from app.core.database import init_db
-from app.api.router import api_router
+import uvicorn
 
 app = FastAPI(
-    title=settings.PROJECT_NAME,
-    version=settings.VERSION,
-    description=settings.DESCRIPTION
+    title="IRSSH Panel",
+    description="IRSSH Panel API",
+    version="1.0.0"
 )
 
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -421,74 +380,127 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.on_event("startup")
-async def startup_event():
-    await init_db()
-
-app.include_router(api_router, prefix="/api")
-
 @app.get("/")
 async def root():
     return {"message": "IRSSH Panel API"}
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
 EOL
+
+    # Create __init__.py files
+    touch "$PANEL_DIR/app/__init__.py"
+    touch "$PANEL_DIR/app/api/__init__.py"
+    touch "$PANEL_DIR/app/api/v1/__init__.py"
+    touch "$PANEL_DIR/app/core/__init__.py"
+    touch "$PANEL_DIR/app/models/__init__.py"
+    touch "$PANEL_DIR/app/schemas/__init__.py"
+    touch "$PANEL_DIR/app/utils/__init__.py"
+
+    # Set permissions
+    chown -R root:root "$PANEL_DIR"
+    chmod -R 755 "$PANEL_DIR"
+    
+    # Create systemd service
+    cat > /etc/systemd/system/irssh-panel.service << EOL
+[Unit]
+Description=IRSSH Panel
+After=network.target
+
+[Service]
+User=root
+Group=root
+WorkingDirectory=$PANEL_DIR
+Environment="PATH=$PANEL_DIR/venv/bin"
+Environment="PYTHONPATH=$PANEL_DIR"
+ExecStart=$PANEL_DIR/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOL
+
+    # Enable and start service
+    systemctl daemon-reload
+    systemctl enable irssh-panel
+    systemctl start irssh-panel
+}
+EOL
+
+# Add this function for database setup
+setup_database() {
+    log "Setting up PostgreSQL..."
+
+    if ! systemctl is-active --quiet postgresql; then
+        systemctl start postgresql
+        systemctl enable postgresql
     fi
 
-    # Create minimal models.py if download failed
-    if [ ! -f "$PANEL_DIR/app/models/models.py" ]; then
-        log "Creating fallback models.py..."
-        cat > "$PANEL_DIR/app/models/models.py" << 'EOL'
-from sqlalchemy import Column, Integer, String, Boolean, DateTime
-from app.core.database import Base
-from datetime import datetime
+    # Create database user and database with proper permissions
+    cd /tmp  # Change to tmp directory to avoid permission issues
+    
+    sudo -u postgres bash -c "psql -c \"DROP DATABASE IF EXISTS $DB_NAME;\"" || warn "Failed to drop database"
+    sudo -u postgres bash -c "psql -c \"DROP USER IF EXISTS $DB_USER;\"" || warn "Failed to drop user"
+    
+    sudo -u postgres bash -c "psql -c \"CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';\"" || error "Failed to create database user"
+    sudo -u postgres bash -c "psql -c \"CREATE DATABASE $DB_NAME OWNER $DB_USER;\"" || error "Failed to create database"
+    sudo -u postgres bash -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;\"" || error "Failed to grant privileges"
 
-class User(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
-    hashed_password = Column(String)
-    email = Column(String, unique=True, index=True, nullable=True)
-    is_admin = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    # Save database configuration
+    cat > "$CONFIG_DIR/database.env" << EOL
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=$DB_NAME
+DB_USER=$DB_USER
+DB_PASS=$DB_PASS
 EOL
-    fi
 
-    # Create config.py if download failed
-    if [ ! -f "$PANEL_DIR/app/core/config.py" ]; then
-        log "Creating fallback config.py..."
-        cat > "$PANEL_DIR/app/core/config.py" << 'EOL'
-import os
-from pydantic_settings import BaseSettings
+    chmod 600 "$CONFIG_DIR/database.env"
+}
 
-class Settings(BaseSettings):
-    PROJECT_NAME: str = "IRSSH Panel"
-    VERSION: str = "1.0.0"
-    DESCRIPTION: str = "VPN Server Management Panel"
+# Modify supervisor configuration
+configure_services() {
+    log "Configuring services..."
 
-    MODULES_DIR: str = "/opt/irssh-panel/modules"
-    LOG_DIR: str = "/var/log/irssh"
+    # Remove supervisor config and use systemd instead
+    systemctl stop supervisor
+    systemctl disable supervisor
+    rm -f /etc/supervisor/conf.d/irssh-panel.conf
 
-    # Load database config from env file
-    with open('/opt/irssh-panel/config/database.env', 'r') as f:
-        for line in f:
-            if '=' in line:
-                key, value = line.strip().split('=', 1)
-                os.environ[key] = value
+    # Nginx configuration with proper permissions
+    cat > /etc/nginx/sites-available/irssh-panel << EOL
+server {
+    listen 80;
+    server_name _;
+    
+    access_log /var/log/nginx/irssh-access.log;
+    error_log /var/log/nginx/irssh-error.log debug;  # Added debug level
 
-    DB_HOST: str = os.getenv("DB_HOST", "localhost")
-    DB_PORT: int = int(os.getenv("DB_PORT", "5432"))
-    DB_USER: str = os.getenv("DB_USER", "irssh_admin")
-    DB_PASS: str = os.getenv("DB_PASS", "")
-    DB_NAME: str = os.getenv("DB_NAME", "irssh_panel")
+    client_max_body_size 100M;
 
-    @property
-    def DATABASE_URI(self) -> str:
-        return f"postgresql://{self.DB_USER}:{self.DB_PASS}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
-
-settings = Settings()
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_cache_bypass \$http_upgrade;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
 EOL
-    fi
 
-    log "Backend setup completed"
+    # Enable site and remove default
+    ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
+    rm -f /etc/nginx/sites-enabled/default
+
+    # Test nginx configuration
+    nginx -t || error "Nginx configuration test failed"
+    
+    # Restart services
+    systemctl restart nginx
 }
     preinstall_checks
     prepare_system
