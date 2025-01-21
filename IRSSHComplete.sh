@@ -179,11 +179,10 @@ setup_python_env() {
         python-jose[cryptography] \
         bcrypt \
         python-multipart \
-        pydantic \      # Added
-        requests \     # Added
-        aiohttp \        # Added
-        psutil \          # Added
-        python-multipart || error "Failed to install Python packages"
+        pydantic \    
+        requests \    
+        aiohttp \       
+        psutil \      
 }
 
 # Configure PostgreSQL
