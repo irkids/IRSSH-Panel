@@ -118,10 +118,13 @@ check_requirements() {
     [[ $disk_free -lt 2048 ]] && error "Minimum 2GB free disk space required"
     
     # Check required commands
-    local requirements=(curl wget git python3 pip3 npm node nginx)
+    local requirements=(curl wget git python3 pip3 node nginx)
     for cmd in "${requirements[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
             error "$cmd is required but not installed"
+        fi
+        if ! command -v node &> /dev/null; then
+    error "Node.js is not installed. Please install it using nvm first."
         fi
     done
 }
@@ -146,8 +149,7 @@ install_system_packages() {
         supervisor \
         curl \
         git \
-        npm \
-        nodejs \
+        nvm \
         certbot \
         python3-certbot-nginx \
         ufw \
