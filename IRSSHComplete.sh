@@ -178,6 +178,7 @@ setup_python_env() {
         asyncpg \
         python-jose[cryptography] \
         bcrypt \
+        python-multipart \
         pydantic \      # Added
         requests \     # Added
         aiohttp \        # Added
