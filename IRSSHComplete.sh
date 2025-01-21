@@ -35,6 +35,10 @@ ADMIN_TOKEN=$(generate_secure_key)
 # Logging functions
 setup_logging() {
     mkdir -p "$LOG_DIR"
+ log_partition=$(df -P "$LOG_DIR" | awk 'NR==2 {print $4}')
+    if [ "$log_partition" -lt 1048576 ]; then  # 1GB in KB
+        warn "Less than 1GB free space available for logs"
+    fi
     LOG_FILE="$LOG_DIR/install.log"
     exec 1> >(tee -a "$LOG_FILE")
     exec 2> >(tee -a "$LOG_FILE" >&2)
@@ -94,6 +98,13 @@ restore_backup() {
 check_requirements() {
     log "Checking system requirements..."
     
+    # Check if pip3 is installed, if not install it
+    if ! command -v pip3 &>/dev/null; then
+        log "Installing pip3..."
+        apt-get update
+        apt-get install -y python3-pip
+    fi
+    
     # Check OS
     if [[ ! -f /etc/os-release ]]; then
         error "Unsupported operating system"
@@ -117,6 +128,11 @@ check_requirements() {
 
 # Install system packages
 install_system_packages() {
+    # Add these lines at beginning
+    apt-get update
+    apt-get install -y software-properties-common
+    curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+
     log "Installing system packages..."
     apt-get update || error "Failed to update package lists"
     
@@ -131,7 +147,7 @@ install_system_packages() {
         curl \
         git \
         npm \
-        node.js \
+        nodejs \
         certbot \
         python3-certbot-nginx \
         ufw \
@@ -161,6 +177,10 @@ setup_python_env() {
         asyncpg \
         python-jose[cryptography] \
         bcrypt \
+        pydantic \      # Added
+        requests \     # Added
+        aiohttp \        # Added
+        psutil \          # Added
         python-multipart || error "Failed to install Python packages"
 }
 
@@ -429,6 +449,30 @@ main() {
     systemctl restart nginx
     supervisorctl restart irssh-panel
     
+ # Add before final echo statements
+    test_service() {
+    log "Testing service..."
+    sleep 5  # Wait for services to start
+    
+    # Test API
+    response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:$DEFAULT_API_PORT/api/health)
+    if [ "$response" = "200" ]; then
+        log "API is responding correctly"
+    else
+        warn "API is not responding correctly (HTTP $response)"
+    fi
+    
+    # Test Nginx
+    response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost)
+    if [ "$response" = "200" ]; then
+        log "Web server is responding correctly"
+    else
+        warn "Web server is not responding correctly (HTTP $response)"
+    fi
+}
+
+    test_service
+
     # Installation complete
     log "Installation completed successfully!"
     echo
