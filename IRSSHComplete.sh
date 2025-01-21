@@ -122,6 +122,7 @@ check_requirements() {
     for cmd in "${requirements[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
             error "$cmd is required but not installed"
+            
     done
 }
 
