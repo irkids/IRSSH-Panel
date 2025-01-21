@@ -149,7 +149,6 @@ install_system_packages() {
         supervisor \
         curl \
         git \
-        nvm \
         certbot \
         python3-certbot-nginx \
         ufw \
