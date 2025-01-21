@@ -440,6 +440,7 @@ main() {
     install_system_packages
     setup_python_env
     setup_database
+    update_environment_vars
     setup_nginx
     setup_supervisor
     setup_firewall
@@ -512,3 +513,158 @@ main() {
 
 # Start installation
 main "$@"    
+
+# Create backend structure
+setup_backend_structure() {
+    log "Setting up backend structure..."
+    
+    # Create necessary directories
+    mkdir -p "$BACKEND_DIR/app/"{core,api,models,schemas,utils}
+    mkdir -p "$BACKEND_DIR/app/api/v1/endpoints"
+
+    # Create __init__.py files
+    touch "$BACKEND_DIR/app/__init__.py"
+    touch "$BACKEND_DIR/app/core/__init__.py"
+    touch "$BACKEND_DIR/app/api/__init__.py"
+    touch "$BACKEND_DIR/app/api/v1/__init__.py"
+    touch "$BACKEND_DIR/app/models/__init__.py"
+    touch "$BACKEND_DIR/app/schemas/__init__.py"
+    touch "$BACKEND_DIR/app/utils/__init__.py"
+
+    # Create main.py
+    cat > "$BACKEND_DIR/app/main.py" << 'EOL'
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from app.api.v1 import api_router
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('/var/log/irssh/app.log'),
+        logging.StreamHandler()
+    ]
+)
+
+app = FastAPI(title="IRSSH Panel")
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include routers
+app.include_router(api_router.router, prefix="/api/v1")
+
+@app.get("/api/health")
+async def health_check():
+    return {"status": "healthy"}
+EOL
+
+    # Create database.py
+    cat > "$BACKEND_DIR/app/core/database.py" << 'EOL'
+from sqlalchemy import create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+import os
+
+SQLALCHEMY_DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://irssh_admin:password@localhost/irssh"
+)
+
+engine = create_engine(SQLALCHEMY_DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+EOL
+
+    # Create api_router.py
+    cat > "$BACKEND_DIR/app/api/v1/api_router.py" << 'EOL'
+from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.get("/")
+async def root():
+    return {"message": "IRSSH Panel API v1"}
+EOL
+
+    # Create models
+    cat > "$BACKEND_DIR/app/models/user.py" << 'EOL'
+from sqlalchemy import Boolean, Column, Integer, String, DateTime
+from sqlalchemy.sql import func
+from app.core.database import Base
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True)
+    email = Column(String, unique=True, index=True)
+    hashed_password = Column(String)
+    is_active = Column(Boolean, default=True)
+    is_admin = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+EOL
+
+    # Create security utils
+    cat > "$BACKEND_DIR/app/core/security.py" << 'EOL'
+from datetime import datetime, timedelta
+from typing import Optional
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+import os
+
+# Security configuration
+SECRET_KEY = os.getenv("JWT_SECRET", "your-secret-key")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password: str) -> str:
+    return pwd_context.hash(password)
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+EOL
+
+    log "Backend structure created successfully"
+}
+
+# Add this line in the main() function before setup_supervisor
+setup_backend_structure
+
+# Add environment variables for the database
+update_environment_vars() {
+    log "Updating environment variables..."
+    
+    # Create environment file
+    cat > "$CONFIG_DIR/.env" << EOL
+DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@localhost/${DB_NAME}
+JWT_SECRET=${JWT_SECRET}
+ADMIN_TOKEN=${ADMIN_TOKEN}
+EOL
+
+    chmod 600 "$CONFIG_DIR/.env"
+}
