@@ -123,7 +123,7 @@ check_requirements() {
         if ! command -v "$cmd" &>/dev/null; then
             error "$cmd is required but not installed"
             
-    done
+ done
 }
 
 # Install system packages
