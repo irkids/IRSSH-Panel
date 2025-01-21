@@ -122,8 +122,11 @@ check_requirements() {
     for cmd in "${requirements[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
             error "$cmd is required but not installed"
-            
- done
+        fi
+        if ! command -v node &> /dev/null; then
+    error "Node.js is not installed. Please install it using nvm first."
+        fi
+    done
 }
 
 # Install system packages
