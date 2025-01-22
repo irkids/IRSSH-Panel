@@ -208,11 +208,16 @@ class Settings(BaseSettings):
 settings = Settings()
 EOL
 
-    # Copy existing auth.py
-    cp "$PANEL_DIR/auth.py" "$BACKEND_DIR/app/api/v1/endpoints/auth.py"
+   # Create auth.py
+cat > "$BACKEND_DIR/app/api/v1/endpoints/auth.py" << 'EOL'
+# The complete auth.py code that you provided earlier.
+EOL
+
     
-    # Copy existing router.py
-    cp "$PANEL_DIR/router.py" "$BACKEND_DIR/app/api/router.py"
+ # Create router.py
+cat > "$BACKEND_DIR/app/api/router.py" << 'EOL'
+# The complete router.py code that you provided earlier.
+EOL
     
     # Create main.py
     cat > "$BACKEND_DIR/app/main.py" << 'EOL'
@@ -257,13 +262,15 @@ setup_frontend() {
     cd "$PANEL_DIR"
     
     npx create-react-app frontend --template typescript
-    cd "$FRONTEND_DIR"
+cd "$FRONTEND_DIR"
     
-    npm install \
+    # Install dependencies with legacy peer deps
+    npm install --legacy-peer-deps
+    npm install --legacy-peer-deps \
         react-router-dom \
         axios \
         @headlessui/react \
-        @heroicons/react --legacy-peer-deps
+        @heroicons/react
 
     # Create App.js with login form
     cat > src/App.js << 'EOL'
