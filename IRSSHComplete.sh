@@ -9,6 +9,11 @@ RED='\033[0;31m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
+# Define logging function at the start
+log() {
+    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"
+}
+
 # Configuration directories
 PANEL_DIR="/opt/irssh-panel"
 FRONTEND_DIR="$PANEL_DIR/frontend"
@@ -167,6 +172,17 @@ setup_backend() {
     
     mkdir -p "$BACKEND_DIR/app"/{core,api,models,schemas,utils}
     mkdir -p "$BACKEND_DIR/app/api/v1/endpoints"
+    
+    # Request Admin User Information
+    read -p "Enter admin username (default: admin): " ADMIN_USER
+    ADMIN_USER=${ADMIN_USER:-admin}
+
+    read -s -p "Enter admin password (press Enter for random): " ADMIN_PASS
+    echo
+    if [[ -z "$ADMIN_PASS" ]]; then
+        ADMIN_PASS=$(openssl rand -base64 12)
+        echo "Generated admin password: $ADMIN_PASS"
+    fi
     
     # Create config.py
     cat > "$BACKEND_DIR/app/core/config.py" << EOL
