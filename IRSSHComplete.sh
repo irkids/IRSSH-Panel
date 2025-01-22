@@ -153,16 +153,33 @@ setup_database() {
     local DB_USER="irssh_admin"
     local DB_PASS=$(generate_secure_key)
     
-    sudo -u postgres psql -c "DO \$\$ 
-    BEGIN 
+    # Create user
+    sudo -u postgres psql << EOSQL
+    DO \$\$
+    BEGIN
         IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$DB_USER') THEN
             CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';
+        ELSE
+            ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';
         END IF;
     END
-    \$\$;"
-    
-    sudo -u postgres psql -c "CREATE DATABASE $DB_NAME;"
-    sudo -u postgres psql -c "ALTER DATABASE $DB_NAME OWNER TO $DB_USER;"
+    \$\$;
+
+    DROP DATABASE IF EXISTS $DB_NAME;
+    CREATE DATABASE $DB_NAME;
+    ALTER DATABASE $DB_NAME OWNER TO $DB_USER;
+EOSQL
+
+    # Save configuration
+    mkdir -p "$CONFIG_DIR"
+    cat > "$CONFIG_DIR/database.env" << EOL
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=$DB_NAME
+DB_USER=$DB_USER
+DB_PASS=$DB_PASS
+EOL
+    chmod 600 "$CONFIG_DIR/database.env"
 }
 
 # Setup backend structure
