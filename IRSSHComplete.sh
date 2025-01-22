@@ -31,24 +31,20 @@ JWT_SECRET=$(generate_secure_key)
 
 # Logging functions
 setup_logging() {
-    mkdir -p "$LOG_DIR"
+    # Create log directory
+    mkdir -p "$LOG_DIR" || {
+        echo "Failed to create log directory"
+        exit 1
+    }
+    
+    # Setup log file
     LOG_FILE="$LOG_DIR/install.log"
+    touch "$LOG_FILE"
+    chmod 644 "$LOG_FILE"
+    
+    # Setup logging
     exec 1> >(tee -a "$LOG_FILE")
     exec 2> >(tee -a "$LOG_FILE" >&2)
-    chmod 644 "$LOG_FILE"
-}
-
-log() {
-    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"
-}
-
-error() {
-    echo -e "${RED}[$(date +'%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1" >&2
-    exit 1
-}
-
-info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
 }
 
 # Check requirements
@@ -68,9 +64,12 @@ install_system_packages() {
     log "Installing system packages..."
     apt-get update
     
+    # Install pip3 first
+    apt-get install -y python3-pip || error "Failed to install pip3"
+    
+    # Install other packages
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         python3 \
-        python3-pip \
         python3-venv \
         postgresql \
         postgresql-contrib \
@@ -79,7 +78,7 @@ install_system_packages() {
         curl \
         git \
         certbot \
-        python3-certbot-nginx
+        python3-certbot-nginx || error "Failed to install system packages"
 }
 
 # Setup Node.js using nvm
