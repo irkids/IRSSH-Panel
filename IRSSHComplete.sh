@@ -307,6 +307,10 @@ EOL
 setup_frontend() {
     log "Setting up frontend..."
     
+    # Set correct permissions
+    chown -R www-data:www-data "$FRONTEND_DIR/build"
+    chmod -R 755 "$FRONTEND_DIR/build"
+
     # Create React app
     npx create-react-app "$FRONTEND_DIR" --template typescript
     cd "$FRONTEND_DIR"
@@ -552,9 +556,12 @@ create_admin_user() {
     read -p "Enter admin username (default: admin): " ADMIN_USER
     ADMIN_USER=${ADMIN_USER:-admin}
     
-    read -s -p "Enter admin password (default: admin123): " ADMIN_PASS
+    read -s -p "Enter admin password (press Enter for random): " ADMIN_PASS
     echo
-    ADMIN_PASS=${ADMIN_PASS:-admin123}
+    if [[ -z "$ADMIN_PASS" ]]; then
+        ADMIN_PASS=$(openssl rand -base64 12)
+        echo "Generated admin password: $ADMIN_PASS"
+    fi
     
     source "$VENV_DIR/bin/activate"
     python3 -c "
