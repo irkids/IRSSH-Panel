@@ -184,6 +184,14 @@ setup_backend() {
         echo "Generated admin password: $ADMIN_PASS"
     fi
     
+# Save admin user information
+    mkdir -p "$CONFIG_DIR"
+    cat > "$CONFIG_DIR/admin.env" << EOL
+ADMIN_USER=$ADMIN_USER
+ADMIN_PASS=$ADMIN_PASS
+EOL
+    chmod 600 "$CONFIG_DIR/admin.env"
+
     # Create config.py
     cat > "$BACKEND_DIR/app/core/config.py" << EOL
 from pydantic_settings import BaseSettings
@@ -504,10 +512,14 @@ main() {
     systemctl restart nginx
     supervisorctl restart irssh-panel
     
-    # Print installation details
+       # Print installation details
     log "Installation completed successfully!"
     echo
     echo "IRSSH Panel has been installed!"
+    echo
+    echo "Admin credentials:"
+    echo "Username: $(grep ADMIN_USER $CONFIG_DIR/admin.env | cut -d= -f2)"
+    echo "Password: $(grep ADMIN_PASS $CONFIG_DIR/admin.env | cut -d= -f2)"
     echo
     echo "Panel URL: http://YOUR-IP"
     echo "API URL: http://YOUR-IP/api"
