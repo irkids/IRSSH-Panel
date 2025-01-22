@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# IRSSH Panel Installation Script v2.4
-# Updated with login system and admin user creation
+# IRSSH Panel Installation Script v2.5
+# Updated with fixed authentication system
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -59,7 +59,6 @@ warn() {
 # Check system requirements and install packages
 check_requirements() {
     log "Checking system requirements..."
-    
     # Check minimum system resources
     local mem_total=$(free -m | awk '/^Mem:/{print $2}')
     local disk_free=$(df -m / | awk 'NR==2 {print $4}')
@@ -100,21 +99,15 @@ setup_node() {
     log "Setting up Node.js with nvm..."
     
     export NVM_DIR="$HOME/.nvm"
-    
-    # Install nvm if not already installed
-    if [ ! -d "$NVM_DIR" ]; then
-        curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
-    fi
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
     
     # Load nvm
     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-    [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
     
     # Install Node.js
     nvm install 18
     nvm use 18
     
-    # Verify installation
     if ! command -v node &> /dev/null; then
         error "Node.js installation failed"
     fi
@@ -158,21 +151,23 @@ setup_database() {
     local DB_USER="irssh_admin"
     local DB_PASS=$(generate_secure_key)
     
-    # Create database user
-    if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1; then
-        sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';" || error "Failed to create database user"
-    else
-        sudo -u postgres psql -c "ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';"
-    fi
+    # Create user if not exists
+    sudo -u postgres psql -c "DO \$\$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_user WHERE usename = '$DB_USER') THEN
+        CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';
+      ELSE
+        ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';
+      END IF;
+    END
+    \$\$;"
     
-    # Create database
-    if ! sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
-        sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;" || error "Failed to create database"
-    else
-        sudo -u postgres psql -c "ALTER DATABASE $DB_NAME OWNER TO $DB_USER;"
-    fi
+    # Create database if not exists
+    sudo -u postgres psql -c "SELECT 'CREATE DATABASE $DB_NAME' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '$DB_NAME')\gexec"
+    sudo -u postgres psql -c "ALTER DATABASE $DB_NAME OWNER TO $DB_USER;"
     
     # Save database configuration
+    mkdir -p "$CONFIG_DIR"
     cat > "$CONFIG_DIR/database.env" << EOL
 DB_HOST=localhost
 DB_PORT=5432
@@ -181,68 +176,6 @@ DB_USER=$DB_USER
 DB_PASS=$DB_PASS
 EOL
     chmod 600 "$CONFIG_DIR/database.env"
-}
-
-# Create admin user
-setup_admin_user() {
-    log "Setting up admin user..."
-    
-    # Get admin credentials
-    read -p "Enter admin username (default: admin): " ADMIN_USER
-    ADMIN_USER=${ADMIN_USER:-admin}
-    
-    # Generate random password if not provided
-    read -s -p "Enter admin password (press Enter for random): " ADMIN_PASS
-    echo
-    if [[ -z "$ADMIN_PASS" ]]; then
-        ADMIN_PASS=$(openssl rand -base64 12)
-        echo "Generated admin password: $ADMIN_PASS"
-    fi
-    
-    # Create Python script to add admin user
-    cat > "$BACKEND_DIR/create_admin.py" << EOL
-from app.core.security import get_password_hash
-from app.models.user import User
-from app.core.database import SessionLocal, Base, engine
-import logging
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-def create_admin():
-    Base.metadata.create_all(bind=engine)
-    db = SessionLocal()
-    
-    try:
-        admin = User(
-            username='$ADMIN_USER',
-            hashed_password=get_password_hash('$ADMIN_PASS'),
-            is_active=True,
-            is_admin=True
-        )
-        db.add(admin)
-        db.commit()
-        logger.info("Admin user created successfully")
-    except Exception as e:
-        logger.error(f"Error creating admin user: {str(e)}")
-        raise
-    finally:
-        db.close()
-
-if __name__ == "__main__":
-    create_admin()
-EOL
-
-    # Run the script
-    source "$VENV_DIR/bin/activate"
-    python "$BACKEND_DIR/create_admin.py"
-    
-    # Save admin credentials
-    cat > "$CONFIG_DIR/admin.env" << EOL
-ADMIN_USER=$ADMIN_USER
-ADMIN_PASS=$ADMIN_PASS
-EOL
-    chmod 600 "$CONFIG_DIR/admin.env"
 }
 
 # Setup backend structure
@@ -256,20 +189,34 @@ setup_backend() {
     mkdir -p app/{core,api,models,schemas,utils}
     mkdir -p app/api/v1/endpoints
     
-    # Create __init__.py files
+    # Create Python package files
     find "$BACKEND_DIR/app" -type d -exec touch {}/__init__.py \;
+
+    # Create config.py
+    cat > app/core/config.py << EOL
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    SECRET_KEY: str = "$(generate_secure_key)"  # Replace in production
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    
+    DB_HOST: str = "localhost"
+    DB_PORT: int = 5432
+    DB_NAME: str = "irssh"
+    DB_USER: str = "irssh_admin"
+    DB_PASS: str = "$(grep DB_PASS "$CONFIG_DIR/database.env" | cut -d= -f2)"
+
+settings = Settings()
+EOL
 
     # Create security.py
     cat > app/core/security.py << 'EOL'
 from datetime import datetime, timedelta
 from typing import Optional
 from passlib.context import CryptContext
-from jose import JWTError, jwt
-from fastapi import HTTPException, status
-
-SECRET_KEY = "your-secret-key"  # In production, use environment variable
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+from jose import jwt
+from .config import settings
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -279,12 +226,11 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
+    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 EOL
 
     # Create database.py
@@ -292,9 +238,9 @@ EOL
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-import os
+from .config import settings
 
-SQLALCHEMY_DATABASE_URL = f"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASS')}@{os.getenv('DB_HOST')}/{os.getenv('DB_NAME')}"
+SQLALCHEMY_DATABASE_URL = f"postgresql://{settings.DB_USER}:{settings.DB_PASS}@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
 
 engine = create_engine(SQLALCHEMY_DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -323,9 +269,10 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     is_admin = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 EOL
 
-    # Create main.py with authentication
+    # Create main.py
     cat > app/main.py << 'EOL'
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -333,15 +280,20 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 import logging
 
-from app.core.database import get_db
+from app.core.database import get_db, engine, Base
 from app.core.security import verify_password, create_access_token
 from app.models.user import User
 
+# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Create database tables
+Base.metadata.create_all(bind=engine)
+
 app = FastAPI()
 
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -350,33 +302,64 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/")
-async def root():
-    return {"message": "IRSSH Panel API"}
-
-@app.get("/api/health")
-async def health_check():
-    return {"status": "healthy"}
-
-@app.post("/api/auth/token")
+@app.post("/api/auth/login")
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == form_data.username).first()
-    
     if not user or not verify_password(form_data.password, user.hashed_password):
-        logger.warning(f"Failed login attempt for user: {form_data.username}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password"
         )
     
-    logger.info(f"Successful login for user: {user.username}")
+    access_token = create_access_token(data={"sub": user.username})
     return {
-        "access_token": create_access_token(data={"sub": user.username}),
+        "access_token": access_token,
         "token_type": "bearer",
-        "username": user.username,
-        "is_admin": user.is_admin
+        "username": user.username
     }
+
+@app.get("/api/health")
+def health_check():
+    return {"status": "healthy"}
 EOL
+
+    # Create first admin user
+    read -p "Enter admin username (default: admin): " ADMIN_USER
+    ADMIN_USER=${ADMIN_USER:-admin}
+    
+    read -s -p "Enter admin password (press Enter for random): " ADMIN_PASS
+    echo
+    if [[ -z "$ADMIN_PASS" ]]; then
+        ADMIN_PASS=$(openssl rand -base64 12)
+        echo "Generated admin password: $ADMIN_PASS"
+    fi
+    
+    cat > create_admin.py << EOL
+from app.core.security import get_password_hash
+from app.models.user import User
+from app.core.database import SessionLocal, Base, engine
+
+def create_admin():
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    
+    admin = User(
+        username='$ADMIN_USER',
+        hashed_password=get_password_hash('$ADMIN_PASS'),
+        is_active=True,
+        is_admin=True
+    )
+    
+    db.add(admin)
+    db.commit()
+    db.close()
+
+if __name__ == "__main__":
+    create_admin()
+EOL
+
+    source "$VENV_DIR/bin/activate"
+    python create_admin.py
 }
 
 # Setup frontend
@@ -389,27 +372,11 @@ setup_frontend() {
     npx create-react-app frontend --template typescript
     cd "$FRONTEND_DIR"
     
-    # Install dependencies with legacy peer deps to avoid React version conflicts
     npm install \
         react-router-dom \
         axios \
         @headlessui/react \
         @heroicons/react --legacy-peer-deps
-
-    # Create index.js
-    cat > src/index.js << 'EOL'
-import React from 'react';
-import { createRoot } from 'react-dom/client';
-import App from './App';
-
-const container = document.getElementById('root');
-const root = createRoot(container);
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
-EOL
 
     # Create App.js with login form
     cat > src/App.js << 'EOL'
@@ -429,7 +396,7 @@ function Login() {
       formData.append('username', username);
       formData.append('password', password);
       
-      const response = await axios.post('/api/auth/token', formData);
+      const response = await axios.post('/api/auth/login', formData);
       
       if (response.data.access_token) {
         localStorage.setItem('token', response.data.access_token);
@@ -542,9 +509,22 @@ function App() {
 export default App;
 EOL
 
-    # Build frontend
+    # Create index.js
+    cat > src/index.js << 'EOL'
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import App from './App';
+
+const container = document.getElementById('root');
+const root = createRoot(container);
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+EOL
+
     npm run build
-    chmod -R 755 "$FRONTEND_DIR/build"
 }
 
 # Configure Nginx
@@ -561,7 +541,6 @@ server {
     
     location / {
         try_files \$uri \$uri/ /index.html;
-        add_header Cache-Control "no-cache";
     }
     
     location /api {
@@ -572,12 +551,21 @@ server {
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
         
-        # CORS headers
+        # Fix CORS issues
         add_header 'Access-Control-Allow-Origin' '*' always;
         add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
         add_header 'Access-Control-Allow-Headers' '*' always;
+        
+        if (\$request_method = 'OPTIONS') {
+            add_header 'Access-Control-Allow-Origin' '*';
+            add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS';
+            add_header 'Access-Control-Allow-Headers' '*';
+            add_header 'Access-Control-Max-Age' 1728000;
+            add_header 'Content-Type' 'text/plain charset=UTF-8';
+            add_header 'Content-Length' 0;
+            return 204;
+        }
     }
 }
 EOL
@@ -592,6 +580,8 @@ EOL
 setup_supervisor() {
     log "Configuring Supervisor..."
     
+    mkdir -p /var/log/irssh
+    
     cat > /etc/supervisor/conf.d/irssh-panel.conf << EOL
 [program:irssh-panel]
 directory=$BACKEND_DIR
@@ -599,14 +589,15 @@ command=$VENV_DIR/bin/uvicorn app.main:app --host 0.0.0.0 --port $DEFAULT_API_PO
 user=root
 autostart=true
 autorestart=true
-stdout_logfile=$LOG_DIR/uvicorn.out.log
-stderr_logfile=$LOG_DIR/uvicorn.err.log
+stdout_logfile=/var/log/irssh/uvicorn.out.log
+stderr_logfile=/var/log/irssh/uvicorn.err.log
 environment=
     PYTHONPATH="$BACKEND_DIR",
+    DB_HOST="localhost",
+    DB_PORT="5432",
     DB_NAME="irssh",
     DB_USER="irssh_admin",
-    DB_PASS="$(grep DB_PASS $CONFIG_DIR/database.env | cut -d= -f2)",
-    DB_HOST="localhost"
+    DB_PASS="$(grep DB_PASS $CONFIG_DIR/database.env | cut -d= -f2)"
 EOL
 
     supervisorctl reread
@@ -634,7 +625,6 @@ main() {
     setup_python_env
     setup_database
     setup_backend
-    setup_admin_user
     setup_frontend
     setup_nginx
     setup_supervisor
@@ -644,30 +634,19 @@ main() {
     systemctl restart nginx
     supervisorctl restart irssh-panel
     
-    # Test installation
-    log "Testing installation..."
-    sleep 5
-    
-    response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:$DEFAULT_API_PORT/api/health)
-    if [ "$response" = "200" ]; then
-        log "API is responding correctly"
-    else
-        warn "API is not responding correctly (HTTP $response)"
-    fi
-    
-    # Final message
+    # Print installation details
     log "Installation completed successfully!"
     echo
     echo "IRSSH Panel has been installed!"
     echo
     echo "Admin credentials:"
-    echo "Username: $(grep ADMIN_USER $CONFIG_DIR/admin.env | cut -d= -f2)"
-    echo "Password: $(grep ADMIN_PASS $CONFIG_DIR/admin.env | cut -d= -f2)"
+    echo "Username: $ADMIN_USER"
+    echo "Password: $ADMIN_PASS"
     echo
     echo "Panel URL: http://YOUR-IP"
     echo "API URL: http://YOUR-IP/api"
     echo
-    echo "Please make sure to save these credentials securely!"
+    echo "Please save these credentials and change the password after first login!"
 }
 
 # Start installation
