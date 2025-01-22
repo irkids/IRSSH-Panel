@@ -16,7 +16,7 @@ from app.core.logger import logger, log_audit
 
 router = APIRouter()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token")
 
 # Security functions
 def verify_password(plain_password: str, hashed_password: str) -> bool:
