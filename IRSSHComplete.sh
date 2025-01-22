@@ -121,19 +121,21 @@ setup_python_env() {
     
     pip install --upgrade pip
 
+    pip install bcrypt==3.2.0
+
     pip install \
         fastapi[all] \
         uvicorn[standard] \
         sqlalchemy[asyncio] \
         psycopg2-binary \
         python-jose[cryptography] \
-        passlib[bcrypt] \
+        passlib[bcrypt==3.2.0] \
         python-multipart \
         aiofiles \
         python-dotenv \
         pydantic-settings \
         asyncpg \
-        bcrypt \
+        bcrypt==3.2.0 \
         pydantic \
         requests \
         aiohttp \
