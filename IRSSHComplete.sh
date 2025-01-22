@@ -241,6 +241,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -249,9 +250,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+async def root():
+    return {"message": "IRSSH Panel API"}
+
 @app.get("/api/health")
 async def health_check():
     return {"status": "healthy"}
+
+@app.get("/api/test")
+async def test():
+    return {"message": "API is working correctly"}
 EOL
 
     # Set permissions
