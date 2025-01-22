@@ -120,26 +120,26 @@ setup_python_env() {
     source "$VENV_DIR/bin/activate"
     
     pip install --upgrade pip
+    pip uninstall bcrypt -y
 
-    pip install bcrypt==3.2.0
-
+    # Install the packages in order
     pip install \
+        bcrypt==3.2.0 \
         fastapi[all] \
         uvicorn[standard] \
         sqlalchemy[asyncio] \
         psycopg2-binary \
         python-jose[cryptography] \
-        passlib[bcrypt==3.2.0] \
+        passlib \
         python-multipart \
         aiofiles \
         python-dotenv \
         pydantic-settings \
         asyncpg \
-        bcrypt==3.2.0 \
         pydantic \
         requests \
         aiohttp \
-        psutil || error "Failed to install Python packages"
+        psutil
 }
 
 # Configure PostgreSQL
@@ -153,16 +153,17 @@ setup_database() {
     local DB_USER="irssh_admin"
     local DB_PASS=$(generate_secure_key)
     
-    # Create user if not exists
-    sudo -u postgres psql -c "DO \$\$
-    BEGIN
-      IF NOT EXISTS (SELECT FROM pg_user WHERE usename = '$DB_USER') THEN
-        CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';
-      ELSE
-        ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';
-      END IF;
+    sudo -u postgres psql -c "DO \$\$ 
+    BEGIN 
+        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$DB_USER') THEN
+            CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';
+        END IF;
     END
     \$\$;"
+    
+    sudo -u postgres psql -c "CREATE DATABASE $DB_NAME;"
+    sudo -u postgres psql -c "ALTER DATABASE $DB_NAME OWNER TO $DB_USER;"
+}
     
     # Create database if not exists
     sudo -u postgres psql -c "SELECT 'CREATE DATABASE $DB_NAME' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '$DB_NAME')\gexec"
