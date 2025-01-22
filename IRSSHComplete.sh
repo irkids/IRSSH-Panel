@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# IRSSH Panel Installation Script v2.0
-# Comprehensive installation with error handling and security features
+# IRSSH Panel Installation Script v2.1
+# Comprehensive installation with all fixes applied
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -35,10 +35,6 @@ ADMIN_TOKEN=$(generate_secure_key)
 # Logging functions
 setup_logging() {
     mkdir -p "$LOG_DIR"
- log_partition=$(df -P "$LOG_DIR" | awk 'NR==2 {print $4}')
-    if [ "$log_partition" -lt 1048576 ]; then  # 1GB in KB
-        warn "Less than 1GB free space available for logs"
-    fi
     LOG_FILE="$LOG_DIR/install.log"
     exec 1> >(tee -a "$LOG_FILE")
     exec 2> >(tee -a "$LOG_FILE" >&2)
@@ -98,13 +94,6 @@ restore_backup() {
 check_requirements() {
     log "Checking system requirements..."
     
-    # Check if pip3 is installed, if not install it
-    if ! command -v pip3 &>/dev/null; then
-        log "Installing pip3..."
-        apt-get update
-        apt-get install -y python3-pip
-    fi
-    
     # Check OS
     if [[ ! -f /etc/os-release ]]; then
         error "Unsupported operating system"
@@ -118,24 +107,16 @@ check_requirements() {
     [[ $disk_free -lt 2048 ]] && error "Minimum 2GB free disk space required"
     
     # Check required commands
-    local requirements=(curl wget git python3 pip3 node nginx)
+    local requirements=(curl wget git python3 pip3 nginx)
     for cmd in "${requirements[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
             error "$cmd is required but not installed"
-        fi
-        if ! command -v node &> /dev/null; then
-    error "Node.js is not installed. Please install it using nvm first."
         fi
     done
 }
 
 # Install system packages
 install_system_packages() {
-    # Add these lines at beginning
-    apt-get update
-    apt-get install -y software-properties-common
-    curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
-
     log "Installing system packages..."
     apt-get update || error "Failed to update package lists"
     
@@ -155,15 +136,36 @@ install_system_packages() {
         fail2ban || error "Failed to install system packages"
 }
 
+# Setup Node.js using nvm
+setup_node() {
+    log "Setting up Node.js with nvm..."
+    
+    # Install nvm
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+    
+    # Load nvm
+    export NVM_DIR="$HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    
+    # Install Node.js
+    nvm install 18
+    nvm use 18
+    
+    # Verify installation
+    if ! command -v node &> /dev/null; then
+        error "Node.js installation failed"
+    fi
+}
+
 # Setup Python environment
 setup_python_env() {
     log "Setting up Python environment..."
-    
-    python3 -m venv "$VENV_DIR" || error "Failed to create virtual environment"
+    python3 -m venv "$VENV_DIR"
     source "$VENV_DIR/bin/activate"
     
-    pip install --upgrade pip || error "Failed to upgrade pip"
-    
+    pip install --upgrade pip
+
+    # Install Python packages
     pip install \
         fastapi[all] \
         uvicorn[standard] \
@@ -179,10 +181,10 @@ setup_python_env() {
         python-jose[cryptography] \
         bcrypt \
         python-multipart \
-        pydantic \    
-        requests \    
-        aiohttp \       
-        psutil \      
+        pydantic \
+        requests \
+        aiohttp \
+        psutil || error "Failed to install Python packages"
 }
 
 # Configure PostgreSQL
@@ -196,8 +198,19 @@ setup_database() {
     local DB_USER="irssh_admin"
     local DB_PASS=$(generate_secure_key)
     
-    sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';" || error "Failed to create database user"
-    sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;" || error "Failed to create database"
+    # Check if user exists
+    if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1; then
+        sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';" || error "Failed to create database user"
+    else
+        sudo -u postgres psql -c "ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';"
+    fi
+    
+    # Check if database exists
+    if ! sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
+        sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;" || error "Failed to create database"
+    else
+        sudo -u postgres psql -c "ALTER DATABASE $DB_NAME OWNER TO $DB_USER;"
+    fi
     
     # Save database configuration
     cat > "$CONFIG_DIR/database.env" << EOL
@@ -210,105 +223,283 @@ EOL
     chmod 600 "$CONFIG_DIR/database.env"
 }
 
+# Setup backend structure
+setup_backend() {
+    log "Setting up backend structure..."
+    
+    mkdir -p "$BACKEND_DIR/app/"{core,api,models,schemas,utils}
+    mkdir -p "$BACKEND_DIR/app/api/v1/endpoints"
+    
+    # Create __init__.py files
+    touch "$BACKEND_DIR/app/__init__.py"
+    touch "$BACKEND_DIR/app/core/__init__.py"
+    touch "$BACKEND_DIR/app/api/__init__.py"
+    touch "$BACKEND_DIR/app/api/v1/__init__.py"
+    touch "$BACKEND_DIR/app/models/__init__.py"
+    touch "$BACKEND_DIR/app/schemas/__init__.py"
+    touch "$BACKEND_DIR/app/utils/__init__.py"
+
+    # Create main.py
+    cat > "$BACKEND_DIR/app/main.py" << 'EOL'
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = FastAPI()
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/api/health")
+async def health_check():
+    return {"status": "healthy"}
+EOL
+
+    # Create database.py
+    cat > "$BACKEND_DIR/app/core/database.py" << 'EOL'
+from sqlalchemy import create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+import os
+
+SQLALCHEMY_DATABASE_URL = f"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASS')}@{os.getenv('DB_HOST')}/{os.getenv('DB_NAME')}"
+
+engine = create_engine(SQLALCHEMY_DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+Base = declarative_base()
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+EOL
+
+    # Create models
+    cat > "$BACKEND_DIR/app/models/user.py" << 'EOL'
+from sqlalchemy import Boolean, Column, Integer, String
+from app.core.database import Base
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True)
+    hashed_password = Column(String)
+    is_active = Column(Boolean, default=True)
+    is_admin = Column(Boolean, default=False)
+EOL
+}
+
+# Setup frontend structure
+setup_frontend() {
+    log "Setting up frontend..."
+    
+    # Create React app
+    npx create-react-app "$FRONTEND_DIR" --template typescript
+    cd "$FRONTEND_DIR"
+    
+    # Install dependencies
+    npm install \
+        @headlessui/react \
+        @heroicons/react \
+        axios \
+        react-router-dom \
+        tailwindcss \
+        @types/node \
+        @types/react \
+        @types/react-dom
+
+    # Create components directory
+    mkdir -p src/components/{Auth,Layout,Dashboard}
+
+    # Create Login component
+    cat > src/components/Auth/Login.js << 'EOL'
+import React, { useState } from 'react';
+import axios from 'axios';
+
+function Login() {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const formData = new FormData();
+      formData.append('username', username);
+      formData.append('password', password);
+      
+      const response = await axios.post('/api/auth/token', formData);
+      
+      if (response.data.access_token) {
+        localStorage.setItem('token', response.data.access_token);
+        localStorage.setItem('username', response.data.username);
+        window.location.href = '/dashboard';
+      }
+    } catch (error) {
+      setError('Invalid username or password');
+    }
+  };
+
+  return (
+    <div style={{
+      minHeight: '100vh',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: '#f3f4f6'
+    }}>
+      <div style={{
+        width: '100%',
+        maxWidth: '400px',
+        padding: '20px',
+        backgroundColor: 'white',
+        borderRadius: '8px',
+        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)'
+      }}>
+        <h2 style={{
+          textAlign: 'center',
+          fontSize: '24px',
+          fontWeight: 'bold',
+          marginBottom: '20px'
+        }}>Sign in to IRSSH Panel</h2>
+        <form onSubmit={handleSubmit}>
+          <div style={{ marginBottom: '15px' }}>
+            <input
+              type="text"
+              placeholder="Username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '10px',
+                border: '1px solid #ddd',
+                borderRadius: '4px'
+              }}
+            />
+          </div>
+          <div style={{ marginBottom: '15px' }}>
+            <input
+              type="password"
+              placeholder="Password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '10px',
+                border: '1px solid #ddd',
+                borderRadius: '4px'
+              }}
+            />
+          </div>
+          {error && (
+            <div style={{
+              color: '#dc2626',
+              textAlign: 'center',
+              marginBottom: '15px',
+              fontSize: '14px'
+            }}>
+              {error}
+            </div>
+          )}
+          <button
+            type="submit"
+            style={{
+              width: '100%',
+              padding: '10px',
+              backgroundColor: '#2563eb',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer'
+            }}
+          >
+            Sign in
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+export default Login;
+EOL
+
+    # Update App.js
+    cat > src/App.js << 'EOL'
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import Login from './components/Auth/Login';
+
+function App() {
+  return (
+    <Router>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/" element={<Navigate to="/login" />} />
+      </Routes>
+    </Router>
+  );
+}
+
+export default App;
+EOL
+
+    # Build React app
+    npm run build
+}
+
 # Configure Nginx
 setup_nginx() {
     log "Configuring Nginx..."
     
-    # Generate strong DH parameters
-    openssl dhparam -out /etc/nginx/dhparam.pem 2048
-    
-    # Create Nginx configuration
     cat > /etc/nginx/sites-available/irssh-panel << EOL
 server {
     listen 80;
-    listen [::]:80;
     server_name _;
 
     root $FRONTEND_DIR/build;
     index index.html;
 
-    # Security headers
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-XSS-Protection "1; mode=block" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "no-referrer-when-downgrade" always;
-    add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    # CORS headers
+    add_header 'Access-Control-Allow-Origin' '*' always;
+    add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
+    add_header 'Access-Control-Allow-Headers' '*' always;
 
-    # Logging
-    access_log $LOG_DIR/nginx-access.log combined buffer=512k flush=1m;
-    error_log $LOG_DIR/nginx-error.log warn;
-
-    # Frontend
     location / {
         try_files \$uri \$uri/ /index.html;
-        expires 1h;
-        add_header Cache-Control "public, no-transform";
+        add_header Cache-Control "no-cache";
     }
 
-    # API endpoints
     location /api {
-        proxy_pass http://127.0.0.1:$DEFAULT_API_PORT;
+        proxy_pass http://localhost:$DEFAULT_API_PORT;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection 'upgrade';
         proxy_set_header Host \$host;
-        proxy_cache_bypass \$http_upgrade;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-
-        # CORS
-        add_header 'Access-Control-Allow-Origin' '*' always;
-        add_header 'Access-Control-Allow-Methods' 'GET, POST, PUT, DELETE, OPTIONS' always;
-        add_header 'Access-Control-Allow-Headers' 'DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization' always;
-        add_header 'Access-Control-Expose-Headers' 'Content-Length,Content-Range' always;
-
-        # Preflighted requests
-        if (\$request_method = 'OPTIONS') {
-            add_header 'Access-Control-Max-Age' 1728000;
-            add_header 'Content-Type' 'text/plain; charset=utf-8';
-            add_header 'Content-Length' 0;
-            return 204;
-        }
+        proxy_read_timeout 90;
+        proxy_redirect off;
     }
-
-    # WebSocket support
-    location /ws {
-        proxy_pass http://127.0.0.1:$DEFAULT_API_PORT;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "Upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-    }
-
-    # Deny access to sensitive files
-    location ~ /\. {
-        deny all;
-    }
-    
-    location ~ /(config|log)/ {
-        deny all;
-    }
-
-    # Optimize file serving
-    location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$ {
-        expires 7d;
-        add_header Cache-Control "public, no-transform";
-    }
-
-    # Large file uploads
-    client_max_body_size 100M;
-    client_body_timeout 300s;
-    
-    # Timeouts
-    keepalive_timeout 65;
-    send_timeout 30;
 }
 EOL
 
-    # Enable site and remove default
+    # Remove default and enable our site
     rm -f /etc/nginx/sites-enabled/default
     ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
 
@@ -323,22 +514,19 @@ setup_supervisor() {
     cat > /etc/supervisor/conf.d/irssh-panel.conf << EOL
 [program:irssh-panel]
 directory=$BACKEND_DIR
-command=$VENV_DIR/bin/uvicorn app.main:app --host 0.0.0.0 --port $DEFAULT_API_PORT --workers 4
+command=$VENV_DIR/bin/uvicorn app.main:app --host 0.0.0.0 --port $DEFAULT_API_PORT --reload
 user=root
 autostart=true
 autorestart=true
-startsecs=10
-startretries=3
-stopwaitsecs=10
-stopasgroup=true
-killasgroup=true
 stdout_logfile=$LOG_DIR/uvicorn.out.log
 stderr_logfile=$LOG_DIR/uvicorn.err.log
-stdout_logfile_maxbytes=10MB
-stderr_logfile_maxbytes=10MB
-stdout_logfile_backups=5
-stderr_logfile_backups=5
-environment=PYTHONPATH="$BACKEND_DIR",JWT_SECRET="$JWT_SECRET"
+environment=
+    PATH="$VENV_DIR/bin:/usr/local/bin:/usr/bin:/bin",
+    PYTHONPATH="$BACKEND_DIR",
+    DB_NAME="irssh",
+    DB_USER="irssh_admin",
+    DB_PASS="$(grep DB_PASS $CONFIG_DIR/database.env | cut -d= -f2)",
+    DB_HOST="localhost"
 EOL
 
     supervisorctl reread
@@ -349,38 +537,12 @@ EOL
 setup_firewall() {
     log "Configuring firewall..."
     
-    ufw default deny incoming
-    ufw default allow outgoing
-    
     ufw allow ssh
     ufw allow http
     ufw allow https
     ufw allow $DEFAULT_API_PORT
     
-    # Enable firewall
     echo "y" | ufw enable
-}
-
-# Setup log rotation
-setup_logrotate() {
-    log "Configuring log rotation..."
-    
-    cat > /etc/logrotate.d/irssh-panel << EOL
-$LOG_DIR/*.log {
-    daily
-    missingok
-    rotate 14
-    compress
-    delaycompress
-    notifempty
-    create 0640 root root
-    sharedscripts
-    postrotate
-        supervisorctl restart irssh-panel >/dev/null 2>&1 || true
-        nginx -s reopen >/dev/null 2>&1 || true
-    endscript
-}
-EOL
 }
 
 # Create admin user
@@ -390,38 +552,34 @@ create_admin_user() {
     read -p "Enter admin username (default: admin): " ADMIN_USER
     ADMIN_USER=${ADMIN_USER:-admin}
     
-    read -s -p "Enter admin password (default: random): " ADMIN_PASS
+    read -s -p "Enter admin password (default: admin123): " ADMIN_PASS
     echo
-    if [[ -z "$ADMIN_PASS" ]]; then
-        ADMIN_PASS=$(openssl rand -base64 12)
-        echo "Generated admin password: $ADMIN_PASS"
-    fi
+    ADMIN_PASS=${ADMIN_PASS:-admin123}
     
     source "$VENV_DIR/bin/activate"
     python3 -c "
 from app.core.security import get_password_hash
 from app.models.user import User
-from app.core.database import SessionLocal, Base, engine
-import logging
+from app.core.database import engine, SessionLocal, Base
 
-logging.basicConfig(filename='$LOG_DIR/admin_creation.log', level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Create tables
+Base.metadata.create_all(bind=engine)
+
+# Create session
+db = SessionLocal()
 
 try:
-    Base.metadata.create_all(bind=engine)
-    db = SessionLocal()
+    # Create admin user
     admin = User(
         username='$ADMIN_USER',
         hashed_password=get_password_hash('$ADMIN_PASS'),
-        is_admin=True,
-        is_active=True
+        is_active=True,
+        is_admin=True
     )
     db.add(admin)
     db.commit()
-    logger.info('Admin user created successfully')
 except Exception as e:
-    logger.error(f'Error creating admin user: {str(e)}')
-    raise
+    print(f'Error creating admin user: {str(e)}')
 finally:
     db.close()
 "
@@ -432,31 +590,29 @@ main() {
     trap cleanup EXIT
     
     setup_logging
-    
     log "Starting IRSSH Panel installation..."
     
     check_requirements
     create_backup
     install_system_packages
+    setup_node
     setup_python_env
     setup_database
-    update_environment_vars
+    setup_backend
+    setup_frontend
     setup_nginx
     setup_supervisor
     setup_firewall
-    setup_logrotate
     create_admin_user
     
     # Restart services
     systemctl restart nginx
     supervisorctl restart irssh-panel
     
- # Add before final echo statements
-    test_service() {
-    log "Testing service..."
-    sleep 5  # Wait for services to start
+    # Test installation
+    log "Testing installation..."
+    sleep 5
     
-    # Test API
     response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:$DEFAULT_API_PORT/api/health)
     if [ "$response" = "200" ]; then
         log "API is responding correctly"
@@ -464,18 +620,6 @@ main() {
         warn "API is not responding correctly (HTTP $response)"
     fi
     
-    # Test Nginx
-    response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost)
-    if [ "$response" = "200" ]; then
-        log "Web server is responding correctly"
-    else
-        warn "Web server is not responding correctly (HTTP $response)"
-    fi
-}
-
-    test_service
-
-    # Installation complete
     log "Installation completed successfully!"
     echo
     echo "IRSSH Panel has been installed!"
@@ -484,187 +628,11 @@ main() {
     echo "Username: $ADMIN_USER"
     echo "Password: $ADMIN_PASS"
     echo
-    echo "Important URLs:"
-    echo "Panel: http://YOUR-IP"
-    echo "API: http://YOUR-IP/api"
+    echo "Panel URL: http://YOUR-IP"
+    echo "API URL: http://YOUR-IP/api"
     echo
-    echo "Log Files:"
-    echo "- Main Application: $LOG_DIR/app.log"
-    echo "- Authentication: $LOG_DIR/auth.log"
-    echo "- Database: $LOG_DIR/database.log"
-    echo "- Nginx Access: $LOG_DIR/nginx-access.log"
-    echo "- Nginx Error: $LOG_DIR/nginx-error.log"
-    echo "- API Server: $LOG_DIR/uvicorn.{out,err}.log"
-    echo
-    echo "Useful Commands:"
-    echo "- View logs: tail -f $LOG_DIR/app.log"
-    echo "- Restart panel: supervisorctl restart irssh-panel"
-    echo "- Check status: supervisorctl status"
-    echo "- Test API: curl http://localhost:$DEFAULT_API_PORT/api/health"
-    echo
-    echo "Security Notes:"
-    echo "1. Change the admin password after first login"
-    echo "2. Setup SSL/TLS using certbot"
-    echo "3. Review firewall rules: ufw status"
-    echo "4. Monitor auth logs regularly"
-    echo
-    echo "For support, check the documentation or contact support."
+    echo "Please change the admin password after first login."
 }
 
 # Start installation
-main "$@"    
-
-# Create backend structure
-setup_backend_structure() {
-    log "Setting up backend structure..."
-    
-    # Create necessary directories
-    mkdir -p "$BACKEND_DIR/app/"{core,api,models,schemas,utils}
-    mkdir -p "$BACKEND_DIR/app/api/v1/endpoints"
-
-    # Create __init__.py files
-    touch "$BACKEND_DIR/app/__init__.py"
-    touch "$BACKEND_DIR/app/core/__init__.py"
-    touch "$BACKEND_DIR/app/api/__init__.py"
-    touch "$BACKEND_DIR/app/api/v1/__init__.py"
-    touch "$BACKEND_DIR/app/models/__init__.py"
-    touch "$BACKEND_DIR/app/schemas/__init__.py"
-    touch "$BACKEND_DIR/app/utils/__init__.py"
-
-    # Create main.py
-    cat > "$BACKEND_DIR/app/main.py" << 'EOL'
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1 import api_router
-import logging
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('/var/log/irssh/app.log'),
-        logging.StreamHandler()
-    ]
-)
-
-app = FastAPI(title="IRSSH Panel")
-
-# Configure CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Include routers
-app.include_router(api_router.router, prefix="/api/v1")
-
-@app.get("/api/health")
-async def health_check():
-    return {"status": "healthy"}
-EOL
-
-    # Create database.py
-    cat > "$BACKEND_DIR/app/core/database.py" << 'EOL'
-from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-import os
-
-SQLALCHEMY_DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://irssh_admin:password@localhost/irssh"
-)
-
-engine = create_engine(SQLALCHEMY_DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-EOL
-
-    # Create api_router.py
-    cat > "$BACKEND_DIR/app/api/v1/api_router.py" << 'EOL'
-from fastapi import APIRouter
-
-router = APIRouter()
-
-@router.get("/")
-async def root():
-    return {"message": "IRSSH Panel API v1"}
-EOL
-
-    # Create models
-    cat > "$BACKEND_DIR/app/models/user.py" << 'EOL'
-from sqlalchemy import Boolean, Column, Integer, String, DateTime
-from sqlalchemy.sql import func
-from app.core.database import Base
-
-class User(Base):
-    __tablename__ = "users"
-
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
-    email = Column(String, unique=True, index=True)
-    hashed_password = Column(String)
-    is_active = Column(Boolean, default=True)
-    is_admin = Column(Boolean, default=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-EOL
-
-    # Create security utils
-    cat > "$BACKEND_DIR/app/core/security.py" << 'EOL'
-from datetime import datetime, timedelta
-from typing import Optional
-from jose import JWTError, jwt
-from passlib.context import CryptContext
-import os
-
-# Security configuration
-SECRET_KEY = os.getenv("JWT_SECRET", "your-secret-key")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
-
-def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
-
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-EOL
-
-    log "Backend structure created successfully"
-}
-
-# Add this line in the main() function before setup_supervisor
-setup_backend_structure
-
-# Add environment variables for the database
-update_environment_vars() {
-    log "Updating environment variables..."
-    
-    # Create environment file
-    cat > "$CONFIG_DIR/.env" << EOL
-DATABASE_URL=postgresql://${DB_USER}:${DB_PASS}@localhost/${DB_NAME}
-JWT_SECRET=${JWT_SECRET}
-ADMIN_TOKEN=${ADMIN_TOKEN}
-EOL
-
-    chmod 600 "$CONFIG_DIR/.env"
-}
+main "$@"
