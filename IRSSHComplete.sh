@@ -184,6 +184,28 @@ EOL
 setup_backend() {
     log "Setting up backend structure..."
     
+cat > "$BACKEND_DIR/app/core/admin.py" << 'EOL'
+from sqlalchemy.orm import Session
+import bcrypt
+from app.models import User
+
+def create_admin(db: Session, username: str, password: str):
+    salt = bcrypt.gensalt()
+    hashed_password = bcrypt.hashpw(password.encode(), salt).decode()
+    
+    admin = User(
+        username=username,
+        hashed_password=hashed_password,
+        role="admin",
+        is_active=True
+    )
+    
+    db.add(admin)
+    db.commit()
+    db.refresh(admin)
+    return admin
+EOL
+
     rm -rf "$BACKEND_DIR"
     mkdir -p "$BACKEND_DIR"
     cd "$BACKEND_DIR"
