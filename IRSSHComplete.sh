@@ -486,7 +486,6 @@ main() {
     setup_nginx
     setup_supervisor
     
-    # Restart services
     systemctl restart nginx
     supervisorctl restart irssh-panel
     
@@ -495,14 +494,10 @@ main() {
     echo
     echo "IRSSH Panel has been installed!"
     echo
-    echo "Admin credentials:"
-    echo "Username: $ADMIN_USER"
-    echo "Password: $ADMIN_PASS"
-    echo
     echo "Panel URL: http://YOUR-IP"
     echo "API URL: http://YOUR-IP/api"
     echo
-    echo "Please save these credentials and change the password after first login!"
+    echo "Try logging in with your admin credentials."
 }
 
 # Start installation
