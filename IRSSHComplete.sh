@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# IRSSH Panel Installation Script v2.5
-# Updated with enhanced authentication system
+# IRSSH Panel Installation Script v2.6
+# Updated with enhanced authentication system and fixes
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -56,7 +56,7 @@ warn() {
     echo -e "${YELLOW}[WARN]${NC} $1"
 }
 
-# Check system requirements and install packages
+# Check system requirements
 check_requirements() {
     log "Checking system requirements..."
     # Check minimum system resources
@@ -67,7 +67,7 @@ check_requirements() {
     [[ $disk_free -lt 2048 ]] && error "Minimum 2GB free disk space required"
     
     # Check required commands
-    local requirements=(curl wget git python3 pip3 nginx)
+    local requirements=(curl wget git python3 pip3)
     for cmd in "${requirements[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
             error "$cmd is required but not installed"
@@ -91,10 +91,11 @@ install_system_packages() {
         curl \
         git \
         certbot \
-        python3-certbot-nginx || error "Failed to install system packages"
+        python3-certbot-nginx \
+        net-tools || error "Failed to install system packages"
 }
 
-# Setup Node.js using nvm
+# Setup Node.js
 setup_node() {
     log "Setting up Node.js with nvm..."
     
@@ -119,7 +120,7 @@ setup_python_env() {
     python3 -m venv "$VENV_DIR"
     source "$VENV_DIR/bin/activate"
     
-    pip install --upgrade pip
+    pip install --upgrade pip wheel setuptools
 
     pip install \
         fastapi[all] \
@@ -147,24 +148,36 @@ setup_database() {
     systemctl start postgresql
     systemctl enable postgresql
     
-    DB_NAME="irssh"
-    DB_USER="irssh_admin"
-    DB_PASS=$(generate_secure_key)
+    local DB_NAME="irssh"
+    local DB_USER="irssh_admin"
+    local DB_PASS=$(generate_secure_key)
     
-    # Create user if not exists
-    sudo -u postgres psql -c "DO \$\$
-    BEGIN
-      IF NOT EXISTS (SELECT FROM pg_user WHERE usename = '$DB_USER') THEN
-        CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';
-      ELSE
-        ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';
-      END IF;
-    END
-    \$\$;"
+    # Drop existing database and user if they exist
+    sudo -u postgres psql -c "DROP DATABASE IF EXISTS $DB_NAME;"
+    sudo -u postgres psql -c "DROP USER IF EXISTS $DB_USER;"
     
-    # Create database if not exists
-    sudo -u postgres psql -c "SELECT 'CREATE DATABASE $DB_NAME' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '$DB_NAME')\gexec"
-    sudo -u postgres psql -c "ALTER DATABASE $DB_NAME OWNER TO $DB_USER;"
+    # Create new user and database
+    sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
+    sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
+    sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;"
+    
+    # Update pg_hba.conf for MD5 authentication
+    local PG_HBA_CONF="/etc/postgresql/*/main/pg_hba.conf"
+    local PG_CONF_FILE=$(ls $PG_HBA_CONF 2>/dev/null | head -n 1)
+    
+    if [ -f "$PG_CONF_FILE" ]; then
+        # Backup original
+        cp "$PG_CONF_FILE" "${PG_CONF_FILE}.bak"
+        
+        # Update authentication method
+        sed -i 's/peer/md5/g' "$PG_CONF_FILE"
+        sed -i 's/ident/md5/g' "$PG_CONF_FILE"
+        
+        # Restart PostgreSQL
+        systemctl restart postgresql
+    else
+        error "PostgreSQL configuration file not found"
+    fi
     
     # Save database configuration
     mkdir -p "$CONFIG_DIR"
@@ -176,9 +189,14 @@ DB_USER=$DB_USER
 DB_PASS=$DB_PASS
 EOL
     chmod 600 "$CONFIG_DIR/database.env"
+    
+    # Verify database connection
+    if ! PGPASSWORD=$DB_PASS psql -h localhost -U $DB_USER -d $DB_NAME -c '\q' 2>/dev/null; then
+        error "Database connection test failed"
+    fi
 }
 
-# Setup backend structure with enhanced login system
+# Setup backend
 setup_backend() {
     log "Setting up backend structure..."
     
@@ -192,7 +210,7 @@ setup_backend() {
     # Create Python package files
     find "$BACKEND_DIR/app" -type d -exec touch {}/__init__.py \;
 
-    # Create enhanced config.py
+    # Create config.py
     cat > app/core/config.py << EOL
 from pydantic_settings import BaseSettings
 from datetime import timedelta
@@ -218,7 +236,7 @@ class Settings(BaseSettings):
 settings = Settings()
 EOL
 
-    # Create enhanced security.py
+    # Create security.py
     cat > app/core/security.py << 'EOL'
 from datetime import datetime, timedelta
 from typing import Optional, Dict
@@ -230,11 +248,9 @@ from collections import defaultdict
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# Enhanced login attempt tracking
 login_attempts: Dict[str, list] = defaultdict(list)
 
 def clean_old_attempts(username: str) -> None:
-    """Remove login attempts older than the window"""
     current_time = time.time()
     window = settings.LOGIN_ATTEMPT_WINDOW.total_seconds()
     login_attempts[username] = [
@@ -243,12 +259,10 @@ def clean_old_attempts(username: str) -> None:
     ]
 
 def check_login_attempts(username: str) -> bool:
-    """Check if user has exceeded maximum login attempts"""
     clean_old_attempts(username)
     return len(login_attempts[username]) < settings.MAX_LOGIN_ATTEMPTS
 
 def record_login_attempt(username: str) -> None:
-    """Record a failed login attempt"""
     login_attempts[username].append(time.time())
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -287,7 +301,7 @@ def verify_token(token: str) -> dict:
         return None
 EOL
 
-    # Create enhanced database.py
+    # Create database.py with proper SQLAlchemy setup
     cat > app/core/database.py << 'EOL'
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
@@ -297,9 +311,17 @@ import contextlib
 
 SQLALCHEMY_DATABASE_URL = f"postgresql://{settings.DB_USER}:{settings.DB_PASS}@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
 
-engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True)
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    pool_pre_ping=True,
+    pool_recycle=300
+)
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+def init_db():
+    Base.metadata.create_all(bind=engine)
 
 @contextlib.contextmanager
 def get_db():
@@ -310,10 +332,9 @@ def get_db():
         db.close()
 EOL
 
-    # Create enhanced user model
+    # Create user model with proper timestamp columns
     cat > app/models/user.py << 'EOL'
-from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text
-from sqlalchemy.sql import func
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text, func
 from app.core.database import Base
 
 class User(Base):
@@ -326,23 +347,22 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     is_admin = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     last_login = Column(DateTime(timezone=True), nullable=True)
     failed_login_attempts = Column(Integer, default=0)
     last_failed_login = Column(DateTime(timezone=True), nullable=True)
     refresh_token = Column(Text, nullable=True)
 EOL
 
-    # Create enhanced main.py with new login system
+    # Create main.py
     cat > app/main.py << 'EOL'
-from fastapi import FastAPI, Depends, HTTPException, status, Request
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from datetime import datetime
 import logging
 
-from app.core.database import get_db, engine, Base
+from app.core.database import get_db, init_db
 from app.core.security import (
     verify_password, create_access_token, create_refresh_token,
     check_login_attempts, record_login_attempt, verify_token
@@ -350,13 +370,17 @@ from app.core.security import (
 from app.models.user import User
 
 # Setup logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('/var/log/irssh/app.log'),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
-# Create database tables
-Base.metadata.create_all(bind=engine)
-
-app = FastAPI()
+app = FastAPI(title="IRSSH Panel API")
 
 # Configure CORS
 app.add_middleware(
@@ -367,13 +391,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+async def startup_event():
+    init_db()
+    logger.info("Application started, database initialized")
+
 @app.post("/api/auth/login")
 async def login(
-    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
     if not check_login_attempts(form_data.username):
+        logger.warning(f"Too many login attempts for user: {form_data.username}")
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many failed login attempts. Please try again later."
@@ -388,12 +417,14 @@ async def login(
             user.last_failed_login = datetime.utcnow()
             db.commit()
         
+        logger.warning(f"Failed login attempt for user: {form_data.username}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password"
         )
 
     if not user.is_active:
+        logger.warning(f"Inactive user attempted login: {form_data.username}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Account is disabled"
@@ -410,6 +441,8 @@ async def login(
     # Store refresh token in database
     user.refresh_token = refresh_token
     db.commit()
+    
+    logger.info(f"Successful login for user: {user.username}")
     
     return {
         "access_token": access_token,
@@ -491,7 +524,7 @@ def health_check():
     return {"status": "healthy"}
 EOL
 
-    # Create first admin user during installation
+    # Create first admin user
     read -p "Enter admin username (default: admin): " ADMIN_USER
     ADMIN_USER=${ADMIN_USER:-admin}
     
@@ -530,24 +563,36 @@ EOL
     python create_admin.py
 }
 
-# Setup frontend with enhanced login functionality
+# Setup frontend with enhanced error handling
 setup_frontend() {
     log "Setting up frontend..."
     
     rm -rf "$FRONTEND_DIR"
     cd "$PANEL_DIR"
     
-    npx create-react-app frontend --template typescript
-    cd "$FRONTEND_DIR"
+    # Create React app with specific Node version
+    export NVM_DIR="$HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    nvm use 18
     
+    npx create-react-app frontend --template typescript || error "Failed to create React app"
+    cd "$FRONTEND_DIR" || error "Failed to enter frontend directory"
+    
+    # Install dependencies with error handling
     npm install \
         react-router-dom \
         axios \
         @headlessui/react \
         @heroicons/react \
-        js-cookie --legacy-peer-deps
+        js-cookie \
+        tailwindcss \
+        @tailwindcss/forms \
+        --legacy-peer-deps || error "Failed to install frontend dependencies"
 
-    # Create enhanced App.js with new login form
+    # Initialize Tailwind CSS
+    npx tailwindcss init -p
+
+    # Create enhanced App.js
     cat > src/App.js << 'EOL'
 import React, { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
@@ -573,8 +618,8 @@ function Login() {
             const response = await axios.post('/api/auth/login', formData);
             
             if (response.data.access_token) {
-                Cookies.set('access_token', response.data.access_token);
-                Cookies.set('refresh_token', response.data.refresh_token);
+                Cookies.set('access_token', response.data.access_token, { secure: true });
+                Cookies.set('refresh_token', response.data.refresh_token, { secure: true });
                 localStorage.setItem('username', response.data.username);
                 localStorage.setItem('is_admin', response.data.is_admin);
                 
@@ -594,8 +639,8 @@ function Login() {
                                 });
                                 
                                 const { access_token, refresh_token } = refreshResponse.data;
-                                Cookies.set('access_token', access_token);
-                                Cookies.set('refresh_token', refresh_token);
+                                Cookies.set('access_token', access_token, { secure: true });
+                                Cookies.set('refresh_token', refresh_token, { secure: true });
                                 
                                 originalRequest.headers['Authorization'] = `Bearer ${access_token}`;
                                 return axios(originalRequest);
@@ -619,8 +664,10 @@ function Login() {
             console.error('Login error:', error);
             if (error.response?.status === 429) {
                 setError('Too many failed attempts. Please try again later.');
-            } else {
+            } else if (error.response?.status === 401) {
                 setError('Invalid username or password');
+            } else {
+                setError('An error occurred during login. Please try again.');
             }
         } finally {
             setIsLoading(false);
@@ -673,7 +720,17 @@ function Login() {
                                 isLoading ? 'opacity-50 cursor-not-allowed' : ''
                             }`}
                         >
-                            {isLoading ? 'Signing in...' : 'Sign in'}
+                            {isLoading ? (
+                                <>
+                                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                    </svg>
+                                    Signing in...
+                                </>
+                            ) : (
+                                'Sign in'
+                            )}
                         </button>
                     </div>
                 </form>
@@ -683,7 +740,59 @@ function Login() {
 }
 
 function Dashboard() {
-    return <h1>Welcome to Dashboard</h1>;
+    const username = localStorage.getItem('username');
+    const isAdmin = localStorage.getItem('is_admin') === 'true';
+
+    const handleLogout = async () => {
+        try {
+            const token = Cookies.get('access_token');
+            await axios.post('/api/auth/logout', {}, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+        } catch (error) {
+            console.error('Logout error:', error);
+        } finally {
+            Cookies.remove('access_token');
+            Cookies.remove('refresh_token');
+            localStorage.removeItem('username');
+            localStorage.removeItem('is_admin');
+            window.location.href = '/login';
+        }
+    };
+
+    return (
+        <div className="min-h-screen bg-gray-100">
+            <nav className="bg-white shadow-sm">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div className="flex justify-between h-16">
+                        <div className="flex items-center">
+                            <span className="text-lg font-semibold">IRSSH Panel</span>
+                        </div>
+                        <div className="flex items-center space-x-4">
+                            <span className="text-gray-700">Welcome, {username}</span>
+                            {isAdmin && (
+                                <span className="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded">
+                                    Admin
+                                </span>
+                            )}
+                            <button
+                                onClick={handleLogout}
+                                className="text-gray-700 hover:text-gray-900 font-medium"
+                            >
+                                Logout
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </nav>
+            <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+                <div className="px-4 py-6 sm:px-0">
+                    <h1 className="text-2xl font-semibold text-gray-900">Dashboard</h1>
+                    <p className="mt-4">Welcome to your dashboard!</p>
+                </div>
+            </main>
+        </div>
+    );
 }
 
 function App() {
@@ -701,10 +810,27 @@ function App() {
 export default App;
 EOL
 
-    npm run build
+    # Create index.js
+    cat > src/index.js << 'EOL'
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import './index.css';
+import App from './App';
+
+const container = document.getElementById('root');
+const root = createRoot(container);
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+EOL
+
+    # Build frontend application
+    npm run build || error "Failed to build frontend application"
 }
 
-# Configure Nginx
+# Configure Nginx with enhanced security
 setup_nginx() {
     log "Configuring Nginx..."
     
@@ -716,15 +842,16 @@ server {
     root $FRONTEND_DIR/build;
     index index.html;
     
-    # Improved security headers
-    add_header X-Frame-Options "SAMEORIGIN";
-    add_header X-XSS-Protection "1; mode=block";
-    add_header X-Content-Type-Options "nosniff";
-    add_header Referrer-Policy "strict-origin-when-cross-origin";
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline';";
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline';" always;
     
     location / {
         try_files \$uri \$uri/ /index.html;
+        autoindex off;
         
         # Basic DoS protection
         limit_req zone=one burst=10 nodelay;
@@ -739,13 +866,15 @@ server {
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_cache_bypass \$http_upgrade;
         
-        # Security headers for API
+        # CORS headers
         add_header 'Access-Control-Allow-Origin' '*' always;
         add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
         add_header 'Access-Control-Allow-Headers' '*' always;
         
+        # Handle preflight requests
         if (\$request_method = 'OPTIONS') {
             add_header 'Access-Control-Allow-Origin' '*';
             add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS';
@@ -782,11 +911,13 @@ EOL
     nginx -t || error "Nginx configuration test failed"
 }
 
-# Configure Supervisor with enhanced settings
+# Configure Supervisor with enhanced monitoring
 setup_supervisor() {
     log "Configuring Supervisor..."
     
     mkdir -p /var/log/irssh
+    chown -R root:root /var/log/irssh
+    chmod -R 750 /var/log/irssh
     
     cat > /etc/supervisor/conf.d/irssh-panel.conf << EOL
 [program:irssh-panel]
@@ -808,27 +939,25 @@ environment=
     DB_USER="irssh_admin",
     DB_PASS="$(grep DB_PASS $CONFIG_DIR/database.env | cut -d= -f2)"
 
-[supervisord]
-nodaemon=false
-logfile=/var/log/supervisor/supervisord.log
-pidfile=/var/run/supervisord.pid
-
-[unix_http_server]
-file=/var/run/supervisor.sock
-chmod=0700
-
-[supervisorctl]
-serverurl=unix:///var/run/supervisor.sock
-
-[rpcinterface:supervisor]
-supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
+# Monitor for crashes and high memory usage
+startretries=3
+stopwaitsecs=10
+stopsignal=TERM
+stopasgroup=true
+killasgroup=true
+exitcodes=0,2
+stdout_logfile_maxbytes=50MB
+stdout_logfile_backups=5
+stderr_logfile_maxbytes=50MB
+stderr_logfile_backups=5
 EOL
 
+    # Reload supervisor configuration
     supervisorctl reread
     supervisorctl update
 }
 
-# Enhanced firewall configuration
+# Configure enhanced firewall
 setup_firewall() {
     log "Setting up firewall rules..."
     
@@ -849,22 +978,25 @@ setup_firewall() {
     ufw allow http
     ufw allow https
     
-    # Allow API port
-    ufw allow $DEFAULT_API_PORT/tcp
+    # Allow API port with rate limiting
+    ufw limit $DEFAULT_API_PORT/tcp comment 'API port with rate limiting'
     
     # Enable UFW
     ufw --force enable
 }
 
-# Main installation function with enhanced error handling
+# Main installation function
 main() {
+    # Verify root privileges
+    if [[ $EUID -ne 0 ]]; then
+        error "This script must be run as root"
+    fi
+
     setup_logging
     log "Starting IRSSH Panel installation..."
     
-    # Check if script is run as root
-    if [[ $EUID -ne 0 ]]; then
-        error "This script must be run as root"
-   fi
+    # Create installation directory
+    mkdir -p "$PANEL_DIR"
     
     check_requirements
     install_system_packages
@@ -877,11 +1009,24 @@ main() {
     setup_supervisor
     setup_firewall
     
+    # Set correct permissions
+    chown -R root:root "$PANEL_DIR"
+    chmod -R 755 "$PANEL_DIR"
+    chmod 600 "$CONFIG_DIR/database.env"
+    
     # Restart services
+    systemctl restart postgresql
     systemctl restart nginx
     supervisorctl restart irssh-panel
     
-    # Print installation details
+    # Verify service status
+    local services=(postgresql nginx supervisor)
+    for service in "${services[@]}"; do
+        if ! systemctl is-active --quiet $service; then
+            error "$service failed to start"
+        fi
+    done
+    
     log "Installation completed successfully!"
     echo
     echo "IRSSH Panel has been installed!"
@@ -893,27 +1038,34 @@ main() {
     echo "Panel URL: http://YOUR-IP"
     echo "API URL: http://YOUR-IP/api"
     echo
+    echo "Installation log is available at: $LOG_FILE"
+    echo
     echo "Please save these credentials and change the password after first login!"
     echo
-    echo "Installation log is available at: $LOG_FILE"
+    echo "Note: Allow a few minutes for all services to fully initialize."
 }
 
 # Cleanup function
 cleanup() {
-    echo "Cleaning up..."
+    log "Cleaning up..."
     # Stop services
     supervisorctl stop irssh-panel
     systemctl stop nginx
+    systemctl stop postgresql
     
     # Remove installation if it failed
     if [[ $? -ne 0 ]]; then
         rm -rf "$PANEL_DIR"
         rm -f /etc/nginx/sites-enabled/irssh-panel
         rm -f /etc/supervisor/conf.d/irssh-panel.conf
+        
+        # Drop database and user
+        sudo -u postgres psql -c "DROP DATABASE IF EXISTS irssh;"
+        sudo -u postgres psql -c "DROP USER IF EXISTS irssh_admin;"
     fi
 }
 
-# Trap SIGINT and SIGTERM
+# Trap signals
 trap cleanup SIGINT SIGTERM
 
 # Start installation
