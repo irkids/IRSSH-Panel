@@ -544,19 +544,18 @@ EOL
 setup_frontend() {
     log "Setting up frontend..."
     
-    cd "$PANEL_DIR"
-    if [ -d "$FRONTEND_DIR" ]; then
-        rm -rf "$FRONTEND_DIR"/*
-        rm -rf "$FRONTEND_DIR"/.* 2>/dev/null || true
-    fi
+    cd "$PANEL_DIR" || error "Failed to change directory to $PANEL_DIR"
+    rm -rf "$FRONTEND_DIR"
     mkdir -p "$FRONTEND_DIR"
-    cd "$FRONTEND_DIR"
+    cd "$FRONTEND_DIR" || error "Failed to change directory to $FRONTEND_DIR"
     
     export NVM_DIR="$HOME/.nvm"
     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
     nvm use 18
-
-    # نصب وابستگی‌ها
+    
+    mkdir -p src public
+    
+    # Create package.json
     cat > package.json << 'EOL'
 {
   "name": "irssh-frontend",
@@ -565,9 +564,7 @@ setup_frontend() {
   "dependencies": {
     "@mantine/core": "^7.0.0",
     "@mantine/hooks": "^7.0.0",
-    "@emotion/react": "^11.11.0",
     "axios": "^1.6.0",
-    "js-cookie": "^3.0.5",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.20.0",
@@ -578,20 +575,26 @@ setup_frontend() {
   },
   "scripts": {
     "start": "react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "build": "react-scripts build"
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
   }
 }
 EOL
 
-    npm install
-
-    mkdir -p public src
-    cp node_modules/react-scripts/template/public/index.html public/
-    cp node_modules/react-scripts/template/src/index.js src/
-
-    npm run build
+    npm install || error "Failed to install npm packages"
+    
+    npm run build || error "Failed to build frontend"
 }
     
     # Create React app with specific Node version
@@ -1072,20 +1075,11 @@ main() {
 # Cleanup function
 cleanup() {
     log "Cleaning up..."
-    # Stop services
-    supervisorctl stop irssh-panel
-    systemctl stop nginx
-    systemctl stop postgresql
-    
-    # Remove installation if it failed
-    if [[ $? -ne 0 ]]; then
+    if [[ -d "$FRONTEND_DIR" ]]; then
+        rm -rf "$FRONTEND_DIR"
+    fi
+    if [[ -d "$PANEL_DIR" ]]; then
         rm -rf "$PANEL_DIR"
-        rm -f /etc/nginx/sites-enabled/irssh-panel
-        rm -f /etc/supervisor/conf.d/irssh-panel.conf
-        
-        # Drop database and user
-        sudo -u postgres psql -c "DROP DATABASE IF EXISTS irssh;"
-        sudo -u postgres psql -c "DROP USER IF EXISTS irssh_admin;"
     fi
 }
 
