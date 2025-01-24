@@ -544,33 +544,54 @@ EOL
 setup_frontend() {
     log "Setting up frontend..."
     
-    # پاک کردن دایرکتوری قبلی
-    rm -rf "$FRONTEND_DIR"
     cd "$PANEL_DIR"
+    if [ -d "$FRONTEND_DIR" ]; then
+        rm -rf "$FRONTEND_DIR"/*
+        rm -rf "$FRONTEND_DIR"/.* 2>/dev/null || true
+    fi
+    mkdir -p "$FRONTEND_DIR"
+    cd "$FRONTEND_DIR"
     
-    # نصب و تنظیم Node.js
     export NVM_DIR="$HOME/.nvm"
     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
     nvm use 18
-    
-    # نصب ابزارهای مورد نیاز
-    npm install -g create-react-app tailwindcss
-
-    # ایجاد پروژه جدید
-    npx create-react-app frontend --template typescript || error "Failed to create React app"
-    cd "$FRONTEND_DIR" || error "Failed to enter frontend directory"
 
     # نصب وابستگی‌ها
-    npm install \
-        @mantine/core \
-        @mantine/hooks \
-        @emotion/react \
-        axios \
-        js-cookie \
-        react-router-dom \
-        @babel/plugin-proposal-private-property-in-object --save-dev
+    cat > package.json << 'EOL'
+{
+  "name": "irssh-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@mantine/core": "^7.0.0",
+    "@mantine/hooks": "^7.0.0",
+    "@emotion/react": "^11.11.0",
+    "axios": "^1.6.0",
+    "js-cookie": "^3.0.5",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.20.0",
+    "react-scripts": "5.0.1"
+  },
+  "devDependencies": {
+    "@babel/plugin-proposal-private-property-in-object": "^7.21.11"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
+  }
+}
+EOL
 
-    npm run build || error "Failed to build frontend"
+    npm install
+
+    mkdir -p public src
+    cp node_modules/react-scripts/template/public/index.html public/
+    cp node_modules/react-scripts/template/src/index.js src/
+
+    npm run build
 }
     
     # Create React app with specific Node version
