@@ -152,34 +152,16 @@ setup_database() {
     local DB_USER="irssh_admin"
     local DB_PASS=$(generate_secure_key)
     
-    # Drop existing database and user if they exist
-    sudo -u postgres psql -c "DROP DATABASE IF EXISTS $DB_NAME;"
-    sudo -u postgres psql -c "DROP USER IF EXISTS $DB_USER;"
+    # تغییر به کاربر postgres برای اجرای دستورات
+    sudo -u postgres bash -c "psql -c \"DROP DATABASE IF EXISTS $DB_NAME WITH (FORCE);\""
+    sudo -u postgres bash -c "psql -c \"DROP USER IF EXISTS $DB_USER;\""
     
-    # Create new user and database
-    sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
-    sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
-    sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;"
+    # ایجاد کاربر و دیتابیس جدید
+    sudo -u postgres bash -c "psql -c \"CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';\""
+    sudo -u postgres bash -c "psql -c \"CREATE DATABASE $DB_NAME OWNER $DB_USER;\""
+    sudo -u postgres bash -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;\""
     
-    # Update pg_hba.conf for MD5 authentication
-    local PG_HBA_CONF="/etc/postgresql/*/main/pg_hba.conf"
-    local PG_CONF_FILE=$(ls $PG_HBA_CONF 2>/dev/null | head -n 1)
-    
-    if [ -f "$PG_CONF_FILE" ]; then
-        # Backup original
-        cp "$PG_CONF_FILE" "${PG_CONF_FILE}.bak"
-        
-        # Update authentication method
-        sed -i 's/peer/md5/g' "$PG_CONF_FILE"
-        sed -i 's/ident/md5/g' "$PG_CONF_FILE"
-        
-        # Restart PostgreSQL
-        systemctl restart postgresql
-    else
-        error "PostgreSQL configuration file not found"
-    fi
-    
-    # Save database configuration
+    # ذخیره تنظیمات دیتابیس
     mkdir -p "$CONFIG_DIR"
     cat > "$CONFIG_DIR/database.env" << EOL
 DB_HOST=localhost
@@ -190,8 +172,8 @@ DB_PASS=$DB_PASS
 EOL
     chmod 600 "$CONFIG_DIR/database.env"
     
-    # Verify database connection
-    if ! PGPASSWORD=$DB_PASS psql -h localhost -U $DB_USER -d $DB_NAME -c '\q' 2>/dev/null; then
+    # بررسی اتصال به دیتابیس
+    if ! sudo -u postgres PGPASSWORD=$DB_PASS psql -h localhost -U $DB_USER -d $DB_NAME -c '\q'; then
         error "Database connection test failed"
     fi
 }
