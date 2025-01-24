@@ -152,22 +152,16 @@ setup_database() {
     local DB_NAME="irssh"
     local DB_USER="irssh_admin"
     local DB_PASS=$(generate_secure_key)
-    
-    # تنظیمات اولیه بدون نیاز به پسورد
-    cat > /etc/postgresql/*/main/pg_hba.conf << EOL
-local   all             postgres                                peer
-local   all             all                                     md5
-host    all             all             127.0.0.1/32            md5
-host    all             all             ::1/128                 md5
-EOL
 
-    systemctl restart postgresql
-    sleep 3
+    # مستقیم با سوکت یونیکس وصل میشیم
+    sudo -i -u postgres psql <<EOF
+DROP DATABASE IF EXISTS $DB_NAME;
+DROP USER IF EXISTS $DB_USER;
+CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';
+CREATE DATABASE $DB_NAME OWNER $DB_USER;
+GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;
+EOF
 
-    # ایجاد دیتابیس و کاربر
-    su postgres -c "createuser --createdb --pwprompt $DB_USER"
-    su postgres -c "createdb --owner=$DB_USER $DB_NAME"
-    
     mkdir -p "$CONFIG_DIR"
     cat > "$CONFIG_DIR/database.env" << EOL
 DB_HOST=localhost
