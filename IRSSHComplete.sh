@@ -152,16 +152,17 @@ setup_database() {
     local DB_USER="irssh_admin"
     local DB_PASS=$(generate_secure_key)
     
-    # تغییر به کاربر postgres برای اجرای دستورات
-    sudo -u postgres bash -c "psql -c \"DROP DATABASE IF EXISTS $DB_NAME WITH (FORCE);\""
-    sudo -u postgres bash -c "psql -c \"DROP USER IF EXISTS $DB_USER;\""
+    # تنظیم پسورد اولیه برای کاربر postgres
+    sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD 'postgres';"
     
-    # ایجاد کاربر و دیتابیس جدید
-    sudo -u postgres bash -c "psql -c \"CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';\""
-    sudo -u postgres bash -c "psql -c \"CREATE DATABASE $DB_NAME OWNER $DB_USER;\""
-    sudo -u postgres bash -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;\""
+    # حذف و ایجاد مجدد دیتابیس و کاربر
+    PGPASSWORD=postgres psql -U postgres -h localhost -c "DROP DATABASE IF EXISTS $DB_NAME WITH (FORCE);"
+    PGPASSWORD=postgres psql -U postgres -h localhost -c "DROP USER IF EXISTS $DB_USER;"
+    PGPASSWORD=postgres psql -U postgres -h localhost -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
+    PGPASSWORD=postgres psql -U postgres -h localhost -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
+    PGPASSWORD=postgres psql -U postgres -h localhost -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;"
     
-    # ذخیره تنظیمات دیتابیس
+    # ذخیره تنظیمات
     mkdir -p "$CONFIG_DIR"
     cat > "$CONFIG_DIR/database.env" << EOL
 DB_HOST=localhost
@@ -172,8 +173,9 @@ DB_PASS=$DB_PASS
 EOL
     chmod 600 "$CONFIG_DIR/database.env"
     
-    # بررسی اتصال به دیتابیس
-    if ! sudo -u postgres PGPASSWORD=$DB_PASS psql -h localhost -U $DB_USER -d $DB_NAME -c '\q'; then
+    # تست اتصال بدون نیاز به پسورد
+    export PGPASSWORD=$DB_PASS
+    if ! psql -h localhost -U $DB_USER -d $DB_NAME -c '\q' 2>/dev/null; then
         error "Database connection test failed"
     fi
 }
