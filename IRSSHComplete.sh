@@ -246,14 +246,15 @@ setup_nginx() {
     
     cat > /etc/nginx/sites-available/irssh-panel << EOL
 server {
-    listen 80;
+    listen 80 default_server;
     server_name _;
     
-    root $FRONTEND_DIR/build;
+    root $FRONTEND_DIR;
     index index.html;
     
     location / {
         try_files \$uri \$uri/ /index.html;
+        autoindex on;
     }
     
     location /api {
@@ -264,19 +265,13 @@ server {
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        
-        add_header 'Access-Control-Allow-Origin' '*' always;
-        add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
-        add_header 'Access-Control-Allow-Headers' '*' always;
     }
 }
 EOL
 
-    rm -f /etc/nginx/sites-enabled/default
-    ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
-    
-    nginx -t || error "Nginx configuration test failed"
-}
+ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
+rm -f /etc/nginx/sites-enabled/default
+systemctl restart nginx
 
 # Configure Supervisor
 setup_supervisor() {
