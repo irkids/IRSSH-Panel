@@ -1,251 +1,139 @@
 #!/bin/bash
 
-# IRSSH Panel Installation Script v2.6
-# Colors for output
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-
-# Configuration directories
+# تنظیمات اصلی
 PANEL_DIR="/opt/irssh-panel"
 FRONTEND_DIR="$PANEL_DIR/frontend"
 BACKEND_DIR="$PANEL_DIR/backend"
 CONFIG_DIR="$PANEL_DIR/config"
 LOG_DIR="/var/log/irssh"
 VENV_DIR="$PANEL_DIR/venv"
-
-# Default configuration
 DEFAULT_HTTP_PORT=80
 DEFAULT_HTTPS_PORT=443
 DEFAULT_API_PORT=8000
 
-# Cleanup function must be defined at the start
-cleanup() {
-    log "Cleaning up..."
-    systemctl stop nginx
-    supervisorctl stop irssh-panel
-    rm -rf "$PANEL_DIR/frontend"
-    [[ -d "$PANEL_DIR" ]] && mkdir -p "$PANEL_DIR/frontend"
-}
+# رنگها
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
 
-# Generate random strings for security
-generate_secure_key() {
-    openssl rand -hex 32
-}
+# توابع پایه
+log() { echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"; }
+error() { echo -e "${RED}[$(date +'%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1" >&2; exit 1; }
+info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+generate_secure_key() { openssl rand -hex 32; }
 
-JWT_SECRET=$(generate_secure_key)
-
-# Logging functions
-setup_logging() {
-    mkdir -p "$LOG_DIR"
-    LOG_FILE="$LOG_DIR/install.log"
-    exec 1> >(tee -a "$LOG_FILE")
-    exec 2> >(tee -a "$LOG_FILE" >&2)
-    chmod 644 "$LOG_FILE"
-}
-
-log() {
-    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"
-}
-
-error() {
-    echo -e "${RED}[$(date +'%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1" >&2
-    cleanup
-    exit 1
-}
-
-info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-# Check system requirements
+# پیش‌نیازها
 check_requirements() {
-    log "Checking system requirements..."
-    local mem_total=$(free -m | awk '/^Mem:/{print $2}')
-    local disk_free=$(df -m / | awk 'NR==2 {print $4}')
-    
-    [[ $mem_total -lt 1024 ]] && error "Minimum 1GB RAM required"
-    [[ $disk_free -lt 2048 ]] && error "Minimum 2GB free disk space required"
-    
+    log "Checking requirements..."
     local requirements=(curl wget git python3 pip3)
     for cmd in "${requirements[@]}"; do
-        command -v "$cmd" >/dev/null 2>&1 || error "$cmd is required but not installed"
+        command -v "$cmd" >/dev/null 2>&1 || error "$cmd is required"
     done
 }
 
-# Install system packages
+# نصب پکیج‌ها
 install_system_packages() {
     log "Installing system packages..."
-    apt-get update || error "Failed to update package lists"
-    
-    DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        python3 \
-        python3-pip \
-        python3-venv \
-        postgresql \
-        postgresql-contrib \
-        nginx \
-        supervisor \
-        curl \
-        git \
-        certbot \
-        python3-certbot-nginx \
-        net-tools || error "Failed to install system packages"
+    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        python3 python3-pip python3-venv postgresql postgresql-contrib nginx \
+        supervisor curl git certbot python3-certbot-nginx net-tools || error "Package installation failed"
 }
 
-# Setup Node.js
+# تنظیم Node.js
 setup_node() {
-    log "Setting up Node.js with nvm..."
-    
+    log "Setting up Node.js..."
     export NVM_DIR="$HOME/.nvm"
     curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
-    
     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-    
-    nvm install 18
-    nvm use 18 || error "Failed to use Node.js 18"
+    nvm install 18 && nvm use 18
+    command -v node >/dev/null 2>&1 || error "Node.js installation failed"
 }
 
-# Setup Python environment
+# تنظیم محیط Python
 setup_python_env() {
     log "Setting up Python environment..."
     python3 -m venv "$VENV_DIR"
     source "$VENV_DIR/bin/activate"
-    
     pip install --upgrade pip
-    pip install \
-        fastapi[all] \
-        uvicorn[standard] \
-        sqlalchemy[asyncio] \
-        psycopg2-binary \
-        python-jose[cryptography] \
-        passlib[bcrypt] \
-        python-multipart \
-        aiofiles \
-        python-dotenv \
-        pydantic-settings \
-        asyncpg \
-        bcrypt \
-        pydantic \
-        requests \
-        aiohttp \
-        psutil || error "Failed to install Python packages"
+    pip install fastapi[all] uvicorn[standard] sqlalchemy[asyncio] \
+        psycopg2-binary python-jose[cryptography] passlib[bcrypt] \
+        python-multipart aiofiles python-dotenv pydantic-settings \
+        asyncpg bcrypt pydantic requests aiohttp psutil
 }
 
-# Configure PostgreSQL
+# تنظیم دیتابیس
 setup_database() {
-    log "Setting up PostgreSQL..."
+    log "Setting up database..."
+    DB_NAME="irssh"
+    DB_USER="irssh_admin"
+    DB_PASS=$(generate_secure_key)
     
     systemctl start postgresql
     systemctl enable postgresql
-    sleep 5
-    
-    local DB_NAME="irssh"
-    local DB_USER="irssh_admin"
-    local DB_PASS=$(generate_secure_key)
-
-    # تنظیم pg_hba.conf برای اجازه اتصال از localhost
-    cat > /etc/postgresql/*/main/pg_hba.conf << EOL
-local   all             postgres                                peer
-local   all             all                                     md5
-host    all             all             127.0.0.1/32            md5
-host    all             all             ::1/128                 md5
-EOL
-
-    systemctl restart postgresql
     sleep 3
-
-    # ایجاد کاربر و دیتابیس با استفاده از peer authentication
+    
     su - postgres -c "psql -c \"DROP DATABASE IF EXISTS $DB_NAME WITH (FORCE);\""
-    su - postgres -c "psql -c \"DROP ROLE IF EXISTS $DB_USER;\""
+    su - postgres -c "psql -c \"DROP USER IF EXISTS $DB_USER;\""
     su - postgres -c "psql -c \"CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';\""
     su - postgres -c "psql -c \"CREATE DATABASE $DB_NAME OWNER $DB_USER;\""
     su - postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;\""
     
     mkdir -p "$CONFIG_DIR"
-    cat > "$CONFIG_DIR/database.env" << EOL
-DB_HOST=localhost
+    echo "DB_HOST=localhost
 DB_PORT=5432
 DB_NAME=$DB_NAME
 DB_USER=$DB_USER
-DB_PASS=$DB_PASS
-EOL
+DB_PASS=$DB_PASS" > "$CONFIG_DIR/database.env"
     chmod 600 "$CONFIG_DIR/database.env"
 }
 
-# Setup frontend with simplified React setup
+# تنظیم frontend
 setup_frontend() {
     log "Setting up frontend..."
-    
-    # Cleanup previous installation
     rm -rf "$FRONTEND_DIR"
     mkdir -p "$FRONTEND_DIR"
-    cd "$FRONTEND_DIR" || error "Failed to enter frontend directory"
-    
-    # Initialize npm project
-    cat > package.json << 'EOL'
-{
-  "name": "irssh-frontend",
-  "version": "0.1.0",
-  "private": true,
-  "dependencies": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-router-dom": "^6.20.0",
-    "axios": "^1.6.0"
-  },
-  "scripts": {
-    "build": "echo 'Build completed'"
-  }
-}
-EOL
+    cd "$FRONTEND_DIR"
 
-    # Create minimal React app structure
+    # تنظیم package.json
+    echo '{
+        "name": "irssh-frontend",
+        "version": "0.1.0",
+        "private": true,
+        "dependencies": {
+            "react": "^18.2.0",
+            "react-dom": "^18.2.0",
+            "react-router-dom": "^6.20.0",
+            "axios": "^1.6.0"
+        }
+    }' > package.json
+
+    # ساخت فایل‌های اصلی
     mkdir -p src public
-    
-    # Create index.html
-    cat > public/index.html << 'EOL'
-<!DOCTYPE html>
-<html lang="en">
+    echo '<!DOCTYPE html>
+<html>
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>IRSSH Panel</title>
 </head>
 <body>
     <div id="root"></div>
 </body>
-</html>
-EOL
+</html>' > public/index.html
 
-    # Create minimal React app
-    cat > src/index.js << 'EOL'
-import React from 'react';
-import ReactDOM from 'react-dom';
+    echo 'import React from "react";
+import ReactDOM from "react-dom";
+ReactDOM.render(<div>IRSSH Panel</div>, document.getElementById("root"));' > src/index.js
 
-function App() {
-    return <div>IRSSH Panel</div>;
+    npm install
 }
 
-ReactDOM.render(<App />, document.getElementById('root'));
-EOL
-
-    # Install dependencies
-    npm install --no-audit --no-fund || error "Failed to install npm packages"
-}
-
-# Configure nginx
+# تنظیم Nginx
 setup_nginx() {
-    log "Configuring Nginx..."
+    log "Setting up Nginx..."
     
-    cat > /etc/nginx/sites-available/irssh-panel << EOL
-server {
+    echo "server {
     listen 80 default_server;
     server_name _;
     
@@ -266,49 +154,37 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     }
+}" > /etc/nginx/sites-available/irssh-panel
+
+    rm -f /etc/nginx/sites-enabled/default
+    ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
+    nginx -t || error "Nginx config test failed"
 }
-EOL
 
-ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
-rm -f /etc/nginx/sites-enabled/default
-systemctl restart nginx
-
-# Configure Supervisor
+# تنظیم Supervisor
 setup_supervisor() {
-    log "Configuring Supervisor..."
-    
+    log "Setting up Supervisor..."
     mkdir -p /var/log/irssh
     chmod 755 /var/log/irssh
     
-    cat > /etc/supervisor/conf.d/irssh-panel.conf << EOL
-[program:irssh-panel]
+    echo "[program:irssh-panel]
 directory=$BACKEND_DIR
-command=$VENV_DIR/bin/uvicorn app.main:app --host 0.0.0.0 --port $DEFAULT_API_PORT --reload
+command=$VENV_DIR/bin/uvicorn app.main:app --host 0.0.0.0 --port $DEFAULT_API_PORT
 user=root
 autostart=true
 autorestart=true
 stdout_logfile=/var/log/irssh/uvicorn.out.log
 stderr_logfile=/var/log/irssh/uvicorn.err.log
-environment=
-    PYTHONPATH="$BACKEND_DIR",
-    DB_HOST="localhost",
-    DB_PORT="5432",
-    DB_NAME="irssh",
-    DB_USER="irssh_admin",
-    DB_PASS="$(grep DB_PASS $CONFIG_DIR/database.env | cut -d= -f2)"
-EOL
+environment=PYTHONPATH=\"$BACKEND_DIR\",DB_HOST=\"localhost\",DB_PORT=\"5432\",DB_NAME=\"irssh\",DB_USER=\"irssh_admin\",DB_PASS=\"$(grep DB_PASS $CONFIG_DIR/database.env | cut -d= -f2)\"" > /etc/supervisor/conf.d/irssh-panel.conf
 
     supervisorctl reread
     supervisorctl update
 }
 
-# Main installation function
+# تابع اصلی
 main() {
-    if [[ $EUID -ne 0 ]]; then
-        error "This script must be run as root"
-    fi
-
-    setup_logging
+    [[ $EUID -ne 0 ]] && error "This script must be run as root"
+    
     log "Starting IRSSH Panel installation..."
     
     check_requirements
@@ -328,5 +204,4 @@ main() {
     echo "API URL: http://YOUR-IP/api"
 }
 
-trap cleanup EXIT
 main "$@"
