@@ -544,18 +544,24 @@ EOL
 setup_frontend() {
     log "Setting up frontend..."
     
-    cd "$PANEL_DIR"
+    # پاک کردن دایرکتوری قبلی
     rm -rf "$FRONTEND_DIR"
+    cd "$PANEL_DIR"
     
+    # نصب و تنظیم Node.js
     export NVM_DIR="$HOME/.nvm"
     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
     nvm use 18
+    
+    # نصب ابزارهای مورد نیاز
+    npm install -g create-react-app tailwindcss
 
-    npx create-react-app frontend --template typescript
-    cd "$FRONTEND_DIR"
+    # ایجاد پروژه جدید
+    npx create-react-app frontend --template typescript || error "Failed to create React app"
+    cd "$FRONTEND_DIR" || error "Failed to enter frontend directory"
 
-    # نصب وابستگی‌های ضروری
-    npm install --save \
+    # نصب وابستگی‌ها
+    npm install \
         @mantine/core \
         @mantine/hooks \
         @emotion/react \
@@ -564,10 +570,7 @@ setup_frontend() {
         react-router-dom \
         @babel/plugin-proposal-private-property-in-object --save-dev
 
-    # اصلاح package.json
-    sed -i 's/"homepage": ".*"/"homepage": "\/"/g' package.json
-
-    npm run build
+    npm run build || error "Failed to build frontend"
 }
     
     # Create React app with specific Node version
