@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # IRSSH Panel Installation Script v2.5
-# Updated with fixed authentication system
+# Updated with enhanced authentication system
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -147,9 +147,9 @@ setup_database() {
     systemctl start postgresql
     systemctl enable postgresql
     
-    local DB_NAME="irssh"
-    local DB_USER="irssh_admin"
-    local DB_PASS=$(generate_secure_key)
+    DB_NAME="irssh"
+    DB_USER="irssh_admin"
+    DB_PASS=$(generate_secure_key)
     
     # Create user if not exists
     sudo -u postgres psql -c "DO \$\$
@@ -178,7 +178,7 @@ EOL
     chmod 600 "$CONFIG_DIR/database.env"
 }
 
-# Setup backend structure
+# Setup backend structure with enhanced login system
 setup_backend() {
     log "Setting up backend structure..."
     
@@ -192,12 +192,13 @@ setup_backend() {
     # Create Python package files
     find "$BACKEND_DIR/app" -type d -exec touch {}/__init__.py \;
 
-    # Create config.py
+    # Create enhanced config.py
     cat > app/core/config.py << EOL
 from pydantic_settings import BaseSettings
+from datetime import timedelta
 
 class Settings(BaseSettings):
-    SECRET_KEY: str = "$(generate_secure_key)"  # Replace in production
+    SECRET_KEY: str = "$(generate_secure_key)"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
@@ -207,45 +208,100 @@ class Settings(BaseSettings):
     DB_USER: str = "irssh_admin"
     DB_PASS: str = "$(grep DB_PASS "$CONFIG_DIR/database.env" | cut -d= -f2)"
 
+    # Enhanced security settings
+    MINIMUM_PASSWORD_LENGTH: int = 8
+    PASSWORD_RESET_TOKEN_EXPIRE_HOURS: int = 24
+    MAX_LOGIN_ATTEMPTS: int = 5
+    LOGIN_ATTEMPT_WINDOW: timedelta = timedelta(minutes=15)
+    SESSION_LIFETIME: timedelta = timedelta(hours=24)
+
 settings = Settings()
 EOL
 
-    # Create security.py
+    # Create enhanced security.py
     cat > app/core/security.py << 'EOL'
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Dict
 from passlib.context import CryptContext
 from jose import jwt
 from .config import settings
+import time
+from collections import defaultdict
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# Enhanced login attempt tracking
+login_attempts: Dict[str, list] = defaultdict(list)
+
+def clean_old_attempts(username: str) -> None:
+    """Remove login attempts older than the window"""
+    current_time = time.time()
+    window = settings.LOGIN_ATTEMPT_WINDOW.total_seconds()
+    login_attempts[username] = [
+        attempt for attempt in login_attempts[username]
+        if current_time - attempt < window
+    ]
+
+def check_login_attempts(username: str) -> bool:
+    """Check if user has exceeded maximum login attempts"""
+    clean_old_attempts(username)
+    return len(login_attempts[username]) < settings.MAX_LOGIN_ATTEMPTS
+
+def record_login_attempt(username: str) -> None:
+    """Record a failed login attempt"""
+    login_attempts[username].append(time.time())
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
 def get_password_hash(password: str) -> str:
+    if len(password) < settings.MINIMUM_PASSWORD_LENGTH:
+        raise ValueError(f"Password must be at least {settings.MINIMUM_PASSWORD_LENGTH} characters long")
     return pwd_context.hash(password)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode.update({"exp": expire})
+    to_encode.update({
+        "exp": expire,
+        "iat": datetime.utcnow(),
+        "type": "access"
+    })
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+def create_refresh_token(data: dict) -> str:
+    to_encode = data.copy()
+    expire = datetime.utcnow() + settings.SESSION_LIFETIME
+    to_encode.update({
+        "exp": expire,
+        "iat": datetime.utcnow(),
+        "type": "refresh"
+    })
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+def verify_token(token: str) -> dict:
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        return payload
+    except jwt.JWTError:
+        return None
 EOL
 
-    # Create database.py
+    # Create enhanced database.py
     cat > app/core/database.py << 'EOL'
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from .config import settings
+import contextlib
 
 SQLALCHEMY_DATABASE_URL = f"postgresql://{settings.DB_USER}:{settings.DB_PASS}@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
 
-engine = create_engine(SQLALCHEMY_DATABASE_URL)
+engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+@contextlib.contextmanager
 def get_db():
     db = SessionLocal()
     try:
@@ -254,9 +310,9 @@ def get_db():
         db.close()
 EOL
 
-    # Create user model
+    # Create enhanced user model
     cat > app/models/user.py << 'EOL'
-from sqlalchemy import Boolean, Column, Integer, String, DateTime
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text
 from sqlalchemy.sql import func
 from app.core.database import Base
 
@@ -265,23 +321,32 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)
+    email = Column(String, unique=True, index=True, nullable=True)
     hashed_password = Column(String)
     is_active = Column(Boolean, default=True)
     is_admin = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    last_login = Column(DateTime(timezone=True), nullable=True)
+    failed_login_attempts = Column(Integer, default=0)
+    last_failed_login = Column(DateTime(timezone=True), nullable=True)
+    refresh_token = Column(Text, nullable=True)
 EOL
 
-    # Create main.py
+    # Create enhanced main.py with new login system
     cat > app/main.py << 'EOL'
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
+from datetime import datetime
 import logging
 
 from app.core.database import get_db, engine, Base
-from app.core.security import verify_password, create_access_token
+from app.core.security import (
+    verify_password, create_access_token, create_refresh_token,
+    check_login_attempts, record_login_attempt, verify_token
+)
 from app.models.user import User
 
 # Setup logging
@@ -303,27 +368,130 @@ app.add_middleware(
 )
 
 @app.post("/api/auth/login")
-async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+async def login(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db)
+):
+    if not check_login_attempts(form_data.username):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed login attempts. Please try again later."
+        )
+
     user = db.query(User).filter(User.username == form_data.username).first()
+    
     if not user or not verify_password(form_data.password, user.hashed_password):
+        record_login_attempt(form_data.username)
+        if user:
+            user.failed_login_attempts += 1
+            user.last_failed_login = datetime.utcnow()
+            db.commit()
+        
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password"
         )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Account is disabled"
+        )
+
+    # Reset failed login attempts on successful login
+    user.failed_login_attempts = 0
+    user.last_login = datetime.utcnow()
     
+    # Generate tokens
     access_token = create_access_token(data={"sub": user.username})
+    refresh_token = create_refresh_token(data={"sub": user.username})
+    
+    # Store refresh token in database
+    user.refresh_token = refresh_token
+    db.commit()
+    
     return {
         "access_token": access_token,
+        "refresh_token": refresh_token,
         "token_type": "bearer",
-        "username": user.username
+        "username": user.username,
+        "is_admin": user.is_admin
     }
+
+@app.post("/api/auth/refresh")
+async def refresh_token(request: Request, db: Session = Depends(get_db)):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials"
+        )
+    
+    refresh_token = auth_header.split(" ")[1]
+    payload = verify_token(refresh_token)
+    
+    if not payload or payload.get("type") != "refresh":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token"
+        )
+    
+    username = payload.get("sub")
+    user = db.query(User).filter(User.username == username).first()
+    
+    if not user or user.refresh_token != refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token"
+        )
+    
+    # Generate new tokens
+    access_token = create_access_token(data={"sub": user.username})
+    new_refresh_token = create_refresh_token(data={"sub": user.username})
+    
+    user.refresh_token = new_refresh_token
+    db.commit()
+    
+    return {
+        "access_token": access_token,
+        "refresh_token": new_refresh_token,
+        "token_type": "bearer"
+    }
+
+@app.post("/api/auth/logout")
+async def logout(request: Request, db: Session = Depends(get_db)):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials"
+        )
+    
+    token = auth_header.split(" ")[1]
+    payload = verify_token(token)
+    
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token"
+        )
+    
+    username = payload.get("sub")
+    user = db.query(User).filter(User.username == username).first()
+    
+    if user:
+        user.refresh_token = None
+        db.commit()
+    
+    return {"message": "Successfully logged out"}
 
 @app.get("/api/health")
 def health_check():
     return {"status": "healthy"}
 EOL
 
-    # Create first admin user
+    # Create first admin user during installation
     read -p "Enter admin username (default: admin): " ADMIN_USER
     ADMIN_USER=${ADMIN_USER:-admin}
     
@@ -362,7 +530,7 @@ EOL
     python create_admin.py
 }
 
-# Setup frontend
+# Setup frontend with enhanced login functionality
 setup_frontend() {
     log "Setting up frontend..."
     
@@ -376,152 +544,161 @@ setup_frontend() {
         react-router-dom \
         axios \
         @headlessui/react \
-        @heroicons/react --legacy-peer-deps
+        @heroicons/react \
+        js-cookie --legacy-peer-deps
 
-    # Create App.js with login form
+    # Create enhanced App.js with new login form
     cat > src/App.js << 'EOL'
 import React, { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import axios from 'axios';
+import Cookies from 'js-cookie';
 
 function Login() {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+    const [username, setUsername] = useState('');
+    const [password, setPassword] = useState('');
+    const [error, setError] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    try {
-      const formData = new FormData();
-      formData.append('username', username);
-      formData.append('password', password);
-      
-      const response = await axios.post('/api/auth/login', formData);
-      
-      if (response.data.access_token) {
-        localStorage.setItem('token', response.data.access_token);
-        localStorage.setItem('username', response.data.username);
-        window.location.href = '/dashboard';
-      }
-    } catch (error) {
-      console.error('Login error:', error);
-      setError('Invalid username or password');
-    }
-  };
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        setIsLoading(true);
+        setError('');
 
-  return (
-    <div style={{
-      minHeight: '100vh',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      backgroundColor: '#f3f4f6'
-    }}>
-      <div style={{
-        width: '100%',
-        maxWidth: '400px',
-        padding: '20px',
-        backgroundColor: 'white',
-        borderRadius: '8px',
-        boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-      }}>
-        <h2 style={{
-          textAlign: 'center',
-          fontSize: '24px',
-          fontWeight: 'bold',
-          marginBottom: '20px'
-        }}>Login to IRSSH Panel</h2>
-        <form onSubmit={handleSubmit}>
-          <div style={{ marginBottom: '15px' }}>
-            <input
-              type="text"
-              placeholder="Username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '10px',
-                border: '1px solid #ddd',
-                borderRadius: '4px'
-              }}
-            />
-          </div>
-          <div style={{ marginBottom: '15px' }}>
-            <input
-              type="password"
-              placeholder="Password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '10px',
-                border: '1px solid #ddd',
-                borderRadius: '4px'
-              }}
-            />
-          </div>
-          {error && (
-            <div style={{
-              color: '#dc2626',
-              textAlign: 'center',
-              marginBottom: '15px',
-              fontSize: '14px'
-            }}>
-              {error}
+        try {
+            const formData = new FormData();
+            formData.append('username', username);
+            formData.append('password', password);
+            
+            const response = await axios.post('/api/auth/login', formData);
+            
+            if (response.data.access_token) {
+                Cookies.set('access_token', response.data.access_token);
+                Cookies.set('refresh_token', response.data.refresh_token);
+                localStorage.setItem('username', response.data.username);
+                localStorage.setItem('is_admin', response.data.is_admin);
+                
+                // Setup axios interceptor for token refresh
+                axios.interceptors.response.use(
+                    (response) => response,
+                    async (error) => {
+                        const originalRequest = error.config;
+                        
+                        if (error.response.status === 401 && !originalRequest._retry) {
+                            originalRequest._retry = true;
+                            
+                            try {
+                                const refreshToken = Cookies.get('refresh_token');
+                                const refreshResponse = await axios.post('/api/auth/refresh', {}, {
+                                    headers: { Authorization: `Bearer ${refreshToken}` }
+                                });
+                                
+                                const { access_token, refresh_token } = refreshResponse.data;
+                                Cookies.set('access_token', access_token);
+                                Cookies.set('refresh_token', refresh_token);
+                                
+                                originalRequest.headers['Authorization'] = `Bearer ${access_token}`;
+                                return axios(originalRequest);
+                            } catch (refreshError) {
+                                // If refresh fails, logout user
+                                Cookies.remove('access_token');
+                                Cookies.remove('refresh_token');
+                                localStorage.removeItem('username');
+                                localStorage.removeItem('is_admin');
+                                window.location.href = '/login';
+                                return Promise.reject(refreshError);
+                            }
+                        }
+                        return Promise.reject(error);
+                    }
+                );
+                
+                window.location.href = '/dashboard';
+            }
+        } catch (error) {
+            console.error('Login error:', error);
+            if (error.response?.status === 429) {
+                setError('Too many failed attempts. Please try again later.');
+            } else {
+                setError('Invalid username or password');
+            }
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    return (
+        <div className="min-h-screen flex items-center justify-center bg-gray-50">
+            <div className="max-w-md w-full space-y-8 p-8 bg-white rounded-lg shadow">
+                <div>
+                    <h2 className="text-center text-3xl font-extrabold text-gray-900">
+                        Login to IRSSH Panel
+                    </h2>
+                </div>
+                <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
+                    <div className="rounded-md shadow-sm -space-y-px">
+                        <div>
+                            <input
+                                type="text"
+                                required
+                                value={username}
+                                onChange={(e) => setUsername(e.target.value)}
+                                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
+                                placeholder="Username"
+                            />
+                        </div>
+                        <div>
+                            <input
+                                type="password"
+                                required
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
+                                placeholder="Password"
+                            />
+                        </div>
+                    </div>
+
+                    {error && (
+                        <div className="text-red-600 text-sm text-center">
+                            {error}
+                        </div>
+                    )}
+
+                    <div>
+                        <button
+                            type="submit"
+                            disabled={isLoading}
+                            className={`group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 ${
+                                isLoading ? 'opacity-50 cursor-not-allowed' : ''
+                            }`}
+                        >
+                            {isLoading ? 'Signing in...' : 'Sign in'}
+                        </button>
+                    </div>
+                </form>
             </div>
-          )}
-          <button
-            type="submit"
-            style={{
-              width: '100%',
-              padding: '10px',
-              backgroundColor: '#2563eb',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer'
-            }}
-          >
-            Sign in
-          </button>
-        </form>
-      </div>
-    </div>
-  );
+        </div>
+    );
 }
 
 function Dashboard() {
-  return <h1>Welcome to Dashboard</h1>;
+    return <h1>Welcome to Dashboard</h1>;
 }
 
 function App() {
-  return (
-    <Router>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/" element={<Navigate to="/login" />} />
-      </Routes>
-    </Router>
-  );
+    return (
+        <Router>
+            <Routes>
+                <Route path="/login" element={<Login />} />
+                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/" element={<Navigate to="/login" />} />
+            </Routes>
+        </Router>
+    );
 }
 
 export default App;
-EOL
-
-    # Create index.js
-    cat > src/index.js << 'EOL'
-import React from 'react';
-import { createRoot } from 'react-dom/client';
-import App from './App';
-
-const container = document.getElementById('root');
-const root = createRoot(container);
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
 EOL
 
     npm run build
@@ -539,8 +716,19 @@ server {
     root $FRONTEND_DIR/build;
     index index.html;
     
+    # Improved security headers
+    add_header X-Frame-Options "SAMEORIGIN";
+    add_header X-XSS-Protection "1; mode=block";
+    add_header X-Content-Type-Options "nosniff";
+    add_header Referrer-Policy "strict-origin-when-cross-origin";
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline';";
+    
     location / {
         try_files \$uri \$uri/ /index.html;
+        
+        # Basic DoS protection
+        limit_req zone=one burst=10 nodelay;
+        limit_conn perip 10;
     }
     
     location /api {
@@ -551,8 +739,9 @@ server {
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_cache_bypass \$http_upgrade;
         
-        # Fix CORS issues
+        # Security headers for API
         add_header 'Access-Control-Allow-Origin' '*' always;
         add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
         add_header 'Access-Control-Allow-Headers' '*' always;
@@ -566,8 +755,25 @@ server {
             add_header 'Content-Length' 0;
             return 204;
         }
+        
+        # Rate limiting for API
+        limit_req zone=api burst=20 nodelay;
+    }
+    
+    # Deny access to sensitive files
+    location ~ /\. {
+        deny all;
+    }
+    
+    location ~ ^/(config|database\.env) {
+        deny all;
     }
 }
+
+# Rate limiting zones
+limit_req_zone \$binary_remote_addr zone=one:10m rate=1r/s;
+limit_req_zone \$binary_remote_addr zone=api:10m rate=5r/s;
+limit_conn_zone \$binary_remote_addr zone=perip:10m;
 EOL
 
     rm -f /etc/nginx/sites-enabled/default
@@ -576,7 +782,7 @@ EOL
     nginx -t || error "Nginx configuration test failed"
 }
 
-# Configure Supervisor
+# Configure Supervisor with enhanced settings
 setup_supervisor() {
     log "Configuring Supervisor..."
     
@@ -589,6 +795,9 @@ command=$VENV_DIR/bin/uvicorn app.main:app --host 0.0.0.0 --port $DEFAULT_API_PO
 user=root
 autostart=true
 autorestart=true
+startretries=3
+startsecs=5
+redirect_stderr=true
 stdout_logfile=/var/log/irssh/uvicorn.out.log
 stderr_logfile=/var/log/irssh/uvicorn.err.log
 environment=
@@ -598,26 +807,64 @@ environment=
     DB_NAME="irssh",
     DB_USER="irssh_admin",
     DB_PASS="$(grep DB_PASS $CONFIG_DIR/database.env | cut -d= -f2)"
+
+[supervisord]
+nodaemon=false
+logfile=/var/log/supervisor/supervisord.log
+pidfile=/var/run/supervisord.pid
+
+[unix_http_server]
+file=/var/run/supervisor.sock
+chmod=0700
+
+[supervisorctl]
+serverurl=unix:///var/run/supervisor.sock
+
+[rpcinterface:supervisor]
+supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
 EOL
 
     supervisorctl reread
     supervisorctl update
 }
 
-# Configure firewall
+# Enhanced firewall configuration
 setup_firewall() {
     log "Setting up firewall rules..."
     
+    # Ensure UFW is installed
+    apt-get install -y ufw || error "Failed to install UFW"
+    
+    # Reset UFW to default
+    ufw --force reset
+    
+    # Default policies
+    ufw default deny incoming
+    ufw default allow outgoing
+    
+    # Allow SSH (before enabling UFW)
     ufw allow ssh
+    
+    # Allow HTTP and HTTPS
     ufw allow http
     ufw allow https
-    ufw allow $DEFAULT_API_PORT
+    
+    # Allow API port
+    ufw allow $DEFAULT_API_PORT/tcp
+    
+    # Enable UFW
+    ufw --force enable
 }
 
-# Main installation function
+# Main installation function with enhanced error handling
 main() {
     setup_logging
     log "Starting IRSSH Panel installation..."
+    
+    # Check if script is run as root
+    if [[ $EUID -ne 0 ]]; then
+        error "This script must be run as root"
+    }
     
     check_requirements
     install_system_packages
@@ -647,7 +894,27 @@ main() {
     echo "API URL: http://YOUR-IP/api"
     echo
     echo "Please save these credentials and change the password after first login!"
+    echo
+    echo "Installation log is available at: $LOG_FILE"
 }
+
+# Cleanup function
+cleanup() {
+    echo "Cleaning up..."
+    # Stop services
+    supervisorctl stop irssh-panel
+    systemctl stop nginx
+    
+    # Remove installation if it failed
+    if [[ $? -ne 0 ]]; then
+        rm -rf "$PANEL_DIR"
+        rm -f /etc/nginx/sites-enabled/irssh-panel
+        rm -f /etc/supervisor/conf.d/irssh-panel.conf
+    fi
+}
+
+# Trap SIGINT and SIGTERM
+trap cleanup SIGINT SIGTERM
 
 # Start installation
 main "$@"
