@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# IRSSH Panel Installation Script v3.0
-# Enhanced with improved authentication system
+# IRSSH Panel Installation Script v2.5
+# Updated with fixed authentication system
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -23,11 +23,12 @@ DEFAULT_HTTP_PORT=80
 DEFAULT_HTTPS_PORT=443
 DEFAULT_API_PORT=8000
 
-# Database configuration
-DB_NAME="irssh_panel"
-DB_USER="irssh_panel_admin"
-DB_PASS=$(openssl rand -hex 32)
-JWT_SECRET=$(openssl rand -hex 32)
+# Generate random strings for security
+generate_secure_key() {
+    openssl rand -hex 32
+}
+
+JWT_SECRET=$(generate_secure_key)
 
 # Logging functions
 setup_logging() {
@@ -55,15 +56,17 @@ warn() {
     echo -e "${YELLOW}[WARN]${NC} $1"
 }
 
-# Check system requirements
+# Check system requirements and install packages
 check_requirements() {
     log "Checking system requirements..."
+    # Check minimum system resources
     local mem_total=$(free -m | awk '/^Mem:/{print $2}')
     local disk_free=$(df -m / | awk 'NR==2 {print $4}')
     
     [[ $mem_total -lt 1024 ]] && error "Minimum 1GB RAM required"
     [[ $disk_free -lt 2048 ]] && error "Minimum 2GB free disk space required"
     
+    # Check required commands
     local requirements=(curl wget git python3 pip3 nginx)
     for cmd in "${requirements[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
@@ -91,12 +94,17 @@ install_system_packages() {
         python3-certbot-nginx || error "Failed to install system packages"
 }
 
-# Setup Node.js
+# Setup Node.js using nvm
 setup_node() {
     log "Setting up Node.js with nvm..."
+    
     export NVM_DIR="$HOME/.nvm"
     curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+    
+    # Load nvm
     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    
+    # Install Node.js
     nvm install 18
     nvm use 18
     
@@ -112,6 +120,7 @@ setup_python_env() {
     source "$VENV_DIR/bin/activate"
     
     pip install --upgrade pip
+
     pip install \
         fastapi[all] \
         uvicorn[standard] \
@@ -131,49 +140,34 @@ setup_python_env() {
         psutil || error "Failed to install Python packages"
 }
 
-# Setup database with enhanced schema
+# Configure PostgreSQL
 setup_database() {
     log "Setting up PostgreSQL..."
+    
     systemctl start postgresql
     systemctl enable postgresql
-
-    sudo -u postgres psql -c "CREATE DATABASE $DB_NAME;" || log "Database exists"
-    sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';" || log "User exists"
+    
+    local DB_NAME="irssh"
+    local DB_USER="irssh_admin"
+    local DB_PASS=$(generate_secure_key)
+    
+    # Create user if not exists
+    sudo -u postgres psql -c "DO \$\$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_user WHERE usename = '$DB_USER') THEN
+        CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';
+      ELSE
+        ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';
+      END IF;
+    END
+    \$\$;"
+    
+    # Create database if not exists
+    sudo -u postgres psql -c "SELECT 'CREATE DATABASE $DB_NAME' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '$DB_NAME')\gexec"
     sudo -u postgres psql -c "ALTER DATABASE $DB_NAME OWNER TO $DB_USER;"
-
-    # Create enhanced database schema
-    sudo -u postgres psql -d $DB_NAME << EOL
-CREATE TABLE IF NOT EXISTS users (
-    id SERIAL PRIMARY KEY,
-    username VARCHAR(50) UNIQUE NOT NULL,
-    hashed_password VARCHAR(255) NOT NULL,
-    email VARCHAR(255) UNIQUE,
-    is_active BOOLEAN DEFAULT TRUE,
-    is_admin BOOLEAN DEFAULT FALSE,
-    last_login TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS auth_tokens (
-    id SERIAL PRIMARY KEY,
-    user_id INTEGER REFERENCES users(id),
-    token VARCHAR(255) NOT NULL,
-    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS user_sessions (
-    id SERIAL PRIMARY KEY,
-    user_id INTEGER REFERENCES users(id),
-    session_id VARCHAR(255) NOT NULL,
-    ip_address VARCHAR(45),
-    user_agent TEXT,
-    last_activity TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-EOL
-
+    
+    # Save database configuration
+    mkdir -p "$CONFIG_DIR"
     cat > "$CONFIG_DIR/database.env" << EOL
 DB_HOST=localhost
 DB_PORT=5432
@@ -184,54 +178,47 @@ EOL
     chmod 600 "$CONFIG_DIR/database.env"
 }
 
-# Setup backend with enhanced authentication
+# Setup backend structure
 setup_backend() {
-    log "Setting up backend..."
-    mkdir -p "$BACKEND_DIR/app/"{core,api,models,schemas,utils}
-    mkdir -p "$BACKEND_DIR/app/api/v1/endpoints"
-
-    # Create all necessary __init__.py files
+    log "Setting up backend structure..."
+    
+    rm -rf "$BACKEND_DIR"
+    mkdir -p "$BACKEND_DIR"
+    cd "$BACKEND_DIR"
+    
+    mkdir -p app/{core,api,models,schemas,utils}
+    mkdir -p app/api/v1/endpoints
+    
+    # Create Python package files
     find "$BACKEND_DIR/app" -type d -exec touch {}/__init__.py \;
 
-    # Create config.py with enhanced settings
-    cat > "$BACKEND_DIR/app/core/config.py" << EOL
+    # Create config.py
+    cat > app/core/config.py << EOL
 from pydantic_settings import BaseSettings
-from typing import List
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "IRSSH Panel"
-    VERSION: str = "3.0.0"
-    API_V1_STR: str = "/api/v1"
-    SECRET_KEY: str = "$JWT_SECRET"
+    SECRET_KEY: str = "$(generate_secure_key)"  # Replace in production
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
-    CORS_ORIGINS: List[str] = ["*"]
-    
     DB_HOST: str = "localhost"
     DB_PORT: int = 5432
-    DB_NAME: str = "$DB_NAME"
-    DB_USER: str = "$DB_USER"
-    DB_PASS: str = "$DB_PASS"
-
-    class Config:
-        case_sensitive = True
+    DB_NAME: str = "irssh"
+    DB_USER: str = "irssh_admin"
+    DB_PASS: str = "$(grep DB_PASS "$CONFIG_DIR/database.env" | cut -d= -f2)"
 
 settings = Settings()
 EOL
 
-    # Create enhanced security.py
-    cat > "$BACKEND_DIR/app/core/security.py" << 'EOL'
+    # Create security.py
+    cat > app/core/security.py << 'EOL'
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
-from jose import jwt, JWTError
+from typing import Optional
 from passlib.context import CryptContext
-from fastapi import HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from jose import jwt
 from .config import settings
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
@@ -239,26 +226,36 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
-def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode.update({"exp": expire, "iat": datetime.utcnow()})
+    to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+EOL
 
-def verify_token(token: str) -> Dict[str, Any]:
+    # Create database.py
+    cat > app/core/database.py << 'EOL'
+from sqlalchemy import create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from .config import settings
+
+SQLALCHEMY_DATABASE_URL = f"postgresql://{settings.DB_USER}:{settings.DB_PASS}@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
+
+engine = create_engine(SQLALCHEMY_DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+def get_db():
+    db = SessionLocal()
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        token_data = {"username": username}
-        return token_data
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        yield db
+    finally:
+        db.close()
 EOL
 
     # Create user model
-    cat > "$BACKEND_DIR/app/models/user.py" << 'EOL'
+    cat > app/models/user.py << 'EOL'
 from sqlalchemy import Boolean, Column, Integer, String, DateTime
 from sqlalchemy.sql import func
 from app.core.database import Base
@@ -269,33 +266,44 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)
     hashed_password = Column(String)
-    email = Column(String, unique=True, index=True, nullable=True)
     is_active = Column(Boolean, default=True)
     is_admin = Column(Boolean, default=False)
-    last_login = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 EOL
 
-    # Create auth endpoints
-    cat > "$BACKEND_DIR/app/api/v1/endpoints/auth.py" << 'EOL'
-from fastapi import APIRouter, Depends, HTTPException, status
+    # Create main.py
+    cat > app/main.py << 'EOL'
+from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from datetime import datetime, timedelta
-from typing import Any
-from app.core.security import create_access_token, verify_password
-from app.core.config import settings
-from app.core.database import get_db
+import logging
+
+from app.core.database import get_db, engine, Base
+from app.core.security import verify_password, create_access_token
 from app.models.user import User
 
-router = APIRouter()
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-@router.post("/login")
-async def login(
-    form_data: OAuth2PasswordRequestForm = Depends(),
-    db: Session = Depends(get_db)
-) -> Any:
+# Create database tables
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI()
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.post("/api/auth/login")
+async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
@@ -303,64 +311,61 @@ async def login(
             detail="Incorrect username or password"
         )
     
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.username, "admin": user.is_admin},
-        expires_delta=access_token_expires
-    )
-    
-    user.last_login = datetime.utcnow()
-    db.commit()
-    
+    access_token = create_access_token(data={"sub": user.username})
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "user": {
-            "username": user.username,
-            "is_admin": user.is_admin
-        }
+        "username": user.username
     }
 
-@router.post("/logout")
-async def logout(current_user: User = Depends(get_current_user)):
-    # Implement session cleanup here
-    return {"message": "Successfully logged out"}
-EOL
-
-    # Create main FastAPI application
-    cat > "$BACKEND_DIR/app/main.py" << 'EOL'
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from app.core.config import settings
-from app.api.v1.endpoints import auth
-
-app = FastAPI(
-    title=settings.PROJECT_NAME,
-    version=settings.VERSION,
-    openapi_url=f"{settings.API_V1_STR}/openapi.json"
-)
-
-# Configure CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Include routers
-app.include_router(auth.router, prefix=f"{settings.API_V1_STR}/auth", tags=["auth"])
-
-@app.get("/health")
+@app.get("/api/health")
 def health_check():
     return {"status": "healthy"}
 EOL
+
+    # Create first admin user
+    read -p "Enter admin username (default: admin): " ADMIN_USER
+    ADMIN_USER=${ADMIN_USER:-admin}
+    
+    read -s -p "Enter admin password (press Enter for random): " ADMIN_PASS
+    echo
+    if [[ -z "$ADMIN_PASS" ]]; then
+        ADMIN_PASS=$(openssl rand -base64 12)
+        echo "Generated admin password: $ADMIN_PASS"
+    fi
+    
+    cat > create_admin.py << EOL
+from app.core.security import get_password_hash
+from app.models.user import User
+from app.core.database import SessionLocal, Base, engine
+
+def create_admin():
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    
+    admin = User(
+        username='$ADMIN_USER',
+        hashed_password=get_password_hash('$ADMIN_PASS'),
+        is_active=True,
+        is_admin=True
+    )
+    
+    db.add(admin)
+    db.commit()
+    db.close()
+
+if __name__ == "__main__":
+    create_admin()
+EOL
+
+    source "$VENV_DIR/bin/activate"
+    python create_admin.py
 }
 
-# Setup enhanced frontend
+# Setup frontend
 setup_frontend() {
     log "Setting up frontend..."
+    
     rm -rf "$FRONTEND_DIR"
     cd "$PANEL_DIR"
     
@@ -368,267 +373,157 @@ setup_frontend() {
     cd "$FRONTEND_DIR"
     
     npm install \
-        @headlessui/react \
-        @heroicons/react \
-        axios \
         react-router-dom \
-        tailwindcss \
-        @tailwindcss/forms || error "Failed to install frontend dependencies"
+        axios \
+        @headlessui/react \
+        @heroicons/react --legacy-peer-deps
 
-    # Configure Tailwind CSS
-    cat > tailwind.config.js << 'EOL'
-module.exports = {
-  content: [
-    "./src/**/*.{js,jsx,ts,tsx}",
-  ],
-  theme: {
-    extend: {},
-  },
-  plugins: [
-    require('@tailwindcss/forms'),
-  ],
-}
-EOL
-
-    # Create enhanced App.tsx
-    cat > src/App.tsx << 'EOL'
-import React, { useState, useContext, createContext } from 'react';
+    # Create App.js with login form
+    cat > src/App.js << 'EOL'
+import React, { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import axios from 'axios';
 
-interface AuthContextType {
-  user: any;
-  token: string | null;
-  login: (username: string, password: string) => Promise<any>;
-  logout: () => void;
-}
-
-const AuthContext = createContext<AuthContextType | null>(null);
-
-function AuthProvider({ children }: { children: React.ReactNode }) {
-    const [user, setUser] = useState<any>(JSON.parse(localStorage.getItem('user') || 'null'));
-    const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
-
-    const login = async (username: string, password: string) => {
-        try {
-            const formData = new FormData();
-            formData.append('username', username);
-            formData.append('password', password);
-            
-            const response = await axios.post('/api/v1/auth/login', formData);
-            
-            if (response.data.access_token) {
-                localStorage.setItem('token', response.data.access_token);
-                localStorage.setItem('user', JSON.stringify(response.data.user));
-                setToken(response.data.access_token);
-                setUser(response.data.user);
-                return { success: true };
-            }
-        } catch (error) {
-            console.error('Login error:', error);
-            return { 
-                success: false, 
-                error: error.response?.data?.detail || 'Login failed'
-            };
-        }
-    };
-
-    const logout = () => {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        setToken(null);
-        setUser(null);
-    };
-
-    return (
-        <AuthContext.Provider value={{ user, token, login, logout }}>
-            {children}
-        </AuthContext.Provider>
-    );
-}
-
 function Login() {
-    const [username, setUsername] = useState('');
-    const [password, setPassword] = useState('');
-    const [error, setError] = useState('');
-    const [loading, setLoading] = useState(false);
-    const auth = useContext(AuthContext);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
 
-    if (!auth) throw new Error('AuthContext must be used within AuthProvider');
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const formData = new FormData();
+      formData.append('username', username);
+      formData.append('password', password);
+      
+      const response = await axios.post('/api/auth/login', formData);
+      
+      if (response.data.access_token) {
+        localStorage.setItem('token', response.data.access_token);
+        localStorage.setItem('username', response.data.username);
+        window.location.href = '/dashboard';
+      }
+    } catch (error) {
+      console.error('Login error:', error);
+      setError('Invalid username or password');
+    }
+  };
 
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setLoading(true);
-        setError('');
-
-        const result = await auth.login(username, password);
-        
-        if (result.success) {
-            window.location.href = '/dashboard';
-        } else {
-            setError(result.error);
-        }
-        
-        setLoading(false);
-    };
-
-    return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-100">
-            <div className="max-w-md w-full bg-white rounded-lg shadow-md p-8">
-                <h2 className="text-2xl font-bold text-center mb-8">
-                    IRSSH Panel Login
-                </h2>
-                
-                <form onSubmit={handleSubmit} className="space-y-6">
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700">
-                            Username
-                        </label>
-                        <input
-                            type="text"
-                            value={username}
-                            onChange={(e) => setUsername(e.target.value)}
-                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                            required
-                        />
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700">
-                            Password
-                        </label>
-                        <input
-                            type="password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                            required
-                        />
-                    </div>
-
-                    {error && (
-                        <div className="bg-red-50 text-red-500 p-3 rounded text-sm">
-                            {error}
-                        </div>
-                    )}
-
-                    <button
-                        type="submit"
-                        disabled={loading}
-                        className={`w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 ${
-                            loading ? 'opacity-50 cursor-not-allowed' : ''
-                        }`}
-                    >
-                        {loading ? 'Signing in...' : 'Sign in'}
-                    </button>
-                </form>
+  return (
+    <div style={{
+      minHeight: '100vh',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: '#f3f4f6'
+    }}>
+      <div style={{
+        width: '100%',
+        maxWidth: '400px',
+        padding: '20px',
+        backgroundColor: 'white',
+        borderRadius: '8px',
+        boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+      }}>
+        <h2 style={{
+          textAlign: 'center',
+          fontSize: '24px',
+          fontWeight: 'bold',
+          marginBottom: '20px'
+        }}>Login to IRSSH Panel</h2>
+        <form onSubmit={handleSubmit}>
+          <div style={{ marginBottom: '15px' }}>
+            <input
+              type="text"
+              placeholder="Username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '10px',
+                border: '1px solid #ddd',
+                borderRadius: '4px'
+              }}
+            />
+          </div>
+          <div style={{ marginBottom: '15px' }}>
+            <input
+              type="password"
+              placeholder="Password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '10px',
+                border: '1px solid #ddd',
+                borderRadius: '4px'
+              }}
+            />
+          </div>
+          {error && (
+            <div style={{
+              color: '#dc2626',
+              textAlign: 'center',
+              marginBottom: '15px',
+              fontSize: '14px'
+            }}>
+              {error}
             </div>
-        </div>
-    );
-}
-
-function PrivateRoute({ children }: { children: React.ReactNode }) {
-    const auth = useContext(AuthContext);
-    if (!auth) throw new Error('AuthContext must be used within AuthProvider');
-    return auth.token ? children : <Navigate to="/login" />;
+          )}
+          <button
+            type="submit"
+            style={{
+              width: '100%',
+              padding: '10px',
+              backgroundColor: '#2563eb',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer'
+            }}
+          >
+            Sign in
+          </button>
+        </form>
+      </div>
+    </div>
+  );
 }
 
 function Dashboard() {
-    const auth = useContext(AuthContext);
-    if (!auth) throw new Error('AuthContext must be used within AuthProvider');
-
-    return (
-        <div className="min-h-screen bg-gray-100">
-            <nav className="bg-white shadow-sm">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                    <div className="flex justify-between h-16">
-                        <div className="flex items-center">
-                            <span className="text-lg font-semibold">
-                                IRSSH Panel
-                            </span>
-                        </div>
-                        <div className="flex items-center">
-                            <span className="mr-4">
-                                Welcome, {auth.user?.username}
-                            </span>
-                            <button
-                                onClick={auth.logout}
-                                className="bg-red-500 text-white px-4 py-2 rounded-md text-sm hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
-                            >
-                                Logout
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </nav>
-            
-            <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-                <div className="px-4 py-6 sm:px-0">
-                    <h1 className="text-2xl font-semibold text-gray-900">
-                        Dashboard
-                    </h1>
-                    <div className="mt-4 bg-white shadow rounded-lg p-6">
-                        {/* Add your dashboard content here */}
-                        <p className="text-gray-600">
-                            Welcome to your IRSSH Panel dashboard.
-                        </p>
-                    </div>
-                </div>
-            </main>
-        </div>
-    );
+  return <h1>Welcome to Dashboard</h1>;
 }
 
 function App() {
-    return (
-        <AuthProvider>
-            <Router>
-                <Routes>
-                    <Route path="/login" element={<Login />} />
-                    <Route
-                        path="/dashboard"
-                        element={
-                            <PrivateRoute>
-                                <Dashboard />
-                            </PrivateRoute>
-                        }
-                    />
-                    <Route path="/" element={<Navigate to="/login" />} />
-                </Routes>
-            </Router>
-        </AuthProvider>
-    );
+  return (
+    <Router>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/" element={<Navigate to="/login" />} />
+      </Routes>
+    </Router>
+  );
 }
 
 export default App;
 EOL
 
-    # Create index.css
-    cat > src/index.css << 'EOL'
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-EOL
-
-    # Create index.tsx
-    cat > src/index.tsx << 'EOL'
+    # Create index.js
+    cat > src/index.js << 'EOL'
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import './index.css';
 import App from './App';
 
 const container = document.getElementById('root');
-if (!container) throw new Error('Failed to find root element');
 const root = createRoot(container);
-
 root.render(
-    <React.StrictMode>
-        <App />
-    </React.StrictMode>
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
 );
 EOL
 
-    # Build frontend
     npm run build
 }
 
@@ -657,7 +552,7 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         
-        # CORS headers
+        # Fix CORS issues
         add_header 'Access-Control-Allow-Origin' '*' always;
         add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
         add_header 'Access-Control-Allow-Headers' '*' always;
@@ -672,9 +567,6 @@ server {
             return 204;
         }
     }
-
-    client_max_body_size 100M;
-    keepalive_timeout 65;
 }
 EOL
 
@@ -687,6 +579,8 @@ EOL
 # Configure Supervisor
 setup_supervisor() {
     log "Configuring Supervisor..."
+    
+    mkdir -p /var/log/irssh
     
     cat > /etc/supervisor/conf.d/irssh-panel.conf << EOL
 [program:irssh-panel]
@@ -701,10 +595,9 @@ environment=
     PYTHONPATH="$BACKEND_DIR",
     DB_HOST="localhost",
     DB_PORT="5432",
-    DB_NAME="$DB_NAME",
-    DB_USER="$DB_USER",
-    DB_PASS="$DB_PASS",
-    JWT_SECRET="$JWT_SECRET"
+    DB_NAME="irssh",
+    DB_USER="irssh_admin",
+    DB_PASS="$(grep DB_PASS $CONFIG_DIR/database.env | cut -d= -f2)"
 EOL
 
     supervisorctl reread
@@ -719,10 +612,9 @@ setup_firewall() {
     ufw allow http
     ufw allow https
     ufw allow $DEFAULT_API_PORT
-    ufw --force enable
 }
 
-# Run installation
+# Main installation function
 main() {
     setup_logging
     log "Starting IRSSH Panel installation..."
@@ -738,9 +630,11 @@ main() {
     setup_supervisor
     setup_firewall
     
+    # Restart services
     systemctl restart nginx
     supervisorctl restart irssh-panel
     
+    # Print installation details
     log "Installation completed successfully!"
     echo
     echo "IRSSH Panel has been installed!"
