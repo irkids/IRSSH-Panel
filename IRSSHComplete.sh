@@ -864,7 +864,7 @@ main() {
     # Check if script is run as root
     if [[ $EUID -ne 0 ]]; then
         error "This script must be run as root"
-    fi
+   fi
     
     check_requirements
     install_system_packages
