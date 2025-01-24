@@ -547,38 +547,27 @@ setup_frontend() {
     cd "$PANEL_DIR"
     rm -rf "$FRONTEND_DIR"
     
-    # نصب Node.js و yarn
     export NVM_DIR="$HOME/.nvm"
     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
     nvm use 18
-    npm install -g yarn
 
-    # ایجاد پروژه React با TypeScript
-    yarn create react-app frontend --template typescript
+    npx create-react-app frontend --template typescript
     cd "$FRONTEND_DIR"
 
-    # نصب وابستگی‌ها
-    yarn add @mantine/core @mantine/hooks @emotion/react axios js-cookie react-router-dom @mantine/form @tabler/icons-react
+    # نصب وابستگی‌های ضروری
+    npm install --save \
+        @mantine/core \
+        @mantine/hooks \
+        @emotion/react \
+        axios \
+        js-cookie \
+        react-router-dom \
+        @babel/plugin-proposal-private-property-in-object --save-dev
 
-    # ایجاد index.html سفارشی
-    cat > public/index.html << 'EOL'
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>IRSSH Panel</title>
-  </head>
-  <body>
-    <noscript>You need to enable JavaScript to run this app.</noscript>
-    <div id="root"></div>
-  </body>
-</html>
-EOL
+    # اصلاح package.json
+    sed -i 's/"homepage": ".*"/"homepage": "\/"/g' package.json
 
-    # کامپایل و بیلد
-    yarn build
+    npm run build
 }
     
     # Create React app with specific Node version
