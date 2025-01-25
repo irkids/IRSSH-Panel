@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# IRSSH Panel Installation Script v3.0
+# IRSSH Panel Installation Script v3.1
 # Comprehensive installation with advanced error handling, security features, and modern Python & JavaScript integration
 
 # Colors for output
@@ -35,6 +35,8 @@ generate_secure_key() {
 # Secure keys
 JWT_SECRET=$(generate_secure_key)
 ADMIN_TOKEN=$(generate_secure_key)
+DEFAULT_PASSWORD=$(openssl rand -hex 16)
+DEFAULT_USERNAME="admin"
 
 # Logging functions
 setup_logging() {
@@ -153,6 +155,10 @@ DB_USER=$DB_USER
 DB_PASS=$DB_PASS
 EOL
     chmod 600 "$CONFIG_DIR/database.env"
+
+    # Add default admin user to database
+    sudo -u postgres psql -d "$DB_NAME" -c "CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT);" || error "Failed to initialize user table."
+    sudo -u postgres psql -d "$DB_NAME" -c "INSERT INTO users (username, password) VALUES ('$DEFAULT_USERNAME', crypt('$DEFAULT_PASSWORD', gen_salt('bf'))) ON CONFLICT (username) DO NOTHING;" || error "Failed to add default admin user."
 }
 
 # Configure Nginx
@@ -205,6 +211,9 @@ main() {
 
     log "Installation completed successfully."
     echo -e "${GREEN}IRSSH Panel is ready!${NC}"
+    echo -e "${YELLOW}Default Admin Credentials:${NC}"
+    echo -e "${BLUE}Username:${NC} $DEFAULT_USERNAME"
+    echo -e "${BLUE}Password:${NC} $DEFAULT_PASSWORD"
 }
 
 main "$@"
