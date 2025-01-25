@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# IRSSH Panel Installation Script v2.1
-# Optimized installation with enhanced error handling and security features
+# IRSSH Panel Installation Script v3.0
+# Comprehensive installation with advanced error handling, security features, and modern Python & JavaScript integration
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -122,21 +122,28 @@ setup_python_env() {
     source "$VENV_DIR/bin/activate"
 
     pip install --upgrade pip || error "Failed to upgrade pip."
-    pip install fastapi[all] uvicorn[standard] sqlalchemy[asyncio] psycopg2-binary || error "Failed to install Python packages."
+    pip install fastapi uvicorn[standard] pydantic[dotenv] sqlalchemy psycopg2-binary || error "Failed to install Python packages."
 }
 
 # Configure PostgreSQL
 define_postgresql() {
     log "Configuring PostgreSQL..."
-    systemctl start postgresql
-    systemctl enable postgresql
+    systemctl start postgresql || error "Failed to start PostgreSQL."
+    systemctl enable postgresql || error "Failed to enable PostgreSQL."
 
     local DB_NAME="irssh"
     local DB_USER="irssh_admin"
     local DB_PASS=$(generate_secure_key)
 
-    sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';" || error "Failed to create database user."
-    sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;" || error "Failed to create database."
+    # Check if user exists
+    sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER';" | grep -q 1 || \
+        sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';" || \
+        error "Failed to create database user."
+
+    # Check if database exists
+    sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME';" | grep -q 1 || \
+        sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;" || \
+        error "Failed to create database."
 
     cat > "$CONFIG_DIR/database.env" << EOL
 DB_HOST=localhost
