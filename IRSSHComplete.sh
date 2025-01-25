@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# IRSSH Panel Installation Script v3.1
-# Comprehensive installation with advanced error handling, security features, and modern Python & JavaScript integration
+# IRSSH Panel Installation Script v3.2
+# Comprehensive installation with user input for credentials and optimized performance
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -24,6 +24,18 @@ DEFAULT_HTTP_PORT=80
 DEFAULT_HTTPS_PORT=443
 DEFAULT_API_PORT=8000
 
+# Prompt for admin credentials
+read -p "Enter admin username (default: admin): " ADMIN_USERNAME
+ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+read -sp "Enter admin password: " ADMIN_PASSWORD
+echo
+read -sp "Confirm admin password: " ADMIN_PASSWORD_CONFIRM
+
+if [[ "$ADMIN_PASSWORD" != "$ADMIN_PASSWORD_CONFIRM" ]]; then
+    echo -e "${RED}Passwords do not match. Exiting installation.${NC}"
+    exit 1
+fi
+
 # Generate random strings for security
 generate_secure_key() {
     openssl rand -hex 32 2>/dev/null || {
@@ -35,8 +47,6 @@ generate_secure_key() {
 # Secure keys
 JWT_SECRET=$(generate_secure_key)
 ADMIN_TOKEN=$(generate_secure_key)
-DEFAULT_PASSWORD=$(openssl rand -hex 16)
-DEFAULT_USERNAME="admin"
 
 # Logging functions
 setup_logging() {
@@ -156,15 +166,20 @@ DB_PASS=$DB_PASS
 EOL
     chmod 600 "$CONFIG_DIR/database.env"
 
-    # Add default admin user to database
+    # Add admin user to database
     sudo -u postgres psql -d "$DB_NAME" -c "CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT);" || error "Failed to initialize user table."
-    sudo -u postgres psql -d "$DB_NAME" -c "INSERT INTO users (username, password) VALUES ('$DEFAULT_USERNAME', crypt('$DEFAULT_PASSWORD', gen_salt('bf'))) ON CONFLICT (username) DO NOTHING;" || error "Failed to add default admin user."
+    sudo -u postgres psql -d "$DB_NAME" -c "INSERT INTO users (username, password) VALUES ('$ADMIN_USERNAME', crypt('$ADMIN_PASSWORD', gen_salt('bf'))) ON CONFLICT (username) DO NOTHING;" || error "Failed to add admin user."
 }
 
 # Configure Nginx
 setup_nginx() {
     log "Configuring Nginx..."
-    openssl dhparam -out /etc/nginx/dhparam.pem 2048 || error "Failed to generate DH parameters."
+
+    # Use pre-generated DH parameters to save time
+    if [[ ! -f /etc/ssl/certs/dhparam.pem ]]; then
+        cp /usr/share/doc/nginx/examples/ssl/dhparam.pem /etc/ssl/certs/dhparam.pem || \
+        openssl dhparam -out /etc/ssl/certs/dhparam.pem 2048 || error "Failed to generate DH parameters."
+    fi
 
     cat > /etc/nginx/sites-available/irssh-panel << EOL
 server {
@@ -211,9 +226,9 @@ main() {
 
     log "Installation completed successfully."
     echo -e "${GREEN}IRSSH Panel is ready!${NC}"
-    echo -e "${YELLOW}Default Admin Credentials:${NC}"
-    echo -e "${BLUE}Username:${NC} $DEFAULT_USERNAME"
-    echo -e "${BLUE}Password:${NC} $DEFAULT_PASSWORD"
+    echo -e "${YELLOW}Admin Credentials:${NC}"
+    echo -e "${BLUE}Username:${NC} $ADMIN_USERNAME"
+    echo -e "${BLUE}Password:${NC} $ADMIN_PASSWORD"
 }
 
 main "$@"
