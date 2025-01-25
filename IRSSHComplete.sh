@@ -520,6 +520,17 @@ main() {
    setup_logging
    log "Starting IRSSH Panel installation..."
    
+   # دریافت اطلاعات ادمین
+    read -p "Enter admin username (default: admin): " ADMIN_USER
+    ADMIN_USER=${ADMIN_USER:-admin}
+    
+    read -s -p "Enter admin password (press Enter for random): " ADMIN_PASS
+    echo
+    if [[ -z "$ADMIN_PASS" ]]; then
+        ADMIN_PASS=$(openssl rand -base64 12)
+        echo "Generated admin password: $ADMIN_PASS"
+    fi
+
    check_requirements
    install_system_packages
    setup_node
