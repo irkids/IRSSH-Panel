@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # IRSSH Panel Complete Installation Script
-# Version: 3.0.0
+# Version: 3.1.0
 
 # Directories
 PANEL_DIR="/opt/irssh-panel"
@@ -49,13 +49,16 @@ warn() {
 cleanup() {
     if [[ $? -ne 0 ]]; then
         error "Installation failed. Attempting backup restore..." "no-exit"
-        restore_backup
+        if [[ -d "$BACKUP_DIR" ]]; then
+            warn "Attempting to restore from backup..."
+            restore_backup
+        fi
     fi
 }
 
 create_backup() {
+    mkdir -p "$BACKUP_DIR"
     if [[ -d "$PANEL_DIR" ]]; then
-        mkdir -p "$BACKUP_DIR"
         tar -czf "$BACKUP_DIR/panel-$(date +%Y%m%d-%H%M%S).tar.gz" -C "$(dirname "$PANEL_DIR")" "$(basename "$PANEL_DIR")"
     fi
 }
@@ -86,7 +89,7 @@ check_requirements() {
     fi
 
     # Check mandatory commands
-    local required_commands=(curl wget git python3 pip3 npm node nginx)
+    local required_commands=(curl wget git python3 pip3)
     for cmd in "${required_commands[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
             error "$cmd is required but not installed"
@@ -94,21 +97,21 @@ check_requirements() {
     done
 }
 
+# Clean Previous Node.js Installation
+clean_nodejs() {
+    log "Cleaning previous Node.js installation..."
+    apt-get remove -y nodejs npm || true
+    apt-get autoremove -y || true
+    rm -f /etc/apt/sources.list.d/nodesource.list*
+    apt-get update
+}
+
 # Install Dependencies
 install_dependencies() {
     log "Installing system dependencies..."
     apt-get update
-    
-    # Remove old nodejs and npm if installed
-    apt-get remove -y nodejs npm
-    apt-get autoremove -y
-    
-    # Install Node.js and npm using nodesource
-    log "Installing Node.js and npm..."
-    curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
-    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
-    
-    # Install other dependencies
+
+    # Install basic dependencies
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         python3 python3-pip python3-venv \
         postgresql postgresql-contrib \
@@ -116,17 +119,25 @@ install_dependencies() {
         git curl wget zip unzip \
         supervisor ufw fail2ban
 
-    # Verify installations
-    log "Verifying installations..."
+    # Clean and Install Node.js
+    clean_nodejs
+    
+    log "Installing Node.js and npm..."
+    curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
+
+    # Verify Node.js installation
     if ! command -v node &>/dev/null; then
         error "Node.js installation failed"
     fi
-    if ! command -v npm &>/dev/null; then
-        error "npm installation failed"
-    fi
 
-    # Update npm to latest version
-    npm install -g npm@latest
+    # Update npm
+    log "Updating npm..."
+    npm install -g npm@latest || error "npm update failed"
+
+    # Verify installations
+    log "Node.js version: $(node -v)"
+    log "npm version: $(npm -v)"
 }
 
 # Setup Python Environment
@@ -150,6 +161,11 @@ setup_frontend() {
     rm -rf "$FRONTEND_DIR"
     mkdir -p "$FRONTEND_DIR"
     cd "$FRONTEND_DIR"
+
+    # Verify Node.js and npm
+    if ! command -v node &>/dev/null || ! command -v npm &>/dev/null; then
+        error "Node.js or npm not found. Please check installation."
+    fi
 
     # Create project structure
     mkdir -p public src/components
@@ -246,7 +262,10 @@ EOL
 EOL
 
     # Install dependencies and build
+    log "Installing frontend dependencies..."
     npm install
+    
+    log "Building frontend..."
     npm run build
 }
 
@@ -256,7 +275,7 @@ setup_database() {
     systemctl start postgresql
     systemctl enable postgresql
 
-    # Wait for PostgreSQL to be ready
+    # Wait for PostgreSQL
     for i in {1..30}; do
         if pg_isready -q; then
             break
@@ -311,6 +330,14 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
+    location /ws {
+        proxy_pass http://localhost:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "Upgrade";
+        proxy_set_header Host \$host;
+    }
+
     client_max_body_size 100M;
 }
 EOL
@@ -352,6 +379,18 @@ setup_firewall() {
 
     # Enable firewall
     echo "y" | ufw enable
+}
+
+# Setup Modules
+setup_modules() {
+    log "Setting up modules..."
+    mkdir -p "$MODULES_DIR"
+    
+    # Copy module scripts if they exist
+    if [[ -d "/root/irssh-panel/modules" ]]; then
+        cp -r /root/irssh-panel/modules/* "$MODULES_DIR/"
+        chmod +x "$MODULES_DIR"/*.{py,sh}
+    fi
 }
 
 # Verify Installation
@@ -401,6 +440,7 @@ main() {
     setup_python
     setup_frontend
     setup_database
+    setup_modules
     setup_nginx
     setup_ssl
     setup_firewall
@@ -428,6 +468,12 @@ main() {
     echo "BadVPN: $BADVPN_PORT"
     echo
     echo "Installation Log: $LOG_DIR/install.log"
+    echo
+    echo "Important Notes:"
+    echo "1. Please save these credentials securely"
+    echo "2. Change the admin password after first login"
+    echo "3. Configure additional security settings in the panel"
+    echo "4. Check the installation log for any warnings"
 }
 
 # Start installation
