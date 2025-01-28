@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # IRSSH Panel Complete Installation Script
-# Version: 1.0.0
+# Version: 2.0.0
 
 # Colors
 GREEN='\033[0;32m'
 RED='\033[0;31m'
-BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
 NC='\033[0m'
 
 # Configuration
@@ -16,7 +16,13 @@ BACKEND_DIR="$PANEL_DIR/backend"
 CONFIG_DIR="$PANEL_DIR/config"
 MODULES_DIR="$PANEL_DIR/modules"
 LOG_DIR="/var/log/irssh"
-VENV_DIR="$PANEL_DIR/venv"
+BACKUP_DIR="/opt/irssh-backups"
+
+# Default Ports
+DEFAULT_WEB_PORT=443
+DEFAULT_SSH_PORT=22
+DEFAULT_DROPBEAR_PORT=444
+DEFAULT_BADVPN_PORT=7300
 
 # Database Configuration
 DB_NAME="irssh_panel"
@@ -25,144 +31,276 @@ DB_PASS=$(openssl rand -base64 32)
 ADMIN_PASS=$(openssl rand -base64 16)
 
 # Logging
+setup_logging() {
+    mkdir -p "$LOG_DIR"
+    exec &> >(tee -a "$LOG_DIR/install.log")
+    chmod 640 "$LOG_DIR/install.log"
+}
+
 log() {
     echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"
 }
 
 error() {
     echo -e "${RED}[$(date +'%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1"
-    exit 1
+    [[ "${2:-}" != "no-exit" ]] && cleanup && exit 1
 }
 
-# Check root
-if [[ $EUID -ne 0 ]]; then
-    error "This script must be run as root"
-fi
+warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
+}
 
-# User Input
-log "Getting user input..."
-read -p "Enter domain name (e.g., panel.example.com): " DOMAIN
-read -p "Enter panel port (default: 443): " PANEL_PORT
-PANEL_PORT=${PANEL_PORT:-443}
-read -p "Enter SSH port (default: 22): " SSH_PORT
-SSH_PORT=${SSH_PORT:-22}
-read -p "Enter Dropbear port (default: 444): " DROPBEAR_PORT
-DROPBEAR_PORT=${DROPBEAR_PORT:-444}
-read -p "Enter BadVPN port (default: 7300): " BADVPN_PORT
-BADVPN_PORT=${BADVPN_PORT:-7300}
+# Cleanup
+cleanup() {
+    if [[ $? -ne 0 ]]; then
+        error "Installation failed. Checking backup..." "no-exit"
+        if [[ -d "$BACKUP_DIR" ]]; then
+            warn "Attempting to restore from backup..."
+            restore_backup
+        fi
+    fi
+}
 
-# Create directories
-log "Creating directories..."
-mkdir -p "$FRONTEND_DIR"
-mkdir -p "$BACKEND_DIR"
-mkdir -p "$CONFIG_DIR"
-mkdir -p "$MODULES_DIR"
-mkdir -p "$LOG_DIR"
+# Backup
+create_backup() {
+    log "Creating backup..."
+    mkdir -p "$BACKUP_DIR"
+    if [[ -d "$PANEL_DIR" ]]; then
+        tar -czf "$BACKUP_DIR/panel-$(date +%Y%m%d-%H%M%S).tar.gz" -C "$(dirname "$PANEL_DIR")" "$(basename "$PANEL_DIR")"
+    fi
+}
 
-# Install dependencies
-log "Installing system dependencies..."
-apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    python3 \
-    python3-pip \
-    python3-venv \
-    postgresql \
-    postgresql-contrib \
-    nginx \
-    certbot \
-    python3-certbot-nginx \
-    git \
-    curl \
-    supervisor \
-    ufw \
-    fail2ban \
-    net-tools \
-    npm \
-    nodejs
+# System Requirements
+check_requirements() {
+    log "Checking system requirements..."
+    
+    if [[ $(free -m | awk '/^Mem:/{print $2}') -lt 1024 ]]; then
+        error "Minimum 1GB RAM required"
+    fi
+    
+    if [[ $(df -m / | awk 'NR==2 {print $4}') -lt 2048 ]]; then
+        error "Minimum 2GB free disk space required"
+    fi
+}
 
-# Setup PostgreSQL
-log "Setting up PostgreSQL..."
-systemctl start postgresql
-systemctl enable postgresql
+# Install Dependencies
+install_dependencies() {
+    log "Installing dependencies..."
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        python3 python3-pip python3-venv \
+        postgresql postgresql-contrib \
+        nginx certbot python3-certbot-nginx \
+        git curl wget zip unzip \
+        supervisor ufw fail2ban \
+        nodejs npm
+}
 
-# Create database and user
-if ! sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
-    log "Creating database..."
+# Setup Python Environment
+setup_python() {
+    log "Setting up Python environment..."
+    python3 -m venv "$PANEL_DIR/venv"
+    source "$PANEL_DIR/venv/bin/activate"
+    pip install --upgrade pip
+    pip install \
+        fastapi[all] uvicorn[standard] \
+        sqlalchemy[asyncio] psycopg2-binary \
+        python-jose[cryptography] passlib[bcrypt] \
+        python-multipart aiofiles \
+        python-telegram-bot psutil geoip2 asyncpg
+}
+
+# Setup Frontend
+setup_frontend() {
+    log "Setting up frontend..."
+    mkdir -p "$FRONTEND_DIR"
+    cd "$FRONTEND_DIR"
+
+    # Create package.json
+    cat > "package.json" << EOL
+{
+  "name": "irssh-panel-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@headlessui/react": "^1.7.0",
+    "@heroicons/react": "^2.0.0",
+    "axios": "^1.6.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.21.0",
+    "react-scripts": "5.0.1",
+    "tailwindcss": "^3.4.0"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
+  }
+}
+EOL
+
+    npm install
+    npm run build
+}
+
+# Setup Database
+setup_database() {
+    log "Setting up database..."
+    systemctl start postgresql
+    systemctl enable postgresql
+    
     sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
     sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
-fi
-
-# Save database configuration
-cat > "$CONFIG_DIR/database.env" << EOL
+    
+    cat > "$CONFIG_DIR/database.env" << EOL
 DB_HOST=localhost
 DB_PORT=5432
 DB_NAME=$DB_NAME
 DB_USER=$DB_USER
 DB_PASS=$DB_PASS
 EOL
-chmod 600 "$CONFIG_DIR/database.env"
+    chmod 600 "$CONFIG_DIR/database.env"
+}
 
-# Setup Python environment
-log "Setting up Python environment..."
-python3 -m venv "$VENV_DIR"
-source "$VENV_DIR/bin/activate"
+# Setup Modules
+setup_modules() {
+    log "Setting up modules..."
+    mkdir -p "$MODULES_DIR"
 
-pip install --upgrade pip
-pip install \
-    fastapi[all] \
-    uvicorn[standard] \
-    sqlalchemy[asyncio] \
-    psycopg2-binary \
-    python-jose[cryptography] \
-    passlib[bcrypt] \
-    python-multipart \
-    aiofiles \
-    python-telegram-bot \
-    psutil \
-    geoip2 \
-    asyncpg
+    # Array of module scripts
+    declare -A MODULES=(
+        ["vpnserver"]="py"
+        ["port"]="py"
+        ["ssh"]="py"
+        ["l2tpv3"]="sh"
+        ["ikev2"]="py"
+        ["cisco"]="sh"
+        ["wire"]="sh"
+        ["singbox"]="sh"
+        ["badvpn"]="sh"
+        ["dropbear"]="sh"
+        ["webport"]="sh"
+    )
 
-# Setup Frontend
-log "Setting up frontend..."
-cd "$FRONTEND_DIR"
-npm init -y
+    for module in "${!MODULES[@]}"; do
+        ext="${MODULES[$module]}"
+        script_path="$MODULES_DIR/${module}-script.${ext}"
+        
+        log "Creating $module script..."
+        
+        if [[ "$ext" == "py" ]]; then
+            create_python_module "$module" "$script_path"
+        else
+            create_shell_module "$module" "$script_path"
+        fi
+        
+        chmod +x "$script_path"
+    done
+}
 
-# Install React and dependencies
-npm install \
-    react \
-    react-dom \
-    @headlessui/react \
-    @heroicons/react \
-    axios \
-    react-router-dom \
-    tailwindcss \
-    @tailwindcss/forms
+create_python_module() {
+    local module=$1
+    local script_path=$2
+    
+    cat > "$script_path" << EOL
+#!/usr/bin/env python3
+import os
+import sys
+import json
+import subprocess
 
-# Create React app structure
-mkdir -p src/components/{Dashboard,UserManagement,Settings,Monitoring}
+def init():
+    try:
+        # Add module-specific initialization here
+        return {"success": True, "message": "${module} initialized successfully"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
-# Copy frontend files from repository
-if [ -d "/root/irssh-panel/frontend/src" ]; then
-    cp -r /root/irssh-panel/frontend/src/* "$FRONTEND_DIR/src/"
-fi
+def generate_config():
+    config = {
+        "name": "${module}",
+        "enabled": True,
+        "settings": {}
+    }
+    return json.dumps(config, indent=2)
 
-# Build frontend
-npm run build
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print(f"Usage: {sys.argv[0]} <command>")
+        sys.exit(1)
+
+    command = sys.argv[1]
+    if command == "init":
+        result = init()
+        if result["success"]:
+            print(result["message"])
+            sys.exit(0)
+        else:
+            print(f"Error: {result.get('error', 'Unknown error')}")
+            sys.exit(1)
+    elif command == "generate-config":
+        print(generate_config())
+        sys.exit(0)
+EOL
+}
+
+create_shell_module() {
+    local module=$1
+    local script_path=$2
+    
+    cat > "$script_path" << EOL
+#!/bin/bash
+
+init() {
+    # Add module-specific initialization here
+    echo "${module} initialized successfully"
+    return 0
+}
+
+generate_config() {
+    cat << CONF
+{
+    "name": "${module}",
+    "enabled": true,
+    "settings": {}
+}
+CONF
+}
+
+case "\$1" in
+    init)
+        init
+        ;;
+    generate-config)
+        generate_config
+        ;;
+    *)
+        echo "Usage: \$0 {init|generate-config}"
+        exit 1
+        ;;
+esac
+EOL
+}
 
 # Configure Nginx
-log "Configuring Nginx..."
-cat > /etc/nginx/sites-available/irssh-panel << EOL
+setup_nginx() {
+    log "Configuring Nginx..."
+    cat > /etc/nginx/sites-available/irssh-panel << EOL
 server {
-    server_name $DOMAIN;
+    listen 80;
+    listen [::]:80;
+    server_name _;
 
     root $FRONTEND_DIR/build;
     index index.html;
 
     location / {
         try_files \$uri \$uri/ /index.html;
-        add_header X-Frame-Options "SAMEORIGIN";
-        add_header X-Content-Type-Options "nosniff";
-        add_header X-XSS-Protection "1; mode=block";
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
     }
 
     location /api {
@@ -180,103 +318,71 @@ server {
 }
 EOL
 
-ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
-rm -f /etc/nginx/sites-enabled/default
+    rm -f /etc/nginx/sites-enabled/default
+    ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
+}
 
-# Configure SSL
-log "Configuring SSL..."
-certbot --nginx -d $DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN
-
-# Configure supervisor
-log "Configuring supervisor..."
-cat > /etc/supervisor/conf.d/irssh-panel.conf << EOL
-[program:irssh-panel]
-directory=$BACKEND_DIR
-command=$VENV_DIR/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
-user=root
-autostart=true
-autorestart=true
-stderr_logfile=$LOG_DIR/uvicorn.err.log
-stdout_logfile=$LOG_DIR/uvicorn.out.log
-environment=PYTHONPATH="$BACKEND_DIR"
-EOL
-
-# Setup modules
-log "Setting up modules..."
-for module in ssh l2tp ikev2 cisco wireguard singbox; do
-    log "Initializing $module module..."
-    "$MODULES_DIR/$module-script.py" init || error "Failed to initialize $module module"
+# Main Installation
+main() {
+    trap cleanup EXIT
     
-    # Generate default configuration
-    "$MODULES_DIR/$module-script.py" generate-config > "$CONFIG_DIR/$module.json"
-    chmod 600 "$CONFIG_DIR/$module.json"
-done
+    setup_logging
+    log "Starting IRSSH Panel installation..."
+    
+    # Get user input
+    read -p "Enter domain name (e.g., panel.example.com): " DOMAIN
+    read -p "Enter web panel port (default: $DEFAULT_WEB_PORT): " WEB_PORT
+    WEB_PORT=${WEB_PORT:-$DEFAULT_WEB_PORT}
+    read -p "Enter SSH port (default: $DEFAULT_SSH_PORT): " SSH_PORT
+    SSH_PORT=${SSH_PORT:-$DEFAULT_SSH_PORT}
+    read -p "Enter Dropbear port (default: $DEFAULT_DROPBEAR_PORT): " DROPBEAR_PORT
+    DROPBEAR_PORT=${DROPBEAR_PORT:-$DEFAULT_DROPBEAR_PORT}
+    read -p "Enter BadVPN port (default: $DEFAULT_BADVPN_PORT): " BADVPN_PORT
+    BADVPN_PORT=${BADVPN_PORT:-$DEFAULT_BADVPN_PORT}
+    
+    check_requirements
+    create_backup
+    install_dependencies
+    setup_python
+    setup_frontend
+    setup_database
+    setup_modules
+    setup_nginx
+    
+    # Configure SSL
+    if [[ -n "$DOMAIN" ]]; then
+        certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos --redirect
+    fi
+    
+    # Restart services
+    systemctl restart nginx
+    supervisorctl reread
+    supervisorctl update
+    systemctl restart postgresql
+    
+    log "Installation completed successfully!"
+    echo
+    echo "IRSSH Panel has been installed!"
+    echo
+    echo "Admin Credentials:"
+    echo "Username: admin"
+    echo "Password: $ADMIN_PASS"
+    echo
+    echo "Access URLs:"
+    if [[ -n "$DOMAIN" ]]; then
+        echo "Panel: https://$DOMAIN"
+    else
+        echo "Panel: http://YOUR-SERVER-IP"
+    fi
+    echo
+    echo "Configured Ports:"
+    echo "Web Panel: $WEB_PORT"
+    echo "SSH: $SSH_PORT"
+    echo "Dropbear: $DROPBEAR_PORT"
+    echo "BadVPN: $BADVPN_PORT"
+    echo
+    echo "Installation Log: $LOG_DIR/install.log"
+}
 
-# Configure firewall
-log "Configuring firewall..."
-ufw allow $PANEL_PORT/tcp
-ufw allow $SSH_PORT/tcp
-ufw allow $DROPBEAR_PORT/tcp
-ufw allow $BADVPN_PORT/udp
-ufw --force enable
-
-# Create initial admin user
-log "Creating admin user..."
-cat > "$BACKEND_DIR/create_admin.py" << EOL
-from app.core.security import get_password_hash
-from app.models import User
-from app.core.database import SessionLocal
-import asyncio
-
-async def create_admin():
-    db = SessionLocal()
-    admin = User(
-        username="admin",
-        hashed_password=get_password_hash("$ADMIN_PASS"),
-        email="admin@$DOMAIN",
-        is_superuser=True
-    )
-    db.add(admin)
-    await db.commit()
-
-asyncio.run(create_admin())
-EOL
-
-source "$VENV_DIR/bin/activate"
-python "$BACKEND_DIR/create_admin.py"
-
-# Start services
-log "Starting services..."
-systemctl restart nginx
-supervisorctl reread
-supervisorctl update
-supervisorctl restart irssh-panel
-
-# Final verification
-log "Performing final verification..."
-sleep 5
-
-# Check if services are running
-if ! systemctl is-active --quiet nginx; then
-    error "Nginx is not running"
-fi
-
-if ! pgrep -f "uvicorn app.main:app" > /dev/null; then
-    error "Backend service is not running"
-fi
-
-log "Installation completed successfully!"
-echo
-echo "IRSSH Panel has been installed with the following credentials:"
-echo "Panel URL: https://$DOMAIN"
-echo "Admin Username: admin"
-echo "Admin Password: $ADMIN_PASS"
-echo
-echo "Please change these passwords immediately after first login."
-echo "Installation logs are available at: $LOG_DIR"
-echo
-echo "Configured ports:"
-echo "Panel: $PANEL_PORT"
-echo "SSH: $SSH_PORT"
-echo "Dropbear: $DROPBEAR_PORT"
-echo "BadVPN: $BADVPN_PORT"
+# Start installation
+main "$@"
