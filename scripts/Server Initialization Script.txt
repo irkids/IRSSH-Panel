@@ -1,0 +1,131 @@
+#!/bin/bash
+
+# IRSSH Server Initialization Script
+
+# Colors
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+# Logging
+log() {
+    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"
+}
+
+error() {
+    echo -e "${RED}[$(date +'%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1"
+    exit 1
+}
+
+# Check root
+if [[ $EUID -ne 0 ]]; then
+    error "This script must be run as root"
+fi
+
+# Update system
+log "Updating system packages..."
+apt-get update
+apt-get upgrade -y
+
+# Install essential packages
+log "Installing essential packages..."
+apt-get install -y \
+    curl \
+    wget \
+    git \
+    vim \
+    htop \
+    tmux \
+    zip \
+    unzip \
+    net-tools \
+    iptables \
+    ufw \
+    fail2ban \
+    ntp
+
+# Configure timezone
+log "Configuring timezone..."
+timedatectl set-timezone UTC
+systemctl restart ntp
+
+# Configure system limits
+log "Configuring system limits..."
+cat >> /etc/security/limits.conf << EOL
+* soft nofile 1048576
+* hard nofile 1048576
+EOL
+
+# Configure sysctl
+log "Configuring sysctl..."
+cat > /etc/sysctl.d/99-irssh.conf << EOL
+net.core.somaxconn = 65535
+net.ipv4.tcp_max_syn_backlog = 65535
+net.ipv4.tcp_syncookies = 1
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_fin_timeout = 30
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+EOL
+
+sysctl --system
+
+# Configure fail2ban
+log "Configuring fail2ban..."
+cat > /etc/fail2ban/jail.local << EOL
+[DEFAULT]
+bantime = 3600
+findtime = 600
+maxretry = 5
+
+[sshd]
+enabled = true
+port = ssh
+filter = sshd
+logpath = /var/log/auth.log
+maxretry = 3
+EOL
+
+systemctl enable fail2ban
+systemctl restart fail2ban
+
+# Configure SSH
+log "Configuring SSH..."
+cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
+cat > /etc/ssh/sshd_config << EOL
+Port 22
+Protocol 2
+PermitRootLogin prohibit-password
+PubkeyAuthentication yes
+PasswordAuthentication no
+PermitEmptyPasswords no
+ChallengeResponseAuthentication no
+UsePAM yes
+X11Forwarding no
+PrintMotd no
+AcceptEnv LANG LC_*
+Subsystem sftp /usr/lib/openssh/sftp-server
+EOL
+
+systemctl restart ssh
+
+# Configure firewall
+log "Configuring firewall..."
+ufw default deny incoming
+ufw default allow outgoing
+ufw allow ssh
+ufw allow http
+ufw allow https
+ufw --force enable
+
+# Setup swap if needed
+if [ $(free -m | grep Swap | awk '{print $2}') -eq 0 ]; then
+    log "Setting up swap..."
+    fallocate -l 2G /swapfile
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
+log "Server initialization completed!"
