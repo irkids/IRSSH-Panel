@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # IRSSH Panel Complete Installation Script
-# Version: 3.4.0
+# Version: 3.3.0
 
 # Directories
 PANEL_DIR="/opt/irssh-panel"
@@ -23,7 +23,6 @@ DB_NAME="irssh_panel"
 DB_USER="irssh_admin"
 DB_PASS=$(openssl rand -base64 32)
 ADMIN_PASS=$(openssl rand -base64 16)
-JWT_SECRET=$(openssl rand -base64 32)
 
 # Logging
 setup_logging() {
@@ -73,31 +72,6 @@ restore_backup() {
     fi
 }
 
-# Pre-Installation Checks
-check_requirements() {
-    # Check root
-    if [[ $EUID -ne 0 ]]; then
-        error "This script must be run as root"
-    fi
-
-    # Check system resources
-    if [[ $(free -m | awk '/^Mem:/{print $2}') -lt 1024 ]]; then
-        error "Minimum 1GB RAM required"
-    fi
-
-    if [[ $(df -m / | awk 'NR==2 {print $4}') -lt 2048 ]]; then
-        error "Minimum 2GB free disk space required"
-    fi
-
-    # Check mandatory commands
-    local required_commands=(curl wget git python3 pip3)
-    for cmd in "${required_commands[@]}"; do
-        if ! command -v "$cmd" &>/dev/null; then
-            error "$cmd is required but not installed"
-        fi
-    done
-}
-
 # Initial Setup
 setup_directories() {
     log "Setting up directories..."
@@ -136,123 +110,6 @@ install_dependencies() {
     # Verify installations
     log "Node.js version: $(node -v)"
     log "npm version: $(npm -v)"
-}
-
-# Setup Python Environment
-setup_python() {
-    log "Setting up Python environment..."
-    python3 -m venv "$PANEL_DIR/venv"
-    source "$PANEL_DIR/venv/bin/activate"
-    
-    pip install --upgrade pip wheel setuptools
-    pip install \
-        fastapi[all] uvicorn[standard] \
-        sqlalchemy[asyncio] psycopg2-binary \
-        python-jose[cryptography] passlib[bcrypt] \
-        python-multipart aiofiles \
-        python-telegram-bot psutil geoip2 asyncpg
-
-    log "Setting up backend structure..."
-    mkdir -p "$BACKEND_DIR/app/"{core,api/v1/endpoints,models,schemas,utils}
-
-    # Create Backend Auth Files
-    # main.py
-    cat > "$BACKEND_DIR/app/main.py" << 'EOL'
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1.endpoints import auth
-from app.core.config import settings
-
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
-
-@app.get("/api/health")
-def health_check():
-    return {"status": "healthy"}
-EOL
-
-    # auth.py
-    cat > "$BACKEND_DIR/app/api/v1/endpoints/auth.py" << 'EOL'
-from fastapi import APIRouter, HTTPException, Depends
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from jose import JWTError, jwt
-from datetime import datetime, timedelta
-import os
-
-router = APIRouter()
-
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
-
-def create_access_token(data: dict):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-@router.post("/login")
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    admin_user = os.getenv("ADMIN_USER", "admin")
-    admin_pass = os.getenv("ADMIN_PASS")
-
-    if not admin_pass:
-        raise HTTPException(status_code=500, detail="Admin password not configured")
-
-    if form_data.username == admin_user and form_data.password == admin_pass:
-        access_token = create_access_token(data={"sub": admin_user})
-        return {"access_token": access_token, "token_type": "bearer"}
-
-    raise HTTPException(status_code=401, detail="Invalid credentials")
-EOL
-
-    # config.py
-    cat > "$BACKEND_DIR/app/core/config.py" << EOL
-from pydantic_settings import BaseSettings
-
-class Settings(BaseSettings):
-    PROJECT_NAME: str = "IRSSH Panel"
-    VERSION: str = "1.0.0"
-    API_V1_STR: str = "/api/v1"
-    JWT_SECRET_KEY: str = "$JWT_SECRET"
-    ADMIN_USER: str = "admin"
-    ADMIN_PASS: str = "$ADMIN_PASS"
-
-settings = Settings()
-EOL
-
-    # Create supervisord config for backend
-    cat > /etc/supervisor/conf.d/irssh-backend.conf << EOL
-[program:irssh-backend]
-directory=$BACKEND_DIR
-command=$PANEL_DIR/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-user=root
-autostart=true
-autorestart=true
-stderr_logfile=$LOG_DIR/backend.err.log
-stdout_logfile=$LOG_DIR/backend.out.log
-environment=
-    PYTHONPATH="$BACKEND_DIR",
-    JWT_SECRET_KEY="$JWT_SECRET",
-    ADMIN_USER="admin",
-    ADMIN_PASS="$ADMIN_PASS"
-EOL
-
-    supervisorctl reread
-    supervisorctl update
-    supervisorctl restart irssh-backend
 }
 
 # Setup Frontend
@@ -323,23 +180,13 @@ const Login = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const formData = new FormData();
-      formData.append('username', username);
-      formData.append('password', password);
-
-      const response = await axios.post('/api/auth/login', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
-
-      if (response.data.access_token) {
-        localStorage.setItem('token', response.data.access_token);
+      const response = await axios.post('/api/auth/login', { username, password });
+      if (response.data.token) {
+        localStorage.setItem('token', response.data.token);
         window.location.href = '/dashboard';
       }
     } catch (error) {
       alert('Login failed. Please check your credentials.');
-      console.error('Login error:', error);
     }
   };
 
@@ -394,7 +241,6 @@ const Login = () => {
             </div>
           </form>
         </div>
-        </div>
       </div>
     </div>
   );
@@ -403,24 +249,17 @@ const Login = () => {
 export default Login;
 EOL
 
- # Create App.js
+    # Create App.js
     cat > src/App.js << 'EOL'
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './components/Auth/Login';
-import Dashboard from './components/Dashboard/Dashboard';
-import PrivateRoute from './components/Auth/PrivateRoute';
 
 const App = () => {
   return (
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
-        <Route path="/dashboard" element={
-          <PrivateRoute>
-            <Dashboard />
-          </PrivateRoute>
-        } />
         <Route path="/" element={<Navigate to="/login" />} />
       </Routes>
     </BrowserRouter>
@@ -428,64 +267,6 @@ const App = () => {
 };
 
 export default App;
-EOL
-
-    # Create PrivateRoute component
-    cat > src/components/Auth/PrivateRoute.js << 'EOL'
-import React from 'react';
-import { Navigate } from 'react-router-dom';
-
-const PrivateRoute = ({ children }) => {
-  const token = localStorage.getItem('token');
-  return token ? children : <Navigate to="/login" />;
-};
-
-export default PrivateRoute;
-EOL
-
-    # Create Dashboard component
-    mkdir -p src/components/Dashboard
-    cat > src/components/Dashboard/Dashboard.js << 'EOL'
-import React from 'react';
-
-const Dashboard = () => {
-  return (
-    <div className="min-h-screen bg-gray-100">
-      <nav className="bg-white shadow">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex">
-              <div className="flex-shrink-0 flex items-center">
-                <h1 className="text-xl font-bold">IRSSH Panel</h1>
-              </div>
-            </div>
-            <div className="flex items-center">
-              <button
-                onClick={() => {
-                  localStorage.removeItem('token');
-                  window.location.href = '/login';
-                }}
-                className="bg-red-600 px-4 py-2 text-white rounded-md"
-              >
-                Logout
-              </button>
-            </div>
-          </div>
-        </div>
-      </nav>
-      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-        <div className="px-4 py-6 sm:px-0">
-          <div className="border-4 border-dashed border-gray-200 rounded-lg h-96 p-4">
-            <h2 className="text-2xl font-bold mb-4">Welcome to IRSSH Panel</h2>
-            <p>Your dashboard content will appear here.</p>
-          </div>
-        </div>
-      </main>
-    </div>
-  );
-};
-
-export default Dashboard;
 EOL
 
     # Create index.js
@@ -527,16 +308,35 @@ EOL
     npm run build
 }
 
-# Setup Modules
-setup_modules() {
-    log "Setting up modules..."
-    mkdir -p "$MODULES_DIR"
-    
-    # Copy module scripts if they exist
-    if [[ -d "/root/irssh-panel/modules" ]]; then
-        cp -r /root/irssh-panel/modules/* "$MODULES_DIR/"
-        chmod +x "$MODULES_DIR"/*.{py,sh}
-    fi
+# Setup Database
+setup_database() {
+    log "Setting up database..."
+    systemctl start postgresql
+    systemctl enable postgresql
+
+    # Wait for PostgreSQL
+    for i in {1..30}; do
+        if pg_isready -q; then
+            break
+        fi
+        sleep 1
+    done
+
+    # Create database and user
+    sudo -u postgres psql -c "DROP DATABASE IF EXISTS $DB_NAME;"
+    sudo -u postgres psql -c "DROP USER IF EXISTS $DB_USER;"
+    sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
+    sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
+
+    # Save configuration
+    cat > "$CONFIG_DIR/database.env" << EOL
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=$DB_NAME
+DB_USER=$DB_USER
+DB_PASS=$DB_PASS
+EOL
+    chmod 600 "$CONFIG_DIR/database.env"
 }
 
 # Configure Nginx
@@ -547,20 +347,16 @@ setup_nginx() {
 server {
     listen 80;
     listen [::]:80;
-    server_name \$domain;
+    server_name $DOMAIN;
 
     root $FRONTEND_DIR/build;
     index index.html;
 
-    # Security headers
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-XSS-Protection "1; mode=block" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "no-referrer-when-downgrade" always;
-    add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
-    
     location / {
         try_files \$uri \$uri/ /index.html;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
     }
 
     location /api {
@@ -569,15 +365,9 @@ server {
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection 'upgrade';
         proxy_set_header Host \$host;
-        proxy_cache_bypass \$http_upgrade;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-
-        # Security
-        proxy_set_header X-Frame-Options DENY;
-        proxy_set_header X-Content-Type-Options nosniff;
-        proxy_set_header Referrer-Policy 'strict-origin-when-cross-origin';
     }
 
     location /ws {
@@ -626,6 +416,18 @@ setup_firewall() {
     echo "y" | ufw enable
 }
 
+# Setup Modules
+setup_modules() {
+    log "Setting up modules..."
+    mkdir -p "$MODULES_DIR"
+    
+    # Copy module scripts if they exist
+    if [[ -d "/root/irssh-panel/modules" ]]; then
+        cp -r /root/irssh-panel/modules/* "$MODULES_DIR/"
+        chmod +x "$MODULES_DIR"/*.{py,sh}
+    fi
+}
+
 # Verify Installation
 verify_installation() {
     log "Verifying installation..."
@@ -646,11 +448,6 @@ verify_installation() {
     # Check database
     if ! pg_isready -h localhost -U "$DB_USER" -d "$DB_NAME" > /dev/null 2>&1; then
         error "Database is not accessible"
-    fi
-
-    # Verify backend API
-    if ! curl -s "http://localhost:8000/api/health" > /dev/null; then
-        error "Backend API is not responding"
     fi
 }
 
@@ -716,4 +513,4 @@ main() {
 }
 
 # Start installation
-main "$@"   
+main "$@"
