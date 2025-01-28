@@ -98,21 +98,35 @@ check_requirements() {
 install_dependencies() {
     log "Installing system dependencies..."
     apt-get update
+    
+    # Remove old nodejs and npm if installed
+    apt-get remove -y nodejs npm
+    apt-get autoremove -y
+    
+    # Install Node.js and npm using nodesource
+    log "Installing Node.js and npm..."
+    curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
+    
+    # Install other dependencies
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         python3 python3-pip python3-venv \
         postgresql postgresql-contrib \
         nginx certbot python3-certbot-nginx \
         git curl wget zip unzip \
-        supervisor ufw fail2ban \
-        nodejs npm
+        supervisor ufw fail2ban
 
     # Verify installations
-    local packages=(python3 postgresql nginx nodejs npm supervisor)
-    for pkg in "${packages[@]}"; do
-        if ! dpkg -l | grep -q "^ii.*$pkg"; then
-            error "Failed to install $pkg"
-        fi
-    done
+    log "Verifying installations..."
+    if ! command -v node &>/dev/null; then
+        error "Node.js installation failed"
+    fi
+    if ! command -v npm &>/dev/null; then
+        error "npm installation failed"
+    fi
+
+    # Update npm to latest version
+    npm install -g npm@latest
 }
 
 # Setup Python Environment
