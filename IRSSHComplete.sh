@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # IRSSH Panel Complete Installation Script
-# Version: 3.1.0
+# Version: 3.3.0
 
 # Directories
 PANEL_DIR="/opt/irssh-panel"
@@ -72,38 +72,13 @@ restore_backup() {
     fi
 }
 
-# Pre-Installation Checks
-check_requirements() {
-    # Check root
-    if [[ $EUID -ne 0 ]]; then
-        error "This script must be run as root"
-    fi
-
-    # Check system resources
-    if [[ $(free -m | awk '/^Mem:/{print $2}') -lt 1024 ]]; then
-        error "Minimum 1GB RAM required"
-    fi
-
-    if [[ $(df -m / | awk 'NR==2 {print $4}') -lt 2048 ]]; then
-        error "Minimum 2GB free disk space required"
-    fi
-
-    # Check mandatory commands
-    local required_commands=(curl wget git python3 pip3)
-    for cmd in "${required_commands[@]}"; do
-        if ! command -v "$cmd" &>/dev/null; then
-            error "$cmd is required but not installed"
-        fi
-    done
-}
-
-# Clean Previous Node.js Installation
-clean_nodejs() {
-    log "Cleaning previous Node.js installation..."
-    apt-get remove -y nodejs npm || true
-    apt-get autoremove -y || true
-    rm -f /etc/apt/sources.list.d/nodesource.list*
-    apt-get update
+# Initial Setup
+setup_directories() {
+    log "Setting up directories..."
+    mkdir -p "$PANEL_DIR"/{frontend,backend,config,modules}
+    mkdir -p "$FRONTEND_DIR"/{public,src/{components,styles}}
+    mkdir -p "$BACKEND_DIR/app"
+    chmod -R 755 "$PANEL_DIR"
 }
 
 # Install Dependencies
@@ -120,16 +95,13 @@ install_dependencies() {
         supervisor ufw fail2ban
 
     # Clean and Install Node.js
-    clean_nodejs
-    
-    log "Installing Node.js and npm..."
+    log "Setting up Node.js..."
+    apt-get remove -y nodejs npm || true
+    apt-get autoremove -y || true
+    rm -f /etc/apt/sources.list.d/nodesource.list*
+
     curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
     DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
-
-    # Verify Node.js installation
-    if ! command -v node &>/dev/null; then
-        error "Node.js installation failed"
-    fi
 
     # Install specific npm version
     log "Installing compatible npm version..."
@@ -140,50 +112,10 @@ install_dependencies() {
     log "npm version: $(npm -v)"
 }
 
-# Setup Python Environment
-setup_python() {
-    log "Setting up Python environment..."
-    python3 -m venv "$PANEL_DIR/venv"
-    source "$PANEL_DIR/venv/bin/activate"
-    
-    pip install --upgrade pip wheel setuptools
-    pip install \
-        fastapi[all] uvicorn[standard] \
-        sqlalchemy[asyncio] psycopg2-binary \
-        python-jose[cryptography] passlib[bcrypt] \
-        python-multipart aiofiles \
-        python-telegram-bot psutil geoip2 asyncpg
-}
-
 # Setup Frontend
 setup_frontend() {
     log "Setting up frontend..."
-    rm -rf "$FRONTEND_DIR"
-    mkdir -p "$FRONTEND_DIR"
     cd "$FRONTEND_DIR"
-
-    # Verify Node.js and npm
-    if ! command -v node &>/dev/null || ! command -v npm &>/dev/null; then
-        error "Node.js or npm not found. Please check installation."
-    fi
-
-    # Create project structure
-    mkdir -p public src/components
-
-    # Create index.html
-    cat > public/index.html << 'EOL'
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>IRSSH Panel</title>
-  </head>
-  <body>
-    <div id="root"></div>
-  </body>
-</html>
-EOL
 
     # Create package.json
     cat > package.json << 'EOL'
@@ -199,6 +131,7 @@ EOL
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.21.0",
     "react-scripts": "5.0.1",
+    "@babel/plugin-proposal-private-property-in-object": "^7.21.11",
     "tailwindcss": "^3.4.0"
   },
   "scripts": {
@@ -217,24 +150,121 @@ EOL
 }
 EOL
 
+    # Create index.html
+    cat > public/index.html << 'EOL'
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#000000" />
+    <title>IRSSH Panel</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2/dist/tailwind.min.css" rel="stylesheet">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
+EOL
+
+    # Create Login component
+    mkdir -p src/components/Auth
+    cat > src/components/Auth/Login.js << 'EOL'
+import React, { useState } from 'react';
+import axios from 'axios';
+
+const Login = () => {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const response = await axios.post('/api/auth/login', { username, password });
+      if (response.data.token) {
+        localStorage.setItem('token', response.data.token);
+        window.location.href = '/dashboard';
+      }
+    } catch (error) {
+      alert('Login failed. Please check your credentials.');
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-100 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
+      <div className="sm:mx-auto sm:w-full sm:max-w-md">
+        <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
+          IRSSH Panel Login
+        </h2>
+      </div>
+
+      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
+        <div className="bg-white py-8 px-4 shadow sm:rounded-lg sm:px-10">
+          <form className="space-y-6" onSubmit={handleSubmit}>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">
+                Username
+              </label>
+              <div className="mt-1">
+                <input
+                  type="text"
+                  required
+                  className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">
+                Password
+              </label>
+              <div className="mt-1">
+                <input
+                  type="password"
+                  required
+                  className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div>
+              <button
+                type="submit"
+                className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+              >
+                Sign in
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Login;
+EOL
+
     # Create App.js
     cat > src/App.js << 'EOL'
 import React from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import Login from './components/Auth/Login';
 
-function App() {
+const App = () => {
   return (
     <BrowserRouter>
-      <div className="min-h-screen bg-gray-100">
-        <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-          <h1 className="text-3xl font-bold text-gray-900">
-            IRSSH Panel
-          </h1>
-        </div>
-      </div>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/" element={<Navigate to="/login" />} />
+      </Routes>
     </BrowserRouter>
   );
-}
+};
 
 export default App;
 EOL
@@ -243,8 +273,8 @@ EOL
     cat > src/index.js << 'EOL'
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import './index.css';
 import App from './App';
+import './styles/index.css';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
@@ -254,17 +284,26 @@ root.render(
 );
 EOL
 
-    # Create index.css
-    cat > src/index.css << 'EOL'
+    # Create styles
+    cat > src/styles/index.css << 'EOL'
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
 EOL
 
     # Install dependencies and build
     log "Installing frontend dependencies..."
     npm install
-    
+
     log "Building frontend..."
     npm run build
 }
@@ -304,15 +343,16 @@ EOL
 setup_nginx() {
     log "Configuring Nginx..."
     
-    # Create nginx configuration
     cat > /etc/nginx/sites-available/irssh-panel << EOL
 server {
     listen 80;
     listen [::]:80;
     server_name $DOMAIN;
 
+    root $FRONTEND_DIR/build;
+    index index.html;
+
     location / {
-        root $FRONTEND_DIR/build;
         try_files \$uri \$uri/ /index.html;
         add_header X-Frame-Options "SAMEORIGIN" always;
         add_header X-Content-Type-Options "nosniff" always;
@@ -342,11 +382,9 @@ server {
 }
 EOL
 
-    # Enable site
     rm -f /etc/nginx/sites-enabled/default
     ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
 
-    # Test configuration
     nginx -t || error "Nginx configuration test failed"
 }
 
@@ -363,12 +401,10 @@ setup_ssl() {
 setup_firewall() {
     log "Configuring firewall..."
     
-    # Reset UFW
     ufw --force reset
     ufw default deny incoming
     ufw default allow outgoing
 
-    # Allow ports
     ufw allow ssh
     ufw allow http
     ufw allow https
@@ -377,7 +413,6 @@ setup_firewall() {
     ufw allow "$DROPBEAR_PORT"
     ufw allow "$BADVPN_PORT/udp"
 
-    # Enable firewall
     echo "y" | ufw enable
 }
 
@@ -436,6 +471,7 @@ main() {
     
     check_requirements
     create_backup
+    setup_directories
     install_dependencies
     setup_python
     setup_frontend
