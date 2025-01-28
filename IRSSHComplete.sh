@@ -1,18 +1,28 @@
 #!/bin/bash
 
 # IRSSH Panel Complete Installation Script
+# Version: 1.0.0
+
+# Colors
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+BLUE='\033[0;34m'
+NC='\033[0m'
 
 # Configuration
 PANEL_DIR="/opt/irssh-panel"
 FRONTEND_DIR="$PANEL_DIR/frontend"
 BACKEND_DIR="$PANEL_DIR/backend"
 CONFIG_DIR="$PANEL_DIR/config"
+MODULES_DIR="$PANEL_DIR/modules"
 LOG_DIR="/var/log/irssh"
+VENV_DIR="$PANEL_DIR/venv"
 
-# Colors
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-NC='\033[0m'
+# Database Configuration
+DB_NAME="irssh_panel"
+DB_USER="irssh_admin"
+DB_PASS=$(openssl rand -base64 32)
+ADMIN_PASS=$(openssl rand -base64 16)
 
 # Logging
 log() {
@@ -21,31 +31,19 @@ log() {
 
 error() {
     echo -e "${RED}[$(date +'%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1"
-    cleanup
     exit 1
 }
 
-# Cleanup function
-cleanup() {
-    log "Cleaning up installation..."
-    if [ -d "$PANEL_DIR" ]; then
-        rm -rf "$PANEL_DIR"
-    fi
-    if [ -f "/etc/nginx/sites-enabled/irssh-panel" ]; then
-        rm -f "/etc/nginx/sites-enabled/irssh-panel"
-    fi
-    if [ -f "/etc/supervisor/conf.d/irssh-panel.conf" ]; then
-        rm -f "/etc/supervisor/conf.d/irssh-panel.conf"
-    fi
-}
-
-# Trap for cleanup
-trap cleanup ERR
+# Check root
+if [[ $EUID -ne 0 ]]; then
+    error "This script must be run as root"
+fi
 
 # User Input
+log "Getting user input..."
 read -p "Enter domain name (e.g., panel.example.com): " DOMAIN
-read -p "Enter web panel port (default: 443): " WEB_PORT
-WEB_PORT=${WEB_PORT:-443}
+read -p "Enter panel port (default: 443): " PANEL_PORT
+PANEL_PORT=${PANEL_PORT:-443}
 read -p "Enter SSH port (default: 22): " SSH_PORT
 SSH_PORT=${SSH_PORT:-22}
 read -p "Enter Dropbear port (default: 444): " DROPBEAR_PORT
@@ -53,60 +51,63 @@ DROPBEAR_PORT=${DROPBEAR_PORT:-444}
 read -p "Enter BadVPN port (default: 7300): " BADVPN_PORT
 BADVPN_PORT=${BADVPN_PORT:-7300}
 
-# Generate secure passwords
-ADMIN_USER="admin"
-ADMIN_PASS=$(openssl rand -base64 12)
-DB_USER="irssh_admin"
-DB_PASS=$(openssl rand -base64 32)
-DB_NAME="irssh_panel"
-
-# Check root
-if [[ $EUID -ne 0 ]]; then
-    error "This script must be run as root"
-fi
-
-# Install Dependencies
-log "Installing dependencies..."
-apt-get update
-apt-get install -y \
-    curl \
-    wget \
-    git \
-    nginx \
-    postgresql \
-    python3 \
-    python3-pip \
-    python3-venv \
-    supervisor \
-    ufw \
-    fail2ban \
-    nodejs \
-    npm \
-    certbot \
-    python3-certbot-nginx
-
-# Setup PostgreSQL
-log "Setting up database..."
-if ! systemctl is-active --quiet postgresql; then
-    systemctl start postgresql
-    systemctl enable postgresql
-fi
-
-sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
-sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
-
-# Setup Directories
-log "Setting up directories..."
+# Create directories
+log "Creating directories..."
 mkdir -p "$FRONTEND_DIR"
 mkdir -p "$BACKEND_DIR"
 mkdir -p "$CONFIG_DIR"
+mkdir -p "$MODULES_DIR"
 mkdir -p "$LOG_DIR"
 
-# Setup Python Environment
-log "Setting up Python environment..."
-python3 -m venv "$PANEL_DIR/venv"
-source "$PANEL_DIR/venv/bin/activate"
+# Install dependencies
+log "Installing system dependencies..."
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    postgresql \
+    postgresql-contrib \
+    nginx \
+    certbot \
+    python3-certbot-nginx \
+    git \
+    curl \
+    supervisor \
+    ufw \
+    fail2ban \
+    net-tools \
+    npm \
+    nodejs
 
+# Setup PostgreSQL
+log "Setting up PostgreSQL..."
+systemctl start postgresql
+systemctl enable postgresql
+
+# Create database and user
+if ! sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
+    log "Creating database..."
+    sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
+    sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
+fi
+
+# Save database configuration
+cat > "$CONFIG_DIR/database.env" << EOL
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=$DB_NAME
+DB_USER=$DB_USER
+DB_PASS=$DB_PASS
+EOL
+chmod 600 "$CONFIG_DIR/database.env"
+
+# Setup Python environment
+log "Setting up Python environment..."
+python3 -m venv "$VENV_DIR"
+source "$VENV_DIR/bin/activate"
+
+pip install --upgrade pip
 pip install \
     fastapi[all] \
     uvicorn[standard] \
@@ -115,13 +116,21 @@ pip install \
     python-jose[cryptography] \
     passlib[bcrypt] \
     python-multipart \
-    aiofiles
+    aiofiles \
+    python-telegram-bot \
+    psutil \
+    geoip2 \
+    asyncpg
 
 # Setup Frontend
 log "Setting up frontend..."
 cd "$FRONTEND_DIR"
-npx create-react-app . --template typescript
+npm init -y
+
+# Install React and dependencies
 npm install \
+    react \
+    react-dom \
     @headlessui/react \
     @heroicons/react \
     axios \
@@ -129,34 +138,21 @@ npm install \
     tailwindcss \
     @tailwindcss/forms
 
-# Configure Frontend
-cat > "$FRONTEND_DIR/src/App.tsx" << 'EOL'
-import React from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+# Create React app structure
+mkdir -p src/components/{Dashboard,UserManagement,Settings,Monitoring}
 
-function App() {
-  return (
-    <BrowserRouter>
-      <div className="min-h-screen bg-gray-100">
-        <Routes>
-          <Route path="/" element={<div>IRSSH Panel</div>} />
-        </Routes>
-      </div>
-    </BrowserRouter>
-  );
-}
+# Copy frontend files from repository
+if [ -d "/root/irssh-panel/frontend/src" ]; then
+    cp -r /root/irssh-panel/frontend/src/* "$FRONTEND_DIR/src/"
+fi
 
-export default App;
-EOL
-
-# Build Frontend
+# Build frontend
 npm run build
 
 # Configure Nginx
 log "Configuring Nginx..."
 cat > /etc/nginx/sites-available/irssh-panel << EOL
 server {
-    listen 80;
     server_name $DOMAIN;
 
     root $FRONTEND_DIR/build;
@@ -164,6 +160,9 @@ server {
 
     location / {
         try_files \$uri \$uri/ /index.html;
+        add_header X-Frame-Options "SAMEORIGIN";
+        add_header X-Content-Type-Options "nosniff";
+        add_header X-XSS-Protection "1; mode=block";
     }
 
     location /api {
@@ -172,8 +171,12 @@ server {
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection 'upgrade';
         proxy_set_header Host \$host;
-        proxy_cache_bypass \$http_upgrade;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
     }
+
+    client_max_body_size 100M;
 }
 EOL
 
@@ -182,66 +185,98 @@ rm -f /etc/nginx/sites-enabled/default
 
 # Configure SSL
 log "Configuring SSL..."
-certbot --nginx -d $DOMAIN --non-interactive --agree-tos --redirect
+certbot --nginx -d $DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN
 
-# Configure Supervisor
-log "Configuring Supervisor..."
+# Configure supervisor
+log "Configuring supervisor..."
 cat > /etc/supervisor/conf.d/irssh-panel.conf << EOL
 [program:irssh-panel]
 directory=$BACKEND_DIR
-command=$PANEL_DIR/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+command=$VENV_DIR/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
 user=root
 autostart=true
 autorestart=true
 stderr_logfile=$LOG_DIR/uvicorn.err.log
 stdout_logfile=$LOG_DIR/uvicorn.out.log
+environment=PYTHONPATH="$BACKEND_DIR"
 EOL
 
-# Save Configuration
-log "Saving configuration..."
-cat > "$CONFIG_DIR/config.env" << EOL
-DOMAIN=$DOMAIN
-WEB_PORT=$WEB_PORT
-SSH_PORT=$SSH_PORT
-DROPBEAR_PORT=$DROPBEAR_PORT
-BADVPN_PORT=$BADVPN_PORT
-ADMIN_USER=$ADMIN_USER
-ADMIN_PASS=$ADMIN_PASS
-DB_NAME=$DB_NAME
-DB_USER=$DB_USER
-DB_PASS=$DB_PASS
-EOL
+# Setup modules
+log "Setting up modules..."
+for module in ssh l2tp ikev2 cisco wireguard singbox; do
+    log "Initializing $module module..."
+    "$MODULES_DIR/$module-script.py" init || error "Failed to initialize $module module"
+    
+    # Generate default configuration
+    "$MODULES_DIR/$module-script.py" generate-config > "$CONFIG_DIR/$module.json"
+    chmod 600 "$CONFIG_DIR/$module.json"
+done
 
-chmod 600 "$CONFIG_DIR/config.env"
-
-# Configure Firewall
+# Configure firewall
 log "Configuring firewall..."
-ufw allow $WEB_PORT/tcp
+ufw allow $PANEL_PORT/tcp
 ufw allow $SSH_PORT/tcp
 ufw allow $DROPBEAR_PORT/tcp
 ufw allow $BADVPN_PORT/udp
 ufw --force enable
 
-# Start Services
+# Create initial admin user
+log "Creating admin user..."
+cat > "$BACKEND_DIR/create_admin.py" << EOL
+from app.core.security import get_password_hash
+from app.models import User
+from app.core.database import SessionLocal
+import asyncio
+
+async def create_admin():
+    db = SessionLocal()
+    admin = User(
+        username="admin",
+        hashed_password=get_password_hash("$ADMIN_PASS"),
+        email="admin@$DOMAIN",
+        is_superuser=True
+    )
+    db.add(admin)
+    await db.commit()
+
+asyncio.run(create_admin())
+EOL
+
+source "$VENV_DIR/bin/activate"
+python "$BACKEND_DIR/create_admin.py"
+
+# Start services
 log "Starting services..."
 systemctl restart nginx
 supervisorctl reread
 supervisorctl update
 supervisorctl restart irssh-panel
 
-# Final Check
-log "Performing final checks..."
-if ! curl -s "http://localhost:8000/api/health" | grep -q "healthy"; then
-    error "API health check failed"
+# Final verification
+log "Performing final verification..."
+sleep 5
+
+# Check if services are running
+if ! systemctl is-active --quiet nginx; then
+    error "Nginx is not running"
 fi
 
-# Installation Complete
+if ! pgrep -f "uvicorn app.main:app" > /dev/null; then
+    error "Backend service is not running"
+fi
+
 log "Installation completed successfully!"
 echo
 echo "IRSSH Panel has been installed with the following credentials:"
 echo "Panel URL: https://$DOMAIN"
-echo "Admin Username: $ADMIN_USER"
+echo "Admin Username: admin"
 echo "Admin Password: $ADMIN_PASS"
 echo
-echo "Please save these credentials and change the password after first login."
+echo "Please change these passwords immediately after first login."
 echo "Installation logs are available at: $LOG_DIR"
+echo
+echo "Configured ports:"
+echo "Panel: $PANEL_PORT"
+echo "SSH: $SSH_PORT"
+echo "Dropbear: $DROPBEAR_PORT"
+echo "BadVPN: $BADVPN_PORT"
