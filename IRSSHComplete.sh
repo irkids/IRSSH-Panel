@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # IRSSH Panel Complete Installation Script
-# Version: 3.4.0
+# Version: 3.4.1
 
 # Directories
 PANEL_DIR="/opt/irssh-panel"
@@ -48,25 +48,22 @@ warn() {
 
 # Pre-Installation Checks
 check_requirements() {
-    # Check root
     if [[ $EUID -ne 0 ]]; then
-        error "این اسکریپت باید با دسترسی روت اجرا شود"
+        error "This script must be run as root"
     fi
 
-    # Check system resources
     if [[ $(free -m | awk '/^Mem:/{print $2}') -lt 1024 ]]; then
-        error "حداقل 1 گیگابایت رم نیاز است"
+        error "Minimum 1GB RAM required"
     fi
 
     if [[ $(df -m / | awk 'NR==2 {print $4}') -lt 2048 ]]; then
-        error "حداقل 2 گیگابایت فضای خالی نیاز است"
+        error "Minimum 2GB free disk space required"
     fi
 
-    # Check mandatory commands
     local required_commands=(curl wget git python3 pip3)
     for cmd in "${required_commands[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
-            error "$cmd نیاز است اما نصب نشده است"
+            error "$cmd is required but not installed"
         fi
     done
 }
@@ -74,9 +71,9 @@ check_requirements() {
 # Cleanup and Backup
 cleanup() {
     if [[ $? -ne 0 ]]; then
-        error "نصب با خطا مواجه شد. در حال بازیابی نسخه پشتیبان..." "no-exit"
+        error "Installation failed. Attempting backup restore..." "no-exit"
         if [[ -d "$BACKUP_DIR" ]]; then
-            warn "تلاش برای بازیابی از نسخه پشتیبان..."
+            warn "Attempting to restore from backup..."
             restore_backup
         fi
     fi
@@ -94,25 +91,24 @@ restore_backup() {
     if [[ -n "$latest_backup" ]]; then
         rm -rf "$PANEL_DIR"
         tar -xzf "$latest_backup" -C "$(dirname "$PANEL_DIR")"
-        log "بازیابی از نسخه پشتیبان: $latest_backup"
+        log "Restored from backup: $latest_backup"
     fi
 }
 
 # Initial Setup
 setup_directories() {
-    log "ایجاد پوشه‌های مورد نیاز..."
+    log "Setting up directories..."
     mkdir -p "$PANEL_DIR"/{frontend,backend,config,modules}
     mkdir -p "$FRONTEND_DIR"/{public,src/{components,styles}}
-    mkdir -p "$BACKEND_DIR/app"
+    mkdir -p "$BACKEND_DIR"/{app,migrations}
     chmod -R 755 "$PANEL_DIR"
 }
 
 # Install Dependencies
 install_dependencies() {
-    log "نصب وابستگی‌های سیستمی..."
+    log "Installing system dependencies..."
     apt-get update
 
-    # Install basic dependencies
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         python3 python3-pip python3-venv \
         postgresql postgresql-contrib \
@@ -120,27 +116,19 @@ install_dependencies() {
         git curl wget zip unzip \
         supervisor ufw fail2ban
 
-    # Clean and Install Node.js
-    log "نصب Node.js..."
-    apt-get remove -y nodejs npm || true
-    apt-get autoremove -y || true
-    rm -f /etc/apt/sources.list.d/nodesource.list*
-
+    log "Setting up Node.js..."
     curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
     DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
 
-    # Install specific npm version
-    log "نصب نسخه سازگار npm..."
-    npm install -g npm@8.19.4 || error "نصب npm با خطا مواجه شد"
+    npm install -g npm@8.19.4 || error "npm installation failed"
 
-    # Verify installations
     log "Node.js version: $(node -v)"
     log "npm version: $(npm -v)"
 }
 
 # Setup Python Environment
 setup_python() {
-    log "راه‌اندازی محیط Python..."
+    log "Setting up Python environment..."
     python3 -m venv "$PANEL_DIR/venv"
     source "$PANEL_DIR/venv/bin/activate"
     
@@ -153,16 +141,19 @@ setup_python() {
         python-telegram-bot psutil geoip2 asyncpg
 
     # Create Backend Structure
-    log "ایجاد ساختار بک‌اند..."
+    log "Setting up backend structure..."
     
     # Create main.py
     cat > "$BACKEND_DIR/app/main.py" << 'EOL'
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1.endpoints import auth, users, protocols, monitoring
-from app.core.config import settings
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from jose import JWTError, jwt
+from datetime import datetime, timedelta
+from typing import Optional
+import os
 
-app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION)
+app = FastAPI(title="IRSSH Panel API", version="3.4.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -172,56 +163,40 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
-app.include_router(users.router, prefix="/api/users", tags=["users"])
-app.include_router(protocols.router, prefix="/api/protocols", tags=["protocols"])
-app.include_router(monitoring.router, prefix="/api/monitoring", tags=["monitoring"])
-
-@app.get("/api/health")
-def health_check():
-    return {"status": "healthy"}
-EOL
-
-    # Create config.py
-    cat > "$BACKEND_DIR/app/core/config.py" << EOL
-from pydantic_settings import BaseSettings
-
-class Settings(BaseSettings):
-    PROJECT_NAME: str = "IRSSH Panel"
-    VERSION: str = "3.4.0"
-    API_V1_STR: str = "/api/v1"
-    JWT_SECRET_KEY: str = "$JWT_SECRET"
-    ADMIN_USER: str = "admin"
-    ADMIN_PASS: str = "$ADMIN_PASS"
-    DATABASE_URL: str = "postgresql://${DB_USER}:${DB_PASS}@localhost/${DB_NAME}"
-
-settings = Settings()
-EOL
-
-    # Create auth.py
-    cat > "$BACKEND_DIR/app/api/v1/endpoints/auth.py" << 'EOL'
-from fastapi import APIRouter, HTTPException, Depends
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from jose import JWTError, jwt
-from datetime import datetime, timedelta
-from app.core.config import settings
-
-router = APIRouter()
+# Security settings
+SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
-def create_access_token(data: dict):
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=30)
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=15)
     to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm="HS256")
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
 
-@router.post("/login")
+@app.post("/api/auth/login")
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    if form_data.username == settings.ADMIN_USER and form_data.password == settings.ADMIN_PASS:
-        access_token = create_access_token(data={"sub": settings.ADMIN_USER})
+    if form_data.username == os.getenv("ADMIN_USER") and form_data.password == os.getenv("ADMIN_PASS"):
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": form_data.username}, expires_delta=access_token_expires
+        )
         return {"access_token": access_token, "token_type": "bearer"}
-    raise HTTPException(status_code=401, detail="نام کاربری یا رمز عبور اشتباه است")
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+@app.get("/api/health")
+async def health_check():
+    return {"status": "healthy"}
 EOL
 
     # Create supervisord config
@@ -238,8 +213,7 @@ environment=
     PYTHONPATH="$BACKEND_DIR",
     JWT_SECRET_KEY="$JWT_SECRET",
     ADMIN_USER="admin",
-    ADMIN_PASS="$ADMIN_PASS",
-    DATABASE_URL="postgresql://${DB_USER}:${DB_PASS}@localhost/${DB_NAME}"
+    ADMIN_PASS="$ADMIN_PASS"
 EOL
 
     supervisorctl reread
@@ -249,14 +223,14 @@ EOL
 
 # Setup Frontend
 setup_frontend() {
-    log "راه‌اندازی فرانت‌اند..."
+    log "Setting up frontend..."
     cd "$FRONTEND_DIR"
 
     # Create package.json
     cat > package.json << 'EOL'
 {
   "name": "irssh-panel-frontend",
-  "version": "3.4.0",
+  "version": "3.4.1",
   "private": true,
   "dependencies": {
     "@headlessui/react": "^1.7.0",
@@ -335,7 +309,7 @@ const Login = () => {
         window.location.href = '/dashboard';
       }
     } catch (error) {
-      setError('نام کاربری یا رمز عبور اشتباه است');
+      setError('Invalid username or password');
       console.error('Login error:', error);
     } finally {
       setLoading(false);
@@ -360,7 +334,7 @@ const Login = () => {
           <form className="space-y-6" onSubmit={handleSubmit}>
             <div>
               <label className="block text-sm font-medium text-gray-700">
-                نام کاربری
+                Username
               </label>
               <div className="mt-1">
                 <input
@@ -375,7 +349,7 @@ const Login = () => {
 
             <div>
               <label className="block text-sm font-medium text-gray-700">
-                رمز عبور
+                Password
               </label>
               <div className="mt-1">
                 <input
@@ -396,7 +370,7 @@ const Login = () => {
                   loading ? 'bg-indigo-400' : 'bg-indigo-600 hover:bg-indigo-700'
                 } focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500`}
               >
-                {loading ? 'در حال ورود...' : 'ورود به پنل'}
+                {loading ? 'Logging in...' : 'Sign in'}
               </button>
             </div>
           </form>
@@ -407,112 +381,6 @@ const Login = () => {
 };
 
 export default Login;
-EOL
-
-    # Create Dashboard component
-    mkdir -p src/components/Dashboard
-    cat > src/components/Dashboard/Dashboard.js << 'EOL'
-import React, { useEffect, useState } from 'react';
-import axios from 'axios';
-
-const Dashboard = () => {
-  const [serverInfo, setServerInfo] = useState(null);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    const fetchServerInfo = async () => {
-      try {
-        const response = await axios.get('/api/monitoring/system', {
-          headers: {
-            Authorization: `Bearer ${localStorage.getItem('token')}`
-          }
-        });
-        setServerInfo(response.data);
-      } catch (err) {
-        setError('خطا در دریافت اطلاعات سرور');
-        console.error('Server info error:', err);
-      }
-    };
-
-    fetchServerInfo();
-    const interval = setInterval(fetchServerInfo, 30000); // Update every 30 seconds
-    return () => clearInterval(interval);
-  }, []);
-
-  return (
-    <div className="min-h-screen bg-gray-100">
-      <nav className="bg-white shadow">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex">
-              <div className="flex-shrink-0 flex items-center">
-                <h1 className="text-xl font-bold">IRSSH Panel</h1>
-              </div>
-            </div>
-            <div className="flex items-center">
-              <button
-                onClick={() => {
-                  localStorage.removeItem('token');
-                  window.location.href = '/login';
-                }}
-                className="bg-red-600 px-4 py-2 text-white rounded-md hover:bg-red-700"
-              >
-                خروج
-              </button>
-            </div>
-          </div>
-        </div>
-      </nav>
-
-      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-        <div className="px-4 py-6 sm:px-0">
-          {error ? (
-            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
-              {error}
-            </div>
-          ) : serverInfo ? (
-            <div className="bg-white shadow rounded-lg p-6">
-              <h2 className="text-2xl font-bold mb-4">اطلاعات سیستم</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <p className="text-gray-600">CPU Usage: {serverInfo.cpu}%</p>
-                  <p className="text-gray-600">Memory Usage: {serverInfo.memory}%</p>
-                  <p className="text-gray-600">Disk Usage: {serverInfo.disk}%</p>
-                </div>
-                <div>
-                  <p className="text-gray-600">Active Users: {serverInfo.activeUsers}</p>
-                  <p className="text-gray-600">Total Connections: {serverInfo.totalConnections}</p>
-                  <p className="text-gray-600">Server Uptime: {serverInfo.uptime}</p>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="flex justify-center items-center h-64">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
-            </div>
-          )}
-        </div>
-      </main>
-    </div>
-  );
-};
-
-export default Dashboard;
-EOL
-
-    # Create index.js
-    cat > src/index.js << 'EOL'
-import React from 'react';
-import ReactDOM from 'react-dom/client';
-import App from './App';
-import './styles/index.css';
-
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
 EOL
 
     # Create App.js
@@ -555,6 +423,115 @@ const PrivateRoute = ({ children }) => {
 export default PrivateRoute;
 EOL
 
+    # Create Dashboard component
+    mkdir -p src/components/Dashboard
+    cat > src/components/Dashboard/Dashboard.js << 'EOL'
+import React, { useEffect, useState } from 'react';
+import axios from 'axios';
+
+const Dashboard = () => {
+  const [serverInfo, setServerInfo] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const fetchServerInfo = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        const response = await axios.get('/api/monitoring/system', {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
+        setServerInfo(response.data);
+      } catch (err) {
+        setError('Error loading server information');
+        console.error('Server info error:', err);
+      }
+    };
+
+    fetchServerInfo();
+    const interval = setInterval(fetchServerInfo, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    window.location.href = '/login';
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-100">
+      <nav className="bg-white shadow">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between h-16">
+            <div className="flex">
+              <div className="flex-shrink-0 flex items-center">
+                <h1 className="text-xl font-bold">IRSSH Panel</h1>
+              </div>
+            </div>
+            <div className="flex items-center">
+              <button
+                onClick={handleLogout}
+                className="bg-red-600 px-4 py-2 text-white rounded-md hover:bg-red-700"
+              >
+                Logout
+              </button>
+            </div>
+          </div>
+        </div>
+      </nav>
+
+      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+        <div className="px-4 py-6 sm:px-0">
+          {error ? (
+            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
+              {error}
+            </div>
+          ) : serverInfo ? (
+            <div className="bg-white shadow rounded-lg p-6">
+              <h2 className="text-2xl font-bold mb-4">System Information</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <p className="text-gray-600">CPU Usage: {serverInfo.cpu}%</p>
+                  <p className="text-gray-600">Memory Usage: {serverInfo.memory}%</p>
+                  <p className="text-gray-600">Disk Usage: {serverInfo.disk}%</p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Active Users: {serverInfo.activeUsers}</p>
+                  <p className="text-gray-600">Total Connections: {serverInfo.totalConnections}</p>
+                  <p className="text-gray-600">Server Uptime: {serverInfo.uptime}</p>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="flex justify-center items-center h-64">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
+            </div>
+          )}
+        </div>
+      </main>
+    </div>
+  );
+};
+
+export default Dashboard;
+EOL
+
+    # Create index.js
+    cat > src/index.js << 'EOL'
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './App';
+import './styles/index.css';
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+EOL
+
     # Create styles
     cat > src/styles/index.css << 'EOL'
 @tailwind base;
@@ -576,23 +553,40 @@ code {
 }
 EOL
 
-    # Install dependencies and build
-    log "نصب وابستگی‌های فرانت‌اند..."
+    # Create axios config
+    cat > src/config/axios.js << 'EOL'
+import axios from 'axios';
+
+axios.interceptors.response.use(
+  response => response,
+  error => {
+    if (error.response && error.response.status === 401) {
+      localStorage.removeItem('token');
+      window.location.href = '/login';
+    }
+    return Promise.reject(error);
+  }
+);
+
+export default axios;
+EOL
+
+    log "Installing frontend dependencies..."
     npm install
 
-    log "ساخت فرانت‌اند..."
+    log "Building frontend..."
     GENERATE_SOURCEMAP=false npm run build
 
     if [ $? -eq 0 ]; then
-        log "فرانت‌اند با موفقیت ساخته شد"
+        log "Frontend built successfully"
     else
-        error "خطا در ساخت فرانت‌اند"
+        error "Frontend build failed"
     fi
 }
 
 # Setup Database
 setup_database() {
-    log "تنظیم پایگاه داده..."
+    log "Setting up database..."
     systemctl start postgresql
     systemctl enable postgresql
 
@@ -623,7 +617,7 @@ EOL
 
 # Setup Nginx
 setup_nginx() {
-    log "پیکربندی Nginx..."
+    log "Configuring Nginx..."
     
     cat > /etc/nginx/sites-available/irssh-panel << EOL
 server {
@@ -677,14 +671,13 @@ EOL
     rm -f /etc/nginx/sites-enabled/default
     ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
 
-    # Test Nginx configuration
-    nginx -t || error "تست پیکربندی Nginx با خطا مواجه شد"
+    nginx -t || error "Nginx configuration test failed"
 }
 
 # Setup SSL
 setup_ssl() {
     if [[ -n "$DOMAIN" ]]; then
-        log "تنظیم SSL..."
+        log "Setting up SSL..."
         
         # Stop Nginx temporarily
         systemctl stop nginx
@@ -695,7 +688,7 @@ setup_ssl() {
             --non-interactive \
             --agree-tos \
             --email "admin@$DOMAIN" \
-            --http-01-port=80 || error "درخواست SSL ناموفق بود"
+            --http-01-port=80 || error "SSL certificate request failed"
 
         # Update Nginx configuration for SSL
         cat > /etc/nginx/sites-available/irssh-panel << EOL
@@ -772,7 +765,7 @@ EOL
 
 # Configure Firewall
 setup_firewall() {
-    log "پیکربندی فایروال..."
+    log "Configuring firewall..."
     
     ufw --force reset
     ufw default deny incoming
@@ -789,28 +782,11 @@ setup_firewall() {
 
     # Enable UFW
     echo "y" | ufw enable
-
-    log "پیکربندی فایروال انجام شد"
-}
-
-# Setup Modules
-setup_modules() {
-    log "نصب ماژول‌ها..."
-    mkdir -p "$MODULES_DIR"
-    
-    # Copy module scripts if they exist
-    if [[ -d "/root/irssh-panel/modules" ]]; then
-        cp -r /root/irssh-panel/modules/* "$MODULES_DIR/"
-        chmod +x "$MODULES_DIR"/*.{py,sh}
-        log "ماژول‌ها با موفقیت نصب شدند"
-    else
-        warn "پوشه ماژول‌ها یافت نشد"
-    fi
 }
 
 # Setup Security
 setup_security() {
-    log "پیکربندی تنظیمات امنیتی..."
+    log "Configuring security settings..."
 
     # Configure fail2ban
     cat > /etc/fail2ban/jail.local << EOL
@@ -837,38 +813,71 @@ EOL
     sed -i 's/#PermitRootLogin yes/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
     sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
     systemctl restart sshd
-
-    log "تنظیمات امنیتی با موفقیت پیکربندی شد"
 }
 
 # Verify Installation
 verify_installation() {
-    log "بررسی نصب..."
+    log "Verifying installation..."
 
     # Check services
     local services=(nginx postgresql supervisor)
     for service in "${services[@]}"; do
         if ! systemctl is-active --quiet $service; then
-            error "سرویس $service در حال اجرا نیست"
+            error "Service $service is not running"
         fi
     done
 
     # Check web server
     if ! curl -s "http://localhost" > /dev/null; then
-        error "وب سرور پاسخ نمی‌دهد"
+        error "Web server is not responding"
     fi
 
     # Check database
     if ! pg_isready -h localhost -U "$DB_USER" -d "$DB_NAME" > /dev/null 2>&1; then
-        error "پایگاه داده در دسترس نیست"
+        error "Database is not accessible"
     fi
 
     # Check backend API
     if ! curl -s "http://localhost:8000/api/health" > /dev/null; then
-        error "API بک‌اند پاسخ نمی‌دهد"
+        error "Backend API is not responding"
     fi
 
-    log "همه سرویس‌ها با موفقیت بررسی شدند"
+    log "All services verified successfully"
+}
+
+# Setup Modules
+setup_modules() {
+    log "Setting up modules..."
+    mkdir -p "$MODULES_DIR"
+    
+    # Copy module scripts if they exist
+    if [[ -d "/root/irssh-panel/modules" ]]; then
+        cp -r /root/irssh-panel/modules/* "$MODULES_DIR/"
+        chmod +x "$MODULES_DIR"/*.{py,sh}
+        log "Modules installed successfully"
+    else
+        warn "Modules directory not found"
+    fi
+}
+
+# Save Installation Info
+save_installation_info() {
+    local info_file="$CONFIG_DIR/installation.info"
+    
+    cat > "$info_file" << EOL
+Installation Date: $(date +"%Y-%m-%d %H:%M:%S")
+Version: 3.4.1
+Domain: ${DOMAIN}
+Web Port: ${WEB_PORT}
+SSH Port: ${SSH_PORT}
+Dropbear Port: ${DROPBEAR_PORT}
+BadVPN Port: ${BADVPN_PORT}
+Admin Username: admin
+Admin Password: ${ADMIN_PASS}
+JWT Secret: ${JWT_SECRET}
+EOL
+
+    chmod 600 "$info_file"
 }
 
 # Main Installation
@@ -876,17 +885,17 @@ main() {
     trap cleanup EXIT
     
     setup_logging
-    log "شروع نصب IRSSH Panel نسخه 3.4.0..."
+    log "Starting IRSSH Panel installation v3.4.1..."
     
     # Get user input
-    read -p "نام دامنه را وارد کنید (مثال: panel.example.com): " DOMAIN
-    read -p "پورت پنل را وارد کنید (پیش‌فرض: 443): " WEB_PORT
+    read -p "Enter domain name (e.g., panel.example.com): " DOMAIN
+    read -p "Enter web panel port (default: 443): " WEB_PORT
     WEB_PORT=${WEB_PORT:-443}
-    read -p "پورت SSH را وارد کنید (پیش‌فرض: 22): " SSH_PORT
+    read -p "Enter SSH port (default: 22): " SSH_PORT
     SSH_PORT=${SSH_PORT:-22}
-    read -p "پورت Dropbear را وارد کنید (پیش‌فرض: 444): " DROPBEAR_PORT
+    read -p "Enter Dropbear port (default: 444): " DROPBEAR_PORT
     DROPBEAR_PORT=${DROPBEAR_PORT:-444}
-    read -p "پورت BadVPN را وارد کنید (پیش‌فرض: 7300): " BADVPN_PORT
+    read -p "Enter BadVPN port (default: 7300): " BADVPN_PORT
     BADVPN_PORT=${BADVPN_PORT:-7300}
     
     # Run installation steps
@@ -903,36 +912,39 @@ main() {
     setup_firewall
     setup_security
     verify_installation
+    save_installation_info
     
     # Installation complete
-    log "نصب با موفقیت انجام شد!"
+    log "Installation completed successfully!"
     echo
-    echo "IRSSH Panel با موفقیت نصب شد!"
+    echo "IRSSH Panel has been installed!"
     echo
-    echo "اطلاعات ورود مدیر:"
-    echo "نام کاربری: admin"
-    echo "رمز عبور: $ADMIN_PASS"
+    echo "Admin Credentials:"
+    echo "Username: admin"
+    echo "Password: $ADMIN_PASS"
     echo
-    echo "آدرس‌های دسترسی:"
+    echo "Access URLs:"
     if [[ -n "$DOMAIN" ]]; then
-        echo "پنل: https://$DOMAIN"
+        echo "Panel: https://$DOMAIN"
     else
-        echo "پنل: http://YOUR-SERVER-IP"
+        echo "Panel: http://YOUR-SERVER-IP"
     fi
     echo
-    echo "پورت‌های پیکربندی شده:"
-    echo "پنل وب: $WEB_PORT"
+    echo "Configured Ports:"
+    echo "Web Panel: $WEB_PORT"
     echo "SSH: $SSH_PORT"
     echo "Dropbear: $DROPBEAR_PORT"
     echo "BadVPN: $BADVPN_PORT"
     echo
-    echo "فایل لاگ نصب: $LOG_DIR/install.log"
+    echo "Installation Log: $LOG_DIR/install.log"
+    echo "Installation Info: $CONFIG_DIR/installation.info"
     echo
-    echo "نکات مهم:"
-    echo "1. لطفاً این اطلاعات را در جای امنی ذخیره کنید"
-    echo "2. بعد از اولین ورود، رمز عبور مدیر را تغییر دهید"
-    echo "3. تنظیمات امنیتی اضافی را در پنل پیکربندی کنید"
-    echo "4. فایل لاگ نصب را برای هشدارها بررسی کنید"
+    echo "Important Notes:"
+    echo "1. Please save these credentials securely"
+    echo "2. Change the admin password after first login"
+    echo "3. Configure additional security settings in the panel"
+    echo "4. Check the installation log for any warnings"
+    echo "5. A backup of the previous installation (if any) has been saved in: $BACKUP_DIR"
 }
 
 # Start installation
