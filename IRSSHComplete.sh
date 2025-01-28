@@ -131,9 +131,9 @@ install_dependencies() {
         error "Node.js installation failed"
     fi
 
-    # Update npm
-    log "Updating npm..."
-    npm install -g npm@latest || error "npm update failed"
+    # Install specific npm version
+    log "Installing compatible npm version..."
+    npm install -g npm@8.19.4 || error "npm installation failed"
 
     # Verify installations
     log "Node.js version: $(node -v)"
