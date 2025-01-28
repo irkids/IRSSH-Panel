@@ -1,0 +1,109 @@
+#!/bin/bash
+
+# IRSSH Panel End Configuration Script
+
+# Colors
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+# Configuration
+PANEL_DIR="/opt/irssh-panel"
+FRONTEND_DIR="$PANEL_DIR/frontend"
+BACKEND_DIR="$PANEL_DIR/backend"
+CONFIG_DIR="$PANEL_DIR/config"
+LOG_DIR="/var/log/irssh"
+
+# Logging
+log() {
+    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"
+}
+
+error() {
+    echo -e "${RED}[$(date +'%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1"
+    exit 1
+}
+
+# Check root
+if [[ $EUID -ne 0 ]]; then
+    error "This script must be run as root"
+fi
+
+# Setup cron jobs
+log "Setting up cron jobs..."
+cat > /etc/cron.d/irssh << EOL
+# System updates
+0 3 * * * root apt-get update && apt-get upgrade -y
+# Backup
+0 2 * * * root $PANEL_DIR/scripts/backup.sh
+# Log rotation
+0 0 * * * root /usr/sbin/logrotate /etc/logrotate.conf
+EOL
+
+# Setup log rotation
+log "Configuring log rotation..."
+cat > /etc/logrotate.d/irssh << EOL
+$LOG_DIR/*.log {
+    daily
+    missingok
+    rotate 7
+    compress
+    delaycompress
+    notifempty
+    create 0640 root root
+    sharedscripts
+    postrotate
+        supervisorctl restart irssh-panel >/dev/null 2>&1 || true
+    endscript
+}
+EOL
+
+# Final system check
+log "Performing final system check..."
+
+# Check backend
+if ! pgrep -f "uvicorn app.main:app" > /dev/null; then
+    error "Backend service is not running"
+fi
+
+# Check nginx
+if ! systemctl is-active --quiet nginx; then
+    error "Nginx is not running"
+fi
+
+# Check database
+source "$CONFIG_DIR/database.env"
+if ! pg_isready -h localhost -p 5432 -U "$DB_USER" -d "$DB_NAME" > /dev/null 2>&1; then
+    error "Database is not accessible"
+fi
+
+# Final security checks
+log "Performing security checks..."
+
+# Check firewall
+if ! ufw status | grep -q "Status: active"; then
+    error "Firewall is not active"
+fi
+
+# Check fail2ban
+if ! systemctl is-active --quiet fail2ban; then
+    error "Fail2ban is not active"
+fi
+
+# Check SSL certificates
+if [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+    CERT_EXPIRY=$(openssl x509 -enddate -noout -in "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" | cut -d= -f2-)
+    log "SSL certificate expires on: $CERT_EXPIRY"
+else
+    log "WARNING: SSL certificate not found"
+fi
+
+log "End configuration completed successfully!"
+echo
+echo "IRSSH Panel is ready to use!"
+echo "Please check the following:"
+echo "1. Frontend: https://$DOMAIN"
+echo "2. API docs: https://$DOMAIN/api/docs"
+echo "3. Logs: $LOG_DIR/"
+echo
+echo "For support, refer to the documentation or contact support."
