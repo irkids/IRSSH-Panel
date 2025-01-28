@@ -1,0 +1,166 @@
+#!/bin/bash
+
+# IRSSH Panel Main Installation Script
+
+# Configuration
+PANEL_DIR="/opt/irssh-panel"
+FRONTEND_DIR="$PANEL_DIR/frontend"
+BACKEND_DIR="$PANEL_DIR/backend"
+CONFIG_DIR="$PANEL_DIR/config"
+LOG_DIR="/var/log/irssh"
+DB_NAME="irssh_panel"
+DB_USER="irssh_admin"
+DB_PASS=$(openssl rand -base64 32)
+ADMIN_PASS=$(openssl rand -base64 16)
+
+# Colors
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+# Logging
+log() {
+    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"
+}
+
+error() {
+    echo -e "${RED}[$(date +'%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1"
+    exit 1
+}
+
+# Check root
+if [[ $EUID -ne 0 ]]; then
+    error "This script must be run as root"
+fi
+
+# Create directories
+log "Creating directories..."
+mkdir -p "$PANEL_DIR"
+mkdir -p "$CONFIG_DIR"
+mkdir -p "$LOG_DIR"
+chown -R root:root "$PANEL_DIR"
+
+# Install dependencies
+log "Installing dependencies..."
+apt-get update
+apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    postgresql \
+    nginx \
+    certbot \
+    python3-certbot-nginx \
+    git \
+    supervisor \
+    curl \
+    nodejs \
+    npm
+
+# Setup PostgreSQL
+log "Setting up PostgreSQL..."
+if ! systemctl is-active --quiet postgresql; then
+    systemctl start postgresql
+    systemctl enable postgresql
+fi
+
+# Create database and user
+if ! sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
+    log "Creating database..."
+    sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
+    sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
+fi
+
+# Save database configuration
+cat > "$CONFIG_DIR/database.env" << EOL
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=$DB_NAME
+DB_USER=$DB_USER
+DB_PASS=$DB_PASS
+EOL
+
+chmod 600 "$CONFIG_DIR/database.env"
+
+# Setup Python environment
+log "Setting up Python environment..."
+python3 -m venv "$PANEL_DIR/venv"
+source "$PANEL_DIR/venv/bin/activate"
+pip install --upgrade pip
+pip install \
+    fastapi[all] \
+    uvicorn[standard] \
+    sqlalchemy[asyncio] \
+    psycopg2-binary \
+    python-jose[cryptography] \
+    passlib[bcrypt] \
+    python-multipart \
+    aiofiles \
+    python-telegram-bot \
+    psutil \
+    geoip2
+
+# Setup frontend
+log "Setting up frontend..."
+cd "$FRONTEND_DIR"
+npm init -y
+npm install \
+    react \
+    react-dom \
+    @headlessui/react \
+    @heroicons/react \
+    axios \
+    react-router-dom \
+    tailwindcss
+
+# Configure Nginx
+log "Configuring Nginx..."
+cat > /etc/nginx/sites-available/irssh-panel << EOL
+server {
+    listen 80;
+    server_name _;
+
+    root $FRONTEND_DIR/build;
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    location /api {
+        proxy_pass http://localhost:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_cache_bypass \$http_upgrade;
+    }
+}
+EOL
+
+ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
+nginx -t || error "Nginx configuration test failed"
+
+# Configure supervisor
+log "Configuring supervisor..."
+cat > /etc/supervisor/conf.d/irssh-panel.conf << EOL
+[program:irssh-panel]
+directory=$PANEL_DIR
+command=$PANEL_DIR/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+user=root
+autostart=true
+autorestart=true
+stderr_logfile=$LOG_DIR/uvicorn.err.log
+stdout_logfile=$LOG_DIR/uvicorn.out.log
+EOL
+
+# Start services
+log "Starting services..."
+systemctl restart nginx
+supervisorctl reread
+supervisorctl update
+supervisorctl restart irssh-panel
+
+log "Installation complete!"
+echo "Admin password: $ADMIN_PASS"
+echo "Database password: $DB_PASS"
