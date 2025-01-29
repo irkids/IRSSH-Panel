@@ -1,0 +1,18 @@
+[Unit]
+Description=IRSSH Panel Backend Service
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+User=root
+Group=root
+WorkingDirectory=/opt/irssh-panel/backend
+Environment=PYTHONPATH=/opt/irssh-panel/backend
+EnvironmentFile=/opt/irssh-panel/config/env
+ExecStart=/opt/irssh-panel/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=10s
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
