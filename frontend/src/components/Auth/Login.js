@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import axios from '../../config/axios';
+import axios from 'axios';
 
 const Login = () => {
   const [username, setUsername] = useState('');
@@ -17,15 +17,19 @@ const Login = () => {
       formData.append('username', username);
       formData.append('password', password);
 
-      const response = await axios.post('/api/auth/login', formData.toString(), {
+      const response = await axios.post('/api/auth/login', formData, {
         headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
+          'Content-Type': 'application/x-www-form-urlencoded'
+        }
       });
-      
-      if (response.data.access_token) {
+
+      console.log('Login response:', response.data); // For debugging
+
+      if (response.data && response.data.access_token) {
         localStorage.setItem('token', response.data.access_token);
         window.location.href = '/dashboard';
+      } else {
+        throw new Error('Invalid response format');
       }
     } catch (error) {
       console.error('Login error:', error);
