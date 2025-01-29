@@ -5,11 +5,12 @@ GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-# Database configuration
+# Configuration
 DB_NAME="irssh_panel"
 DB_USER="irssh_admin"
-DB_PASS="new_password" # رمز عبور دلخواه شما
-PG_HBA_CONF="/etc/postgresql/12/main/pg_hba.conf" # مسیر فایل pg_hba.conf (ورژن PostgreSQL خود را بررسی کنید)
+DB_PASS="new_password" # رمز عبور جدید شما
+BACKEND_DIR="/opt/irssh-panel/backend"
+NGINX_CONFIG="/etc/nginx/sites-available/irssh-panel"
 
 # Log output
 log() {
@@ -21,10 +22,18 @@ error() {
     exit 1
 }
 
-# Step 1: Update pg_hba.conf
+# Step 1: Find pg_hba.conf and update
 update_pg_hba_conf() {
-    log "Updating PostgreSQL authentication configuration (pg_hba.conf)..."
-
+    log "Finding and updating PostgreSQL authentication configuration (pg_hba.conf)..."
+    
+    PG_HBA_CONF=$(sudo find /etc/postgresql -name pg_hba.conf | head -1)
+    
+    if [[ -z "$PG_HBA_CONF" ]]; then
+        error "pg_hba.conf not found. Ensure PostgreSQL is installed."
+    fi
+    
+    log "Found pg_hba.conf at: $PG_HBA_CONF"
+    
     if grep -q "local   all   $DB_USER" "$PG_HBA_CONF"; then
         log "pg_hba.conf already has the correct entry for $DB_USER."
     else
@@ -39,9 +48,6 @@ update_pg_hba_conf() {
 # Step 2: Check and configure PostgreSQL database and user
 setup_database() {
     log "Checking PostgreSQL database and user..."
-
-    # Change directory to avoid "Permission denied" error
-    cd /tmp
 
     # Check if the database exists
     sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" | grep -q 1 || {
@@ -68,10 +74,93 @@ setup_database() {
     PGPASSWORD="$DB_PASS" psql -h localhost -U "$DB_USER" -d "$DB_NAME" -c "\q" || error "Failed to connect to the database. Check credentials."
 }
 
-# Step 3: Restart PostgreSQL to ensure all configurations are applied
+# Step 3: Restart PostgreSQL service
 restart_postgresql() {
     log "Restarting PostgreSQL service..."
     sudo systemctl restart postgresql || error "Failed to restart PostgreSQL service."
+}
+
+# Step 4: Check and configure Backend service
+setup_backend() {
+    log "Checking backend service..."
+
+    if ! systemctl is-active --quiet backend.service; then
+        log "Backend service not found. Setting up backend service..."
+        cat <<EOF | sudo tee /etc/systemd/system/backend.service
+[Unit]
+Description=IRSSH Backend Service
+After=network.target postgresql.service
+
+[Service]
+User=root
+WorkingDirectory=$BACKEND_DIR
+ExecStart=$BACKEND_DIR/venv/bin/python3 app/main.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        sudo systemctl daemon-reload
+        sudo systemctl enable backend.service
+        sudo systemctl start backend.service
+    fi
+
+    log "Verifying backend service status..."
+    systemctl is-active --quiet backend.service || error "Backend service is not running."
+}
+
+# Step 5: Check and configure NGINX
+setup_nginx() {
+    log "Checking NGINX configuration..."
+
+    if [[ ! -f "$NGINX_CONFIG" ]]; then
+        log "Creating NGINX configuration..."
+        cat <<EOF | sudo tee "$NGINX_CONFIG"
+server {
+    listen 80;
+    listen [::]:80;
+    server_name localhost;
+
+    root /opt/irssh-panel/frontend/build;
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    location /api {
+        proxy_pass http://localhost:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+        sudo ln -sf "$NGINX_CONFIG" /etc/nginx/sites-enabled/
+        sudo nginx -t || error "NGINX configuration test failed."
+        sudo systemctl restart nginx
+    fi
+
+    log "Verifying NGINX status..."
+    systemctl is-active --quiet nginx || error "NGINX is not running."
+}
+
+# Step 6: Test API connectivity
+test_api() {
+    log "Testing API connectivity..."
+    RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost/api/auth/login \
+        -H "Content-Type: application/json" \
+        -d '{"username":"admin", "password":"admin_password"}')
+
+    if [[ "$RESPONSE" -eq 200 ]]; then
+        log "API is working correctly."
+    else
+        error "API is not responding correctly. HTTP Code: $RESPONSE"
+    fi
 }
 
 # Main script execution
@@ -80,6 +169,9 @@ main() {
     update_pg_hba_conf
     restart_postgresql
     setup_database
+    setup_backend
+    setup_nginx
+    test_api
     log "All checks and configurations completed successfully!"
 }
 
