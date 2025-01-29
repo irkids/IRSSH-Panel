@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # IRSSH Panel Complete Installation Script
-# Version: 3.4.2
+# Version: 3.4.3
 
 # Directories
 PANEL_DIR="/opt/irssh-panel"
@@ -99,8 +99,8 @@ restore_backup() {
 setup_directories() {
     log "Setting up directories..."
     mkdir -p "$PANEL_DIR"/{frontend,backend,config,modules}
-    mkdir -p "$FRONTEND_DIR"/{public,src/{components,styles,config,utils}}
-    mkdir -p "$BACKEND_DIR"/{app,migrations}
+    mkdir -p "$FRONTEND_DIR"/{public,src/{components,styles,config,utils,hooks}}
+    mkdir -p "$BACKEND_DIR"/{app/{api,core,models,schemas,utils},migrations}
     chmod -R 755 "$PANEL_DIR"
 }
 
@@ -115,7 +115,7 @@ install_dependencies() {
         nginx certbot python3-certbot-nginx \
         git curl wget zip unzip \
         supervisor ufw fail2ban \
-        build-essential
+        sysstat iftop vnstat
 
     log "Setting up Node.js..."
     curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
@@ -139,23 +139,119 @@ setup_python() {
         sqlalchemy[asyncio] psycopg2-binary \
         python-jose[cryptography] passlib[bcrypt] \
         python-multipart aiofiles \
-        python-telegram-bot psutil geoip2 asyncpg
+        python-telegram-bot psutil geoip2 asyncpg \
+        prometheus_client
 
-    # Create Backend Structure
-    log "Setting up backend structure..."
+    # Create Backend API
+    cat > "$BACKEND_DIR/app/api/monitoring.py" << 'EOL'
+import psutil
+import time
+from fastapi import APIRouter
+from datetime import datetime, timedelta
+import json
+import os
+
+router = APIRouter()
+
+class SystemStats:
+    def __init__(self):
+        self.start_time = time.time()
+        self.bandwidth_data = {
+            "daily": [],
+            "monthly": []
+        }
+        self.protocols = {
+            "SSH": {"port": 22, "users": 0},
+            "WireGuard": {"port": 51820, "users": 0},
+            "SingBox": {"port": 1080, "users": 0},
+            "Cisco": {"port": 443, "users": 0},
+            "IKEv2": {"port": 500, "users": 0}
+        }
+
+    def get_system_resources(self):
+        cpu = psutil.cpu_percent()
+        ram = psutil.virtual_memory().percent
+        disk = psutil.disk_usage('/').percent
+        
+        return {
+            "cpu": cpu,
+            "ram": ram,
+            "disk": disk
+        }
+
+    def get_bandwidth_stats(self):
+        # In a real implementation, this would read from actual network interfaces
+        return {
+            "incoming": "1.2 Mbps",
+            "outgoing": "0.8 Mbps",
+            "daily_chart": self.bandwidth_data["daily"],
+            "monthly_chart": self.bandwidth_data["monthly"]
+        }
+
+    def get_protocol_stats(self):
+        stats = []
+        for protocol, data in self.protocols.items():
+            stats.append({
+                "protocol": protocol,
+                "onlineUsers": data["users"],
+                "port": data["port"],
+                "incomingTraffic": "0.5 Mbps",
+                "outgoingTraffic": "0.3 Mbps",
+                "timeOnline": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            })
+        return stats
+
+    def get_user_stats(self):
+        return {
+            "active": 5,
+            "expired": 2,
+            "expiredSoon": 1,
+            "deactive": 0,
+            "online": 3,
+            "total": 8
+        }
+
+system_stats = SystemStats()
+
+@router.get("/system")
+async def get_system_info():
+    resources = system_stats.get_system_resources()
+    bandwidth = system_stats.get_bandwidth_stats()
+    protocols = system_stats.get_protocol_stats()
+    users = system_stats.get_user_stats()
     
+    return {
+        "resources": resources,
+        "bandwidth": bandwidth,
+        "protocols": protocols,
+        "users": users
+    }
+
+@router.get("/bandwidth")
+async def get_bandwidth():
+    return system_stats.get_bandwidth_stats()
+
+@router.get("/protocols")
+async def get_protocols():
+    return system_stats.get_protocol_stats()
+
+@router.get("/users")
+async def get_users():
+    return system_stats.get_user_stats()
+EOL
+
     # Create main.py
     cat > "$BACKEND_DIR/app/main.py" << 'EOL'
-from fastapi import FastAPI, Depends, HTTPException, status, Request
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from fastapi.responses import JSONResponse
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from typing import Optional
 import os
+from app.api import monitoring
 
-app = FastAPI(title="IRSSH Panel API", version="3.4.2")
+app = FastAPI(title="IRSSH Panel API", version="3.4.3")
 
 app.add_middleware(
     CORSMiddleware,
@@ -165,7 +261,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "default-secret-key")
+# Security settings
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
@@ -175,39 +272,26 @@ def create_access_token(data: dict):
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
 
 @app.post("/api/auth/login")
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    try:
-        if form_data.username == os.getenv("ADMIN_USER", "admin") and form_data.password == os.getenv("ADMIN_PASS"):
-            token = create_access_token(data={"sub": form_data.username})
-            return {"access_token": token, "token_type": "bearer"}
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    if form_data.username == os.getenv("ADMIN_USER") and form_data.password == os.getenv("ADMIN_PASS"):
+        access_token = create_access_token(data={"sub": form_data.username})
+        return {"access_token": access_token, "token_type": "bearer"}
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+# Include monitoring routes
+app.include_router(monitoring.router, prefix="/api/monitoring", tags=["monitoring"])
 
 @app.get("/api/health")
 async def health_check():
     return {"status": "healthy"}
-
-@app.get("/api/monitoring/system")
-async def get_system_info():
-    return {
-        "cpu": 0,
-        "memory": 0,
-        "disk": 0,
-        "activeUsers": 0,
-        "totalConnections": 0,
-        "uptime": "0d 0h 0m"
-    }
-
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    return JSONResponse(
-        status_code=500,
-        content={"detail": str(exc)},
-    )
 EOL
 
     # Create supervisor config
@@ -241,7 +325,7 @@ setup_frontend() {
     cat > package.json << 'EOL'
 {
   "name": "irssh-panel-frontend",
-  "version": "3.4.2",
+  "version": "3.4.3",
   "private": true,
   "dependencies": {
     "@headlessui/react": "^1.7.0",
@@ -251,6 +335,7 @@ setup_frontend() {
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.21.0",
     "react-scripts": "5.0.1",
+    "recharts": "^2.5.0",
     "@babel/plugin-proposal-private-property-in-object": "^7.21.11",
     "tailwindcss": "^3.4.0"
   },
@@ -325,29 +410,328 @@ export const isAuthenticated = () => {
 };
 EOL
 
-    # Create index.html
-    cat > public/index.html << 'EOL'
-<!DOCTYPE html>
-<html lang="en" dir="ltr">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#000000" />
-    <title>IRSSH Panel</title>
-    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2/dist/tailwind.min.css" rel="stylesheet">
-  </head>
-  <body>
-    <div id="root"></div>
-  </body>
-</html>
+    # Create hooks
+    mkdir -p src/hooks
+    cat > src/hooks/useSystemStats.js << 'EOL'
+import { useState, useEffect } from 'react';
+import axios from '../config/axios';
+
+export const useSystemStats = () => {
+    const [data, setData] = useState(null);
+    const [error, setError] = useState(null);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        const fetchData = async () => {
+            try {
+                const response = await axios.get('/api/monitoring/system');
+                setData(response.data);
+                setError(null);
+            } catch (err) {
+                setError(err.message);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchData();
+        const interval = setInterval(fetchData, 30000);
+        return () => clearInterval(interval);
+    }, []);
+
+    return { data, error, loading };
+};
 EOL
 
-    # Create Login component
-    mkdir -p src/components/Auth
+    # Create components
+    mkdir -p src/components/{Auth,Dashboard,Common}
+
+    # Create Dashboard components
+    cat > src/components/Dashboard/ResourceStats.js << 'EOL'
+import React from 'react';
+import { IconCPU, IconRAM, IconDisk } from '../Common/Icons';
+
+const ResourceCircle = ({ value, label, icon }) => (
+    <div className="text-center">
+        <div className="relative inline-block w-32 h-32">
+            <svg className="transform -rotate-90 w-32 h-32">
+                <circle
+                    cx="64"
+                    cy="64"
+                    r="54"
+                    stroke="#e5e7eb"
+                    strokeWidth="12"
+                    fill="none"
+                />
+                <circle
+                    cx="64"
+                    cy="64"
+                    r="54"
+                    stroke="#10b981"
+                    strokeWidth="12"
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeDasharray={`${value * 3.39} 339.292`}
+                />
+            </svg>
+            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
+                <span className="text-2xl font-bold">{value}%</span>
+            </div>
+        </div>
+        <div className="mt-2">
+            <div className="text-gray-700">{label}</div>
+            {icon}
+        </div>
+    </div>
+);
+
+const ResourceStats = ({ cpuUsage, ramUsage, diskUsage }) => {
+    return (
+        <div className="bg-white rounded-lg shadow-md p-6">
+            <h2 className="text-xl font-semibold mb-6">Server Resource Statistics</h2>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8 justify-items-center">
+                <ResourceCircle
+                    value={cpuUsage}
+                    label="CPU Usage"
+                    icon={<IconCPU className="mx-auto mt-2" />}
+                />
+                <ResourceCircle
+                    value={ramUsage}
+                    label="RAM Usage"
+                    icon={<IconRAM className="mx-auto mt-2" />}
+                />
+                <ResourceCircle
+                    value={diskUsage}
+                    label="Disk Usage"
+                    icon={<IconDisk className="mx-auto mt-2" />}
+                />
+            </div>
+        </div>
+    );
+};
+
+export default ResourceStats;
+EOL
+
+    cat > src/components/Dashboard/BandwidthStats.js << 'EOL'
+import React from 'react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+
+const BandwidthStats = ({ monthlyData, dailyData }) => {
+    return (
+        <div className="bg-white rounded-lg shadow-md p-6">
+            <h2 className="text-xl font-semibold mb-6">Bandwidth Statistics</h2>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div>
+                    <h3 className="text-lg font-medium mb-4">Monthly Chart</h3>
+                    <div className="h-64">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={monthlyData}>
+                                <CartesianGrid strokeDasharray="3 3" />
+                                <XAxis dataKey="date" />
+                                <YAxis />
+                                <Tooltip />
+                                <Line type="monotone" dataKey="send" stroke="#3b82f6" />
+                                <Line type="monotone" dataKey="receive" stroke="#10b981" />
+                                <Line type="monotone" dataKey="total" stroke="#6366f1" />
+                            </LineChart>
+                        </ResponsiveContainer>
+                    </div>
+                </div>
+                <div>
+                    <h3 className="text-lg font-medium mb-4">Daily Chart</h3>
+                    <div className="h-64">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={dailyData}>
+                                <CartesianGrid strokeDasharray="3 3" />
+                                <XAxis dataKey="date" />
+                                <YAxis />
+                                <Tooltip />
+                                <Line type="monotone" dataKey="send" stroke="#3b82f6" />
+                                <Line type="monotone" dataKey="receive" stroke="#10b981" />
+                                <Line type="monotone" dataKey="total" stroke="#6366f1" />
+                            </LineChart>
+                        </ResponsiveContainer>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export default BandwidthStats;
+EOL
+
+    cat > src/components/Dashboard/UserStats.js << 'EOL'
+import React from 'react';
+
+const StatBox = ({ label, value, color }) => (
+    <div className="text-center">
+        <div className={`text-${color}-600 font-medium`}>{label}</div>
+        <div className="text-2xl font-bold mt-1">{value}</div>
+    </div>
+);
+
+const UserStats = ({ stats }) => {
+    return (
+        <div className="bg-white rounded-lg shadow-md p-6">
+            <h2 className="text-xl font-semibold mb-6">Users Statistics</h2>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                <StatBox label="Active" value={stats.active} color="green" />
+                <StatBox label="Expired" value={stats.expired} color="red" />
+                <StatBox label="Expired in 24h" value={stats.expiredSoon} color="yellow" />
+                <StatBox label="Deactive" value={stats.deactive} color="gray" />
+                <StatBox label="Online" value={stats.online} color="blue" />
+            </div>
+        </div>
+    );
+};
+
+export default UserStats;
+EOL
+
+    cat > src/components/Dashboard/ProtocolStats.js << 'EOL'
+import React from 'react';
+
+const ProtocolStats = ({ protocols }) => {
+    return (
+        <div className="bg-white rounded-lg shadow-md p-6">
+            <h2 className="text-xl font-semibold mb-6">Protocol Statistics</h2>
+            <div className="overflow-x-auto">
+                <table className="min-w-full">
+                    <thead className="bg-gray-50">
+                        <tr>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Protocol</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Online Users</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Protocol port</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Incoming Traffic</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Outgoing Traffic</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time Of Being Online</th>
+                        </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                        {protocols.map((protocol, index) => (
+                            <tr key={index}>
+                                <td className="px-6 py-4 whitespace-nowrap">{protocol.protocol}</td>
+                                <td className="px-6 py-4 whitespace-nowrap">{protocol.onlineUsers}</td>
+                                <td className="px-6 py-4 whitespace-nowrap">{protocol.port}</td>
+                                <td className="px-6 py-4 whitespace-nowrap">{protocol.incomingTraffic}</td>
+                                <td className="px-6 py-4 whitespace-nowrap">{protocol.outgoingTraffic}</td>
+                                <td className="px-6 py-4 whitespace-nowrap">{protocol.timeOnline}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+};
+
+export default ProtocolStats;
+EOL
+
+    cat > src/components/Common/Icons.js << 'EOL'
+export const IconCPU = ({ className = "w-6 h-6" }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+    </svg>
+);
+
+export const IconRAM = ({ className = "w-6 h-6" }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+    </svg>
+);
+
+export const IconDisk = ({ className = "w-6 h-6" }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+    </svg>
+);
+EOL
+
+    cat > src/components/Dashboard/index.js << 'EOL'
+import React from 'react';
+import { useSystemStats } from '../../hooks/useSystemStats';
+import ResourceStats from './ResourceStats';
+import BandwidthStats from './BandwidthStats';
+import UserStats from './UserStats';
+import ProtocolStats from './ProtocolStats';
+import { removeToken } from '../../utils/auth';
+
+const Dashboard = () => {
+    const { data, error, loading } = useSystemStats();
+
+    const handleLogout = () => {
+        removeToken();
+        window.location.href = '/login';
+    };
+
+    if (loading) {
+        return (
+            <div className="min-h-screen bg-gray-100 flex justify-center items-center">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900"></div>
+            </div>
+        );
+    }
+
+    if (error) {
+        return (
+            <div className="min-h-screen bg-gray-100 flex justify-center items-center">
+                <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
+                    Failed to load dashboard data
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="min-h-screen bg-gray-100">
+            {/* Header */}
+            <nav className="bg-white shadow">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div className="flex justify-between h-16">
+                        <div className="flex items-center">
+                            <img src="/logo.png" alt="IRSSH" className="h-8 w-8 mr-2" />
+                            <h1 className="text-xl font-bold">Dashboard</h1>
+                            <span className="ml-2 text-sm text-gray-500">Administrator</span>
+                        </div>
+                        <div className="flex items-center space-x-4">
+                            <button
+                                onClick={handleLogout}
+                                className="bg-red-600 px-4 py-2 text-white rounded-md hover:bg-red-700"
+                            >
+                                Logout
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </nav>
+
+            {/* Main Content */}
+            <main className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8 space-y-6">
+                <ResourceStats
+                    cpuUsage={data.resources.cpu}
+                    ramUsage={data.resources.ram}
+                    diskUsage={data.resources.disk}
+                />
+                <BandwidthStats
+                    monthlyData={data.bandwidth.monthly_chart}
+                    dailyData={data.bandwidth.daily_chart}
+                />
+                <ProtocolStats protocols={data.protocols} />
+                <UserStats stats={data.users} />
+            </main>
+        </div>
+    );
+};
+
+export default Dashboard;
+EOL
+
     cat > src/components/Auth/Login.js << 'EOL'
 import React, { useState } from 'react';
-import axios from 'axios';
-import { setToken } from '../../utils/auth';
+import axios from '../../config/axios';
 
 const Login = () => {
   const [username, setUsername] = useState('');
@@ -365,14 +749,14 @@ const Login = () => {
       formData.append('username', username);
       formData.append('password', password);
 
-      const response = await axios.post('/api/auth/login', formData.toString(), {
+      const response = await axios.post('/api/auth/login', formData, {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
         },
       });
 
       if (response.data && response.data.access_token) {
-        setToken(response.data.access_token);
+        localStorage.setItem('token', response.data.access_token);
         window.location.href = '/dashboard';
       } else {
         throw new Error('Invalid response from server');
@@ -386,7 +770,7 @@ const Login = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
+<div className="min-h-screen bg-gray-100 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
         <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
           IRSSH Panel Login
@@ -439,7 +823,7 @@ const Login = () => {
                   loading ? 'bg-indigo-400' : 'bg-indigo-600 hover:bg-indigo-700'
                 } focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500`}
               >
-                {loading ? 'Logging in...' : 'Sign in'}
+                {loading ? 'Signing in...' : 'Sign in'}
               </button>
             </div>
           </form>
@@ -452,7 +836,6 @@ const Login = () => {
 export default Login;
 EOL
 
-    # Create PrivateRoute component
     cat > src/components/Auth/PrivateRoute.js << 'EOL'
 import React from 'react';
 import { Navigate } from 'react-router-dom';
@@ -465,102 +848,11 @@ const PrivateRoute = ({ children }) => {
 export default PrivateRoute;
 EOL
 
-    # Create Dashboard component
-    mkdir -p src/components/Dashboard
-    cat > src/components/Dashboard/Dashboard.js << 'EOL'
-import React, { useEffect, useState } from 'react';
-import axios from '../../config/axios';
-import { removeToken } from '../../utils/auth';
-
-const Dashboard = () => {
-  const [serverInfo, setServerInfo] = useState(null);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    const fetchServerInfo = async () => {
-      try {
-        const response = await axios.get('/api/monitoring/system');
-        setServerInfo(response.data);
-      } catch (err) {
-        console.error('Error fetching server info:', err);
-        setError('Failed to load server information');
-      }
-    };
-
-    fetchServerInfo();
-    const interval = setInterval(fetchServerInfo, 30000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const handleLogout = () => {
-    removeToken();
-    window.location.href = '/login';
-  };
-
-  return (
-    <div className="min-h-screen bg-gray-100">
-      <nav className="bg-white shadow">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex">
-              <div className="flex-shrink-0 flex items-center">
-                <h1 className="text-xl font-bold">IRSSH Panel</h1>
-              </div>
-            </div>
-            <div className="flex items-center">
-              <button
-                onClick={handleLogout}
-                className="bg-red-600 px-4 py-2 text-white rounded-md hover:bg-red-700"
-              >
-                Logout
-              </button>
-            </div>
-          </div>
-        </div>
-      </nav>
-
-      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-        <div className="px-4 py-6 sm:px-0">
-          {error ? (
-            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
-              {error}
-            </div>
-          ) : serverInfo ? (
-            <div className="bg-white shadow rounded-lg p-6">
-              <h2 className="text-2xl font-bold mb-4">System Information</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <p className="text-gray-600">CPU Usage: {serverInfo.cpu}%</p>
-                  <p className="text-gray-600">Memory Usage: {serverInfo.memory}%</p>
-                  <p className="text-gray-600">Disk Usage: {serverInfo.disk}%</p>
-                </div>
-                <div>
-                  <p className="text-gray-600">Active Users: {serverInfo.activeUsers}</p>
-                  <p className="text-gray-600">Total Connections: {serverInfo.totalConnections}</p>
-                  <p className="text-gray-600">Server Uptime: {serverInfo.uptime}</p>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="flex justify-center items-center h-64">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
-            </div>
-          )}
-        </div>
-      </main>
-    </div>
-  );
-};
-
-export default Dashboard;
-EOL
-
-    # Create App.js
     cat > src/App.js << 'EOL'
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './components/Auth/Login';
-import Dashboard from './components/Dashboard/Dashboard';
+import Dashboard from './components/Dashboard';
 import PrivateRoute from './components/Auth/PrivateRoute';
 
 const App = () => {
@@ -585,7 +877,6 @@ const App = () => {
 export default App;
 EOL
 
-    # Create index.js
     cat > src/index.js << 'EOL'
 import React from 'react';
 import ReactDOM from 'react-dom/client';
@@ -803,6 +1094,7 @@ server {
 
         # CORS headers
         add_header 'Access-Control-Allow-Origin' '*' always;
+        add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS, PUT, DELETE' always;
         add_header 'Access-Control-Allow-Headers' 'DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization' always;
         add_header 'Access-Control-Expose-Headers' 'Content-Length,Content-Range' always;
 
@@ -852,17 +1144,6 @@ setup_firewall() {
     echo "y" | ufw enable
 }
 
-# Setup Modules
-setup_modules() {
-    log "Setting up modules..."
-    mkdir -p "$MODULES_DIR"
-    
-    if [[ -d "/root/irssh-panel/modules" ]]; then
-        cp -r /root/irssh-panel/modules/* "$MODULES_DIR/"
-        chmod +x "$MODULES_DIR"/*.{py,sh}
-    fi
-}
-
 # Setup Security
 setup_security() {
     log "Setting up security..."
@@ -891,20 +1172,49 @@ EOL
     sed -i 's/#PermitRootLogin yes/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
     sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
     systemctl restart sshd
+}
 
-    # Create security monitoring script
-    cat > "$MODULES_DIR/security_monitor.sh" << 'EOL'
+# Setup System Monitoring
+setup_monitoring() {
+    log "Setting up system monitoring..."
+    
+    # Create monitoring script
+    cat > "$MODULES_DIR/monitor.sh" << 'EOL'
 #!/bin/bash
 
-# Monitor failed login attempts
-echo "Failed SSH login attempts in the last hour:"
-grep "Failed password" /var/log/auth.log | tail -n 10
+get_cpu_usage() {
+    top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}'
+}
 
-# Check for banned IPs
-echo -e "\nCurrently banned IPs:"
-fail2ban-client status sshd | grep "Banned IP list"
+get_mem_usage() {
+    free | grep Mem | awk '{print ($3/$2) * 100}'
+}
+
+get_disk_usage() {
+    df -h / | awk 'NR==2 {print $5}' | sed 's/%//'
+}
+
+get_network_stats() {
+    if command -v vnstat &> /dev/null; then
+        vnstat -h 1
+    else
+        echo "vnstat not installed"
+    fi
+}
+
+echo "{"
+echo "  \"cpu\": $(get_cpu_usage),"
+echo "  \"memory\": $(get_mem_usage | xargs printf "%.1f"),"
+echo "  \"disk\": $(get_disk_usage),"
+echo "  \"network\": \"$(get_network_stats)\""
+echo "}"
 EOL
-    chmod +x "$MODULES_DIR/security_monitor.sh"
+
+    chmod +x "$MODULES_DIR/monitor.sh"
+
+    # Create cron job for monitoring
+    echo "* * * * * root $MODULES_DIR/monitor.sh > /tmp/system_stats.json" > /etc/cron.d/irssh-monitor
+    chmod 644 /etc/cron.d/irssh-monitor
 }
 
 # Verify Installation
@@ -934,6 +1244,11 @@ verify_installation() {
         error "Backend API is not responding"
     fi
 
+    # Check monitoring script
+    if [ ! -x "$MODULES_DIR/monitor.sh" ]; then
+        error "Monitoring script is not executable"
+    fi
+
     log "All services verified successfully"
 }
 
@@ -943,7 +1258,7 @@ save_installation_info() {
     
     cat > "$CONFIG_DIR/installation.info" << EOL
 Installation Date: $(date +"%Y-%m-%d %H:%M:%S")
-Version: 3.4.2
+Version: 3.4.3
 Domain: ${DOMAIN}
 Web Port: ${WEB_PORT}
 SSH Port: ${SSH_PORT}
@@ -977,7 +1292,7 @@ main() {
     trap cleanup EXIT
     
     setup_logging
-    log "Starting IRSSH Panel installation v3.4.2"
+    log "Starting IRSSH Panel installation v3.4.3"
     
     # Get user input
     read -p "Enter domain name (e.g., panel.example.com): " DOMAIN
@@ -990,6 +1305,7 @@ main() {
     read -p "Enter BadVPN port (default: 7300): " BADVPN_PORT
     BADVPN_PORT=${BADVPN_PORT:-7300}
     
+    # Run installation steps
     check_requirements
     create_backup
     setup_directories
@@ -997,6 +1313,7 @@ main() {
     setup_python
     setup_frontend
     setup_database
+    setup_monitoring
     setup_modules
     setup_nginx
     setup_ssl
@@ -1005,6 +1322,7 @@ main() {
     verify_installation
     save_installation_info
     
+    # Final output
     log "Installation completed successfully!"
     echo
     echo "IRSSH Panel has been installed!"
