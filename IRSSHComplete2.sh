@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # IRSSH Panel Complete Installation Script
-# Version: 3.4.3
+# Version: 3.4.4
 
 # Directories
 PANEL_DIR="/opt/irssh-panel"
@@ -9,6 +9,7 @@ FRONTEND_DIR="$PANEL_DIR/frontend"
 BACKEND_DIR="$PANEL_DIR/backend"
 CONFIG_DIR="$PANEL_DIR/config"
 MODULES_DIR="$PANEL_DIR/modules"
+PROTOCOLS_DIR="$MODULES_DIR/protocols"
 LOG_DIR="/var/log/irssh"
 BACKUP_DIR="/opt/irssh-backups"
 
@@ -24,6 +25,24 @@ DB_USER="irssh_admin"
 DB_PASS=$(openssl rand -base64 32)
 ADMIN_PASS=$(openssl rand -base64 16)
 JWT_SECRET=$(openssl rand -base64 32)
+
+# Installation modes
+INSTALL_SSH=true
+INSTALL_L2TP=true
+INSTALL_IKEV2=true
+INSTALL_CISCO=true
+INSTALL_WIREGUARD=true
+INSTALL_SINGBOX=true
+
+# Protocol ports (default values)
+SSH_PORT=22
+L2TP_PORT=1701
+IKEV2_PORT=500
+CISCO_PORT=443
+WIREGUARD_PORT=51820
+SINGBOX_PORT=1080
+BADVPN_PORT=7300
+DROPBEAR_PORT=444
 
 # Logging
 setup_logging() {
@@ -46,60 +65,11 @@ warn() {
     echo -e "${YELLOW}[WARN]${NC} $1"
 }
 
-# Pre-Installation Checks
-check_requirements() {
-    if [[ $EUID -ne 0 ]]; then
-        error "This script must be run as root"
-    fi
-
-    if [[ $(free -m | awk '/^Mem:/{print $2}') -lt 1024 ]]; then
-        error "Minimum 1GB RAM required"
-    fi
-
-    if [[ $(df -m / | awk 'NR==2 {print $4}') -lt 2048 ]]; then
-        error "Minimum 2GB free disk space required"
-    fi
-
-    local required_commands=(curl wget git python3 pip3)
-    for cmd in "${required_commands[@]}"; do
-        if ! command -v "$cmd" &>/dev/null; then
-            error "$cmd is required but not installed"
-        fi
-    done
-}
-
-# Cleanup and Backup
-cleanup() {
-    if [[ $? -ne 0 ]]; then
-        error "Installation failed. Attempting backup restore..." "no-exit"
-        if [[ -d "$BACKUP_DIR" ]]; then
-            warn "Attempting to restore from backup..."
-            restore_backup
-        fi
-    fi
-}
-
-create_backup() {
-    mkdir -p "$BACKUP_DIR"
-    if [[ -d "$PANEL_DIR" ]]; then
-        tar -czf "$BACKUP_DIR/panel-$(date +%Y%m%d-%H%M%S).tar.gz" -C "$(dirname "$PANEL_DIR")" "$(basename "$PANEL_DIR")"
-    fi
-}
-
-restore_backup() {
-    local latest_backup=$(ls -t "$BACKUP_DIR"/*.tar.gz 2>/dev/null | head -1)
-    if [[ -n "$latest_backup" ]]; then
-        rm -rf "$PANEL_DIR"
-        tar -xzf "$latest_backup" -C "$(dirname "$PANEL_DIR")"
-        log "Restored from backup: $latest_backup"
-    fi
-}
-
 # Initial Setup
 setup_directories() {
     log "Setting up directories..."
-    mkdir -p "$PANEL_DIR"/{frontend,backend,config,modules}
-    mkdir -p "$FRONTEND_DIR"/{public,src/{components,styles,config,utils,hooks}}
+    mkdir -p "$PANEL_DIR"/{frontend,backend,config,modules/protocols}
+    mkdir -p "$FRONTEND_DIR"/{public,src/{components,styles,config,utils,assets,layouts}}
     mkdir -p "$BACKEND_DIR"/{app/{api,core,models,schemas,utils},migrations}
     chmod -R 755 "$PANEL_DIR"
 }
@@ -115,205 +85,295 @@ install_dependencies() {
         nginx certbot python3-certbot-nginx \
         git curl wget zip unzip \
         supervisor ufw fail2ban \
-        sysstat iftop vnstat
+        sysstat iftop vnstat \
+        strongswan xl2tpd ppp \
+        ocserv \
+        wireguard-tools \
+        golang \
+        iptables-persistent
 
-    log "Setting up Node.js..."
+    # Install Node.js
     curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
     DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
 
     npm install -g npm@8.19.4 || error "npm installation failed"
-
-    log "Node.js version: $(node -v)"
-    log "npm version: $(npm -v)"
 }
 
-# Setup Python Environment
-setup_python() {
-    log "Setting up Python environment..."
-    python3 -m venv "$PANEL_DIR/venv"
-    source "$PANEL_DIR/venv/bin/activate"
-    
-    pip install --upgrade pip wheel setuptools
-    pip install \
-        fastapi[all] uvicorn[standard] \
-        sqlalchemy[asyncio] psycopg2-binary \
-        python-jose[cryptography] passlib[bcrypt] \
-        python-multipart aiofiles \
-        python-telegram-bot psutil geoip2 asyncpg \
-        prometheus_client
+# Install Protocols
+install_protocols() {
+    log "Installing protocols..."
+    mkdir -p "$PROTOCOLS_DIR"
 
-    # Create Backend API
-    cat > "$BACKEND_DIR/app/api/monitoring.py" << 'EOL'
-import psutil
-import time
-from fastapi import APIRouter
-from datetime import datetime, timedelta
-import json
-import os
+    # Install SSH
+    if [ "$INSTALL_SSH" = true ]; then
+        log "Installing SSH server..."
+        apt-get install -y openssh-server
+        cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
+        sed -i "s/#Port 22/Port $SSH_PORT/" /etc/ssh/sshd_config
+        systemctl restart ssh
+    fi
 
-router = APIRouter()
-
-class SystemStats:
-    def __init__(self):
-        self.start_time = time.time()
-        self.bandwidth_data = {
-            "daily": [],
-            "monthly": []
-        }
-        self.protocols = {
-            "SSH": {"port": 22, "users": 0},
-            "WireGuard": {"port": 51820, "users": 0},
-            "SingBox": {"port": 1080, "users": 0},
-            "Cisco": {"port": 443, "users": 0},
-            "IKEv2": {"port": 500, "users": 0}
-        }
-
-    def get_system_resources(self):
-        cpu = psutil.cpu_percent()
-        ram = psutil.virtual_memory().percent
-        disk = psutil.disk_usage('/').percent
+    # Install L2TP
+    if [ "$INSTALL_L2TP" = true ]; then
+        log "Installing L2TP/IPsec..."
+        apt-get install -y strongswan xl2tpd
         
-        return {
-            "cpu": cpu,
-            "ram": ram,
-            "disk": disk
-        }
+        # Configure strongSwan
+        cat > /etc/ipsec.conf << EOL
+config setup
+    charondebug="ike 1, knl 1, cfg 0"
+    uniqueids=no
 
-    def get_bandwidth_stats(self):
-        # In a real implementation, this would read from actual network interfaces
-        return {
-            "incoming": "1.2 Mbps",
-            "outgoing": "0.8 Mbps",
-            "daily_chart": self.bandwidth_data["daily"],
-            "monthly_chart": self.bandwidth_data["monthly"]
-        }
+conn %default
+    ikelifetime=60m
+    keylife=20m
+    rekeymargin=3m
+    keyingtries=1
+    keyexchange=ikev1
+    authby=secret
+    ike=aes128-sha1-modp1024,aes128-sha1-modp1536
+    esp=aes128-sha1,aes256-sha256
 
-    def get_protocol_stats(self):
-        stats = []
-        for protocol, data in self.protocols.items():
-            stats.append({
-                "protocol": protocol,
-                "onlineUsers": data["users"],
-                "port": data["port"],
-                "incomingTraffic": "0.5 Mbps",
-                "outgoingTraffic": "0.3 Mbps",
-                "timeOnline": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            })
-        return stats
+conn L2TP-PSK
+    keyexchange=ikev1
+    left=%defaultroute
+    auto=add
+    authby=secret
+    type=transport
+    keyingtries=3
+    rekey=no
+    ikelifetime=8h
+    keylife=1h
+    pfs=no
+    left=%defaultroute
+    leftprotoport=17/1701
+    right=%any
+    rightprotoport=17/%any
+EOL
+        
+        # Configure xl2tpd
+        cat > /etc/xl2tpd/xl2tpd.conf << EOL
+[global]
+port = $L2TP_PORT
+auth file = /etc/ppp/chap-secrets
+ipsec saref = yes
+[lns default]
+ip range = 192.168.42.10-192.168.42.250
+local ip = 192.168.42.1
+refuse chap = yes
+refuse pap = yes
+require authentication = yes
+name = L2TPServer
+ppp debug = yes
+pppoptfile = /etc/ppp/options.xl2tpd
+length bit = yes
+EOL
 
-    def get_user_stats(self):
-        return {
-            "active": 5,
-            "expired": 2,
-            "expiredSoon": 1,
-            "deactive": 0,
-            "online": 3,
-            "total": 8
-        }
+        systemctl restart strongswan xl2tpd
+    fi
 
-system_stats = SystemStats()
+    # Install IKEv2
+    if [ "$INSTALL_IKEV2" = true ]; then
+        log "Installing IKEv2..."
+        apt-get install -y strongswan strongswan-pki
+        
+        # Generate certificates
+        mkdir -p /etc/ipsec.d/{cacerts,certs,private}
+        ipsec pki --gen --type rsa --size 4096 --outform pem > /etc/ipsec.d/private/ca.key.pem
+        chmod 600 /etc/ipsec.d/private/ca.key.pem
+        
+        ipsec pki --self --ca --lifetime 3650 \
+            --in /etc/ipsec.d/private/ca.key.pem \
+            --type rsa --dn "CN=IRSSH VPN CA" \
+            --outform pem > /etc/ipsec.d/cacerts/ca.cert.pem
+        
+        # Configure strongSwan for IKEv2
+        cat > /etc/ipsec.conf << EOL
+config setup
+    charondebug="ike 1, knl 1, cfg 0"
+    uniqueids=no
 
-@router.get("/system")
-async def get_system_info():
-    resources = system_stats.get_system_resources()
-    bandwidth = system_stats.get_bandwidth_stats()
-    protocols = system_stats.get_protocol_stats()
-    users = system_stats.get_user_stats()
-    
-    return {
-        "resources": resources,
-        "bandwidth": bandwidth,
-        "protocols": protocols,
-        "users": users
+conn ikev2-vpn
+    auto=add
+    compress=no
+    type=tunnel
+    keyexchange=ikev2
+    fragmentation=yes
+    forceencaps=yes
+    ike=aes256-sha1-modp1024,aes128-sha1-modp1024,3des-sha1-modp1024!
+    esp=aes256-sha256,aes256-sha1,3des-sha1!
+    dpdaction=clear
+    dpddelay=300s
+    rekey=no
+    left=%any
+    leftid=@server
+    leftcert=server-cert.pem
+    leftsendcert=always
+    leftsubnet=0.0.0.0/0
+    right=%any
+    rightid=%any
+    rightauth=eap-mschapv2
+    rightdns=8.8.8.8,8.8.4.4
+    rightsourceip=10.10.10.0/24
+    rightsendcert=never
+    eap_identity=%identity
+EOL
+        
+        systemctl restart strongswan
+    fi
+
+    # Install Cisco AnyConnect
+    if [ "$INSTALL_CISCO" = true ]; then
+        log "Installing Cisco AnyConnect (ocserv)..."
+        apt-get install -y ocserv
+
+        # Generate self-signed certificate
+        mkdir -p /etc/ocserv/ssl
+        certtool --generate-privkey --outfile /etc/ocserv/ssl/server-key.pem
+        cat > /etc/ocserv/ssl/server.tmpl << EOL
+organization = IRSSH VPN
+cn = Server
+tls_www_server
+signing_key
+encryption_key
+EOL
+        
+        certtool --generate-self-signed \
+            --load-privkey /etc/ocserv/ssl/server-key.pem \
+            --template /etc/ocserv/ssl/server.tmpl \
+            --outfile /etc/ocserv/ssl/server-cert.pem
+
+        # Configure ocserv
+        cat > /etc/ocserv/ocserv.conf << EOL
+auth = "plain[/etc/ocserv/ocpasswd]"
+tcp-port = $CISCO_PORT
+udp-port = $CISCO_PORT
+run-as-user = nobody
+run-as-group = daemon
+socket-file = /var/run/ocserv-socket
+server-cert = /etc/ocserv/ssl/server-cert.pem
+server-key = /etc/ocserv/ssl/server-key.pem
+max-clients = 0
+max-same-clients = 0
+server-stats-reset-time = 604800
+keepalive = 32400
+dpd = 90
+mobile-dpd = 1800
+switch-to-tcp-timeout = 25
+try-mtu-discovery = true
+cert-user-oid = 0.9.2342.19200300.100.1.1
+tls-priorities = "NORMAL:%SERVER_PRECEDENCE:%COMPAT:-VERS-SSL3.0"
+auth-timeout = 240
+min-reauth-time = 300
+max-ban-score = 50
+ban-reset-time = 300
+cookie-timeout = 300
+deny-roaming = false
+rekey-time = 172800
+rekey-method = ssl
+use-utmp = true
+pid-file = /var/run/ocserv.pid
+device = vpns
+predictable-ips = true
+ipv4-network = 192.168.1.0/24
+ipv4-netmask = 255.255.255.0
+dns = 8.8.8.8
+dns = 8.8.4.4
+ping-leases = false
+route = default
+no-route = 192.168.1.0/255.255.255.0
+cisco-client-compat = true
+dtls-legacy = true
+EOL
+
+        systemctl restart ocserv
+    fi
+
+    # Install WireGuard
+    if [ "$INSTALL_WIREGUARD" = true ]; then
+        log "Installing WireGuard..."
+        apt-get install -y wireguard
+
+        # Generate keys
+        mkdir -p /etc/wireguard
+        wg genkey | tee /etc/wireguard/server_private.key | wg pubkey > /etc/wireguard/server_public.key
+        
+        # Configure WireGuard
+        cat > /etc/wireguard/wg0.conf << EOL
+[Interface]
+Address = 10.0.0.1/24
+ListenPort = $WIREGUARD_PORT
+PrivateKey = $(cat /etc/wireguard/server_private.key)
+PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+EOL
+
+        systemctl enable wg-quick@wg0
+        systemctl start wg-quick@wg0
+    fi
+
+    # Install SingBox
+    if [ "$INSTALL_SINGBOX" = true ]; then
+        log "Installing SingBox..."
+        # Download latest sing-box release
+        SINGBOX_VERSION=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep tag_name | cut -d '"' -f 4)
+        wget https://github.com/SagerNet/sing-box/releases/download/${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-amd64.tar.gz
+        tar -xzf sing-box-${SINGBOX_VERSION}-linux-amd64.tar.gz
+        mv sing-box-${SINGBOX_VERSION}-linux-amd64/sing-box /usr/local/bin/
+        chmod +x /usr/local/bin/sing-box
+
+        # Create basic configuration
+        mkdir -p /etc/sing-box
+        cat > /etc/sing-box/config.json << EOL
+{
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "::",
+      "listen_port": $SINGBOX_PORT,
+      "sniff": true
     }
-
-@router.get("/bandwidth")
-async def get_bandwidth():
-    return system_stats.get_bandwidth_stats()
-
-@router.get("/protocols")
-async def get_protocols():
-    return system_stats.get_protocol_stats()
-
-@router.get("/users")
-async def get_users():
-    return system_stats.get_user_stats()
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ]
+}
 EOL
 
-    # Create main.py
-    cat > "$BACKEND_DIR/app/main.py" << 'EOL'
-from fastapi import FastAPI, Depends, HTTPException, status
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from jose import JWTError, jwt
-from datetime import datetime, timedelta
-from typing import Optional
-import os
-from app.api import monitoring
+        # Create systemd service
+        cat > /etc/systemd/system/sing-box.service << EOL
+[Unit]
+Description=sing-box service
+Documentation=https://sing-box.sagernet.org
+After=network.target nss-lookup.target
 
-app = FastAPI(title="IRSSH Panel API", version="3.4.3")
+[Service]
+User=root
+WorkingDirectory=/var/lib/sing-box
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
+ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=infinity
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Security settings
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
-
-def create_access_token(data: dict):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-@app.post("/api/auth/login")
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    if form_data.username == os.getenv("ADMIN_USER") and form_data.password == os.getenv("ADMIN_PASS"):
-        access_token = create_access_token(data={"sub": form_data.username})
-        return {"access_token": access_token, "token_type": "bearer"}
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-# Include monitoring routes
-app.include_router(monitoring.router, prefix="/api/monitoring", tags=["monitoring"])
-
-@app.get("/api/health")
-async def health_check():
-    return {"status": "healthy"}
+[Install]
+WantedBy=multi-user.target
 EOL
 
-    # Create supervisor config
-    cat > /etc/supervisor/conf.d/irssh-backend.conf << EOL
-[program:irssh-backend]
-directory=$BACKEND_DIR
-command=$PANEL_DIR/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
-user=root
-autostart=true
-autorestart=true
-stderr_logfile=$LOG_DIR/backend.err.log
-stdout_logfile=$LOG_DIR/backend.out.log
-environment=
-    PYTHONPATH="$BACKEND_DIR",
-    JWT_SECRET_KEY="$JWT_SECRET",
-    ADMIN_USER="admin",
-    ADMIN_PASS="$ADMIN_PASS"
-EOL
-
-    supervisorctl reread
-    supervisorctl update
-    supervisorctl restart irssh-backend
+        systemctl daemon-reload
+        systemctl enable sing-box
+        systemctl start sing-box
+    fi
 }
 
 # Setup Frontend
@@ -325,7 +385,7 @@ setup_frontend() {
     cat > package.json << 'EOL'
 {
   "name": "irssh-panel-frontend",
-  "version": "3.4.3",
+  "version": "3.4.4",
   "private": true,
   "dependencies": {
     "@headlessui/react": "^1.7.0",
@@ -334,8 +394,9 @@ setup_frontend() {
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.21.0",
-    "react-scripts": "5.0.1",
     "recharts": "^2.5.0",
+    "clsx": "^1.2.1",
+    "react-scripts": "5.0.1",
     "@babel/plugin-proposal-private-property-in-object": "^7.21.11",
     "tailwindcss": "^3.4.0"
   },
@@ -355,131 +416,192 @@ setup_frontend() {
 }
 EOL
 
-    # Create axios config
-    mkdir -p src/config
-    cat > src/config/axios.js << 'EOL'
-import axios from 'axios';
+    # Create layouts
+    mkdir -p src/layouts
+    cat > src/layouts/MainLayout.js << 'EOL'
+import React from 'react';
+import Sidebar from '../components/Sidebar';
 
-const instance = axios.create({
-    baseURL: '/',
-    timeout: 5000,
-});
+const MainLayout = ({ children }) => {
+  return (
+    <div className="flex h-screen bg-gray-100">
+      <Sidebar />
+      <div className="flex-1 overflow-auto">
+        {children}
+      </div>
+    </div>
+  );
+};
 
-instance.interceptors.request.use(
-    config => {
-        const token = localStorage.getItem('token');
-        if (token) {
-            config.headers.Authorization = `Bearer ${token}`;
-        }
-        return config;
-    },
-    error => Promise.reject(error)
-);
-
-instance.interceptors.response.use(
-    response => response,
-    error => {
-        if (error.response?.status === 401) {
-            localStorage.removeItem('token');
-            window.location.href = '/login';
-        }
-        return Promise.reject(error);
-    }
-);
-
-export default instance;
+export default MainLayout;
 EOL
 
-    # Create auth utils
-    mkdir -p src/utils
-    cat > src/utils/auth.js << 'EOL'
-export const setToken = (token) => {
-    localStorage.setItem('token', token);
+    # Create Sidebar component
+    cat > src/components/Sidebar.js << 'EOL'
+import React from 'react';
+import { Link, useLocation } from 'react-router-dom';
+import { removeToken } from '../utils/auth';
+import clsx from 'clsx';
+
+const MenuItem = ({ icon, label, to, children, isActive }) => {
+  const [isOpen, setIsOpen] = React.useState(false);
+
+  return (
+    <div>
+      <Link
+        to={to}
+        className={clsx(
+          'flex items-center px-4 py-2 text-sm rounded-lg mx-2',
+          isActive
+            ? 'bg-indigo-100 text-indigo-700'
+            : 'text-gray-700 hover:bg-gray-100'
+        )}
+        onClick={() => setIsOpen(!isOpen)}
+      >
+        {icon}
+        <span className="ml-3">{label}</span>
+        {children && (
+          <svg
+            className={`w-4 h-4 ml-auto transform ${isOpen ? 'rotate-180' : ''}`}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+          </svg>
+        )}
+      </Link>
+      {children && isOpen && (
+        <div className="ml-8 mt-2 space-y-1">{children}</div>
+      )}
+    </div>
+  );
 };
 
-export const getToken = () => {
-    return localStorage.getItem('token');
+const Sidebar = () => {
+  const location = useLocation();
+  const handleLogout = () => {
+    removeToken();
+    window.location.href = '/login';
+  };
+
+  return (
+    <div className="w-64 bg-white shadow-md">
+      <div className="h-16 flex items-center px-4">
+        <img src="/logo.png" alt="IRSSH" className="h-8 w-8" />
+        <span className="ml-2 text-xl font-bold">IRSSH Panel</span>
+      </div>
+      <div className="px-2 py-4">
+        <div className="space-y-1">
+          <MenuItem
+            to="/dashboard"
+            icon={<svg className="w-5 h-5" /* Dashboard icon */ />}
+            label="Dashboard"
+            isActive={location.pathname === '/dashboard'}
+          />
+          <MenuItem
+            icon={<svg className="w-5 h-5" /* Users icon */ />}
+            label="User Management"
+          >
+            <MenuItem
+              to="/users/ssh"
+              label="SSH Users"
+              isActive={location.pathname === '/users/ssh'}
+            />
+            <MenuItem
+              to="/users/l2tp"
+              label="L2TP Users"
+              isActive={location.pathname === '/users/l2tp'}
+            />
+            <MenuItem
+              to="/users/ikev2"
+              label="IKEv2 Users"
+              isActive={location.pathname === '/users/ikev2'}
+            />
+            <MenuItem
+              to="/users/cisco"
+              label="Cisco Users"
+              isActive={location.pathname === '/users/cisco'}
+            />
+            <MenuItem
+              to="/users/wireguard"
+              label="WireGuard Users"
+              isActive={location.pathname === '/users/wireguard'}
+            />
+            <MenuItem
+              to="/users/singbox"
+              label="SingBox Users"
+              isActive={location.pathname === '/users/singbox'}
+            />
+            <MenuItem
+              to="/users/all"
+              label="All Users"
+              isActive={location.pathname === '/users/all'}
+            />
+          </MenuItem>
+          <MenuItem
+            to="/online"
+            icon={<svg className="w-5 h-5" /* Online icon */ />}
+            label="Online User"
+            isActive={location.pathname === '/online'}
+          />
+          <MenuItem
+            to="/settings"
+            icon={<svg className="w-5 h-5" /* Settings icon */ />}
+            label="Settings"
+            isActive={location.pathname === '/settings'}
+          />
+          <MenuItem
+            to="/reports"
+            icon={<svg className="w-5 h-5" /* Reports icon */ />}
+            label="Reports"
+            isActive={location.pathname === '/reports'}
+          />
+          <button
+            onClick={handleLogout}
+            className="w-full text-left flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg mx-2"
+          >
+            <svg className="w-5 h-5" /* Logout icon */ />
+            <span className="ml-3">Logout</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 };
 
-export const removeToken = () => {
-    localStorage.removeItem('token');
-};
-
-export const isAuthenticated = () => {
-    return !!getToken();
-};
+export default Sidebar;
 EOL
-
-    # Create hooks
-    mkdir -p src/hooks
-    cat > src/hooks/useSystemStats.js << 'EOL'
-import { useState, useEffect } from 'react';
-import axios from '../config/axios';
-
-export const useSystemStats = () => {
-    const [data, setData] = useState(null);
-    const [error, setError] = useState(null);
-    const [loading, setLoading] = useState(true);
-
-    useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const response = await axios.get('/api/monitoring/system');
-                setData(response.data);
-                setError(null);
-            } catch (err) {
-                setError(err.message);
-            } finally {
-                setLoading(false);
-            }
-        };
-
-        fetchData();
-        const interval = setInterval(fetchData, 30000);
-        return () => clearInterval(interval);
-    }, []);
-
-    return { data, error, loading };
-};
-EOL
-
-    # Create components
-    mkdir -p src/components/{Auth,Dashboard,Common}
 
     # Create Dashboard components
     cat > src/components/Dashboard/ResourceStats.js << 'EOL'
 import React from 'react';
-import { IconCPU, IconRAM, IconDisk } from '../Common/Icons';
 
 const ResourceCircle = ({ value, label, icon }) => (
-    <div className="text-center">
-        <div className="relative inline-block w-32 h-32">
-            <svg className="transform -rotate-90 w-32 h-32">
-                <circle
-                    cx="64"
-                    cy="64"
-                    r="54"
-                    stroke="#e5e7eb"
-                    strokeWidth="12"
-                    fill="none"
-                />
-                <circle
-                    cx="64"
-                    cy="64"
-                    r="54"
-                    stroke="#10b981"
-                    strokeWidth="12"
-                    fill="none"
-                    strokeLinecap="round"
-                    strokeDasharray={`${value * 3.39} 339.292`}
-                />
-            </svg>
-            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
-                <span className="text-2xl font-bold">{value}%</span>
-            </div>
-        </div>
-        <div className="mt-2">
-            <div className="text-gray-700">{label}</div>
+    <div className="relative w-32 h-32 mx-auto">
+        <svg className="w-full h-full transform -rotate-90">
+            <circle
+                cx="64"
+                cy="64"
+                r="60"
+                fill="none"
+                stroke="#e5e7eb"
+                strokeWidth="8"
+            />
+            <circle
+                cx="64"
+                cy="64"
+                r="60"
+                fill="none"
+                stroke="#10b981"
+                strokeWidth="8"
+                strokeDasharray={`${value * 3.77} 377`}
+                strokeLinecap="round"
+            />
+        </svg>
+        <div className="absolute inset-0 flex items-center justify-center flex-col">
+            <span className="text-2xl font-bold">{value}%</span>
+            <span className="text-sm text-gray-500">{label}</span>
             {icon}
         </div>
     </div>
@@ -487,23 +609,23 @@ const ResourceCircle = ({ value, label, icon }) => (
 
 const ResourceStats = ({ cpuUsage, ramUsage, diskUsage }) => {
     return (
-        <div className="bg-white rounded-lg shadow-md p-6">
+        <div className="bg-white shadow rounded-lg p-6">
             <h2 className="text-xl font-semibold mb-6">Server Resource Statistics</h2>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-8 justify-items-center">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                 <ResourceCircle
                     value={cpuUsage}
                     label="CPU Usage"
-                    icon={<IconCPU className="mx-auto mt-2" />}
+                    icon={<svg className="w-6 h-6 mt-2" /* CPU icon */ />}
                 />
                 <ResourceCircle
                     value={ramUsage}
                     label="RAM Usage"
-                    icon={<IconRAM className="mx-auto mt-2" />}
+                    icon={<svg className="w-6 h-6 mt-2" /* RAM icon */ />}
                 />
                 <ResourceCircle
                     value={diskUsage}
                     label="Disk Usage"
-                    icon={<IconDisk className="mx-auto mt-2" />}
+                    icon={<svg className="w-6 h-6 mt-2" /* Disk icon */ />}
                 />
             </div>
         </div>
@@ -519,7 +641,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 
 const BandwidthStats = ({ monthlyData, dailyData }) => {
     return (
-        <div className="bg-white rounded-lg shadow-md p-6">
+        <div className="bg-white shadow rounded-lg p-6">
             <h2 className="text-xl font-semibold mb-6">Bandwidth Statistics</h2>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <div>
@@ -528,12 +650,12 @@ const BandwidthStats = ({ monthlyData, dailyData }) => {
                         <ResponsiveContainer width="100%" height="100%">
                             <LineChart data={monthlyData}>
                                 <CartesianGrid strokeDasharray="3 3" />
-                                <XAxis dataKey="date" />
+                                <XAxis dataKey="name" />
                                 <YAxis />
                                 <Tooltip />
-                                <Line type="monotone" dataKey="send" stroke="#3b82f6" />
-                                <Line type="monotone" dataKey="receive" stroke="#10b981" />
-                                <Line type="monotone" dataKey="total" stroke="#6366f1" />
+                                <Line type="monotone" dataKey="send" stroke="#3b82f6" name="Send" />
+                                <Line type="monotone" dataKey="receive" stroke="#10b981" name="Receive" />
+                                <Line type="monotone" dataKey="total" stroke="#6366f1" name="Total" />
                             </LineChart>
                         </ResponsiveContainer>
                     </div>
@@ -544,12 +666,12 @@ const BandwidthStats = ({ monthlyData, dailyData }) => {
                         <ResponsiveContainer width="100%" height="100%">
                             <LineChart data={dailyData}>
                                 <CartesianGrid strokeDasharray="3 3" />
-                                <XAxis dataKey="date" />
+                                <XAxis dataKey="name" />
                                 <YAxis />
                                 <Tooltip />
-                                <Line type="monotone" dataKey="send" stroke="#3b82f6" />
-                                <Line type="monotone" dataKey="receive" stroke="#10b981" />
-                                <Line type="monotone" dataKey="total" stroke="#6366f1" />
+                                <Line type="monotone" dataKey="send" stroke="#3b82f6" name="Send" />
+                                <Line type="monotone" dataKey="receive" stroke="#10b981" name="Receive" />
+                                <Line type="monotone" dataKey="total" stroke="#6366f1" name="Total" />
                             </LineChart>
                         </ResponsiveContainer>
                     </div>
@@ -560,6 +682,46 @@ const BandwidthStats = ({ monthlyData, dailyData }) => {
 };
 
 export default BandwidthStats;
+EOL
+
+    cat > src/components/Dashboard/ProtocolStats.js << 'EOL'
+import React from 'react';
+
+const ProtocolStats = ({ protocols }) => {
+    return (
+        <div className="bg-white shadow rounded-lg p-6">
+            <h2 className="text-xl font-semibold mb-6">Protocol Statistics</h2>
+            <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                    <thead>
+                        <tr>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Protocol</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Online Users</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Protocol port</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Incoming Traffic</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Outgoing Traffic</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time Of Being Online</th>
+                        </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                        {protocols.map((protocol, index) => (
+                            <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{protocol.name}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{protocol.onlineUsers}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{protocol.port}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{protocol.incomingTraffic}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{protocol.outgoingTraffic}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{protocol.timeOnline}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+};
+
+export default ProtocolStats;
 EOL
 
     cat > src/components/Dashboard/UserStats.js << 'EOL'
@@ -574,7 +736,7 @@ const StatBox = ({ label, value, color }) => (
 
 const UserStats = ({ stats }) => {
     return (
-        <div className="bg-white rounded-lg shadow-md p-6">
+        <div className="bg-white shadow rounded-lg p-6">
             <h2 className="text-xl font-semibold mb-6">Users Statistics</h2>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                 <StatBox label="Active" value={stats.active} color="green" />
@@ -590,264 +752,99 @@ const UserStats = ({ stats }) => {
 export default UserStats;
 EOL
 
-    cat > src/components/Dashboard/ProtocolStats.js << 'EOL'
-import React from 'react';
-
-const ProtocolStats = ({ protocols }) => {
-    return (
-        <div className="bg-white rounded-lg shadow-md p-6">
-            <h2 className="text-xl font-semibold mb-6">Protocol Statistics</h2>
-            <div className="overflow-x-auto">
-                <table className="min-w-full">
-                    <thead className="bg-gray-50">
-                        <tr>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Protocol</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Online Users</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Protocol port</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Incoming Traffic</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Outgoing Traffic</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time Of Being Online</th>
-                        </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                        {protocols.map((protocol, index) => (
-                            <tr key={index}>
-                                <td className="px-6 py-4 whitespace-nowrap">{protocol.protocol}</td>
-                                <td className="px-6 py-4 whitespace-nowrap">{protocol.onlineUsers}</td>
-                                <td className="px-6 py-4 whitespace-nowrap">{protocol.port}</td>
-                                <td className="px-6 py-4 whitespace-nowrap">{protocol.incomingTraffic}</td>
-                                <td className="px-6 py-4 whitespace-nowrap">{protocol.outgoingTraffic}</td>
-                                <td className="px-6 py-4 whitespace-nowrap">{protocol.timeOnline}</td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    );
-};
-
-export default ProtocolStats;
-EOL
-
-    cat > src/components/Common/Icons.js << 'EOL'
-export const IconCPU = ({ className = "w-6 h-6" }) => (
-    <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
-    </svg>
-);
-
-export const IconRAM = ({ className = "w-6 h-6" }) => (
-    <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-    </svg>
-);
-
-export const IconDisk = ({ className = "w-6 h-6" }) => (
-    <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
-    </svg>
-);
-EOL
-
+    # Create Dashboard index
     cat > src/components/Dashboard/index.js << 'EOL'
-import React from 'react';
-import { useSystemStats } from '../../hooks/useSystemStats';
+import React, { useState, useEffect } from 'react';
+import axios from '../../config/axios';
 import ResourceStats from './ResourceStats';
 import BandwidthStats from './BandwidthStats';
-import UserStats from './UserStats';
 import ProtocolStats from './ProtocolStats';
-import { removeToken } from '../../utils/auth';
+import UserStats from './UserStats';
+import MainLayout from '../../layouts/MainLayout';
 
 const Dashboard = () => {
-    const { data, error, loading } = useSystemStats();
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
+    const [data, setData] = useState({
+        resources: { cpu: 0, ram: 0, disk: 0 },
+        bandwidth: {
+            monthly: [],
+            daily: []
+        },
+        protocols: [],
+        users: {
+            active: 0,
+            expired: 0,
+            expiredSoon: 0,
+            deactive: 0,
+            online: 0
+        }
+    });
 
-    const handleLogout = () => {
-        removeToken();
-        window.location.href = '/login';
-    };
+    useEffect(() => {
+        const fetchData = async () => {
+            try {
+                const response = await axios.get('/api/monitoring/system');
+                setData(response.data);
+                setError(null);
+            } catch (err) {
+                console.error('Error fetching dashboard data:', err);
+                setError('Failed to load dashboard data');
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchData();
+        const interval = setInterval(fetchData, 30000);
+        return () => clearInterval(interval);
+    }, []);
 
     if (loading) {
         return (
-            <div className="min-h-screen bg-gray-100 flex justify-center items-center">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900"></div>
-            </div>
+            <MainLayout>
+                <div className="flex justify-center items-center h-full">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900"></div>
+                </div>
+            </MainLayout>
         );
     }
 
     if (error) {
         return (
-            <div className="min-h-screen bg-gray-100 flex justify-center items-center">
-                <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
-                    Failed to load dashboard data
+            <MainLayout>
+                <div className="flex justify-center items-center h-full">
+                    <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
+                        {error}
+                    </div>
                 </div>
-            </div>
+            </MainLayout>
         );
     }
 
     return (
-        <div className="min-h-screen bg-gray-100">
-            {/* Header */}
-            <nav className="bg-white shadow">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                    <div className="flex justify-between h-16">
-                        <div className="flex items-center">
-                            <img src="/logo.png" alt="IRSSH" className="h-8 w-8 mr-2" />
-                            <h1 className="text-xl font-bold">Dashboard</h1>
-                            <span className="ml-2 text-sm text-gray-500">Administrator</span>
-                        </div>
-                        <div className="flex items-center space-x-4">
-                            <button
-                                onClick={handleLogout}
-                                className="bg-red-600 px-4 py-2 text-white rounded-md hover:bg-red-700"
-                            >
-                                Logout
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </nav>
-
-            {/* Main Content */}
-            <main className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8 space-y-6">
+        <MainLayout>
+            <div className="p-6 space-y-6">
                 <ResourceStats
                     cpuUsage={data.resources.cpu}
                     ramUsage={data.resources.ram}
                     diskUsage={data.resources.disk}
                 />
                 <BandwidthStats
-                    monthlyData={data.bandwidth.monthly_chart}
-                    dailyData={data.bandwidth.daily_chart}
+                    monthlyData={data.bandwidth.monthly}
+                    dailyData={data.bandwidth.daily}
                 />
                 <ProtocolStats protocols={data.protocols} />
                 <UserStats stats={data.users} />
-            </main>
-        </div>
+            </div>
+        </MainLayout>
     );
 };
 
 export default Dashboard;
 EOL
 
-    cat > src/components/Auth/Login.js << 'EOL'
-import React, { useState } from 'react';
-import axios from '../../config/axios';
-
-const Login = () => {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
-
-    try {
-      const formData = new URLSearchParams();
-      formData.append('username', username);
-      formData.append('password', password);
-
-      const response = await axios.post('/api/auth/login', formData, {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-      });
-
-      if (response.data && response.data.access_token) {
-        localStorage.setItem('token', response.data.access_token);
-        window.location.href = '/dashboard';
-      } else {
-        throw new Error('Invalid response from server');
-      }
-    } catch (error) {
-      console.error('Login error:', error.response || error);
-      setError(error.response?.data?.detail || 'Login failed. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-<div className="min-h-screen bg-gray-100 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
-      <div className="sm:mx-auto sm:w-full sm:max-w-md">
-        <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-          IRSSH Panel Login
-        </h2>
-      </div>
-
-      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="bg-white py-8 px-4 shadow sm:rounded-lg sm:px-10">
-          {error && (
-            <div className="mb-4 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative">
-              {error}
-            </div>
-          )}
-          <form className="space-y-6" onSubmit={handleSubmit}>
-            <div>
-              <label className="block text-sm font-medium text-gray-700">
-                Username
-              </label>
-              <div className="mt-1">
-                <input
-                  type="text"
-                  required
-                  className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700">
-                Password
-              </label>
-              <div className="mt-1">
-                <input
-                  type="password"
-                  required
-                  className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              </div>
-            </div>
-
-            <div>
-              <button
-                type="submit"
-                disabled={loading}
-                className={`w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white ${
-                  loading ? 'bg-indigo-400' : 'bg-indigo-600 hover:bg-indigo-700'
-                } focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500`}
-              >
-                {loading ? 'Signing in...' : 'Sign in'}
-              </button>
-            </div>
-          </form>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-export default Login;
-EOL
-
-    cat > src/components/Auth/PrivateRoute.js << 'EOL'
-import React from 'react';
-import { Navigate } from 'react-router-dom';
-import { isAuthenticated } from '../../utils/auth';
-
-const PrivateRoute = ({ children }) => {
-  return isAuthenticated() ? children : <Navigate to="/login" />;
-};
-
-export default PrivateRoute;
-EOL
-
+    # Create App.js
     cat > src/App.js << 'EOL'
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
@@ -856,27 +853,28 @@ import Dashboard from './components/Dashboard';
 import PrivateRoute from './components/Auth/PrivateRoute';
 
 const App = () => {
-  return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route
-          path="/dashboard"
-          element={
-            <PrivateRoute>
-              <Dashboard />
-            </PrivateRoute>
-          }
-        />
-        <Route path="/" element={<Navigate to="/login" />} />
-      </Routes>
-    </BrowserRouter>
-  );
+    return (
+        <BrowserRouter>
+            <Routes>
+                <Route path="/login" element={<Login />} />
+                <Route
+                    path="/dashboard"
+                    element={
+                        <PrivateRoute>
+                            <Dashboard />
+                        </PrivateRoute>
+                    }
+                />
+                <Route path="/" element={<Navigate to="/dashboard" />} />
+            </Routes>
+        </BrowserRouter>
+    );
 };
 
 export default App;
 EOL
 
+    # Create index.js
     cat > src/index.js << 'EOL'
 import React from 'react';
 import ReactDOM from 'react-dom/client';
@@ -885,9 +883,9 @@ import './styles/index.css';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
+    <React.StrictMode>
+        <App />
+    </React.StrictMode>
 );
 EOL
 
@@ -898,17 +896,50 @@ EOL
 @tailwind utilities;
 
 body {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+        'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+        sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }
 
-code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
+.resource-circle {
+    transition: stroke-dasharray 0.5s ease;
+}
+
+.bandwidth-chart {
+    width: 100%;
+    height: 100%;
+    min-height: 300px;
+}
+
+.protocol-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+}
+
+.protocol-table th,
+.protocol-table td {
+    padding: 12px;
+    text-align: left;
+}
+
+.protocol-table th {
+    background-color: #f9fafb;
+    font-weight: 600;
+}
+
+.protocol-table tr:nth-child(even) {
+    background-color: #f9fafb;
+}
+
+.user-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1rem;
+    padding: 1rem;
 }
 EOL
 
@@ -926,13 +957,123 @@ EOL
     fi
 }
 
+# Setup Python Backend
+setup_python_backend() {
+    log "Setting up Python backend..."
+    source "$PANEL_DIR/venv/bin/activate"
+
+    # Create monitoring module for real system stats
+    cat > "$BACKEND_DIR/app/utils/monitoring.py" << 'EOL'
+import psutil
+import time
+from datetime import datetime
+import os
+
+class SystemMonitor:
+    def __init__(self):
+        self.start_time = time.time()
+        self._network_last = psutil.net_io_counters()
+        self._last_check = time.time()
+
+    def get_cpu_usage(self):
+        return psutil.cpu_percent(interval=1)
+
+    def get_memory_usage(self):
+        memory = psutil.virtual_memory()
+        return memory.percent
+
+    def get_disk_usage(self):
+        disk = psutil.disk_usage('/')
+        return disk.percent
+
+    def get_network_usage(self):
+        current = psutil.net_io_counters()
+        current_time = time.time()
+        time_diff = current_time - self._last_check
+
+        send_speed = (current.bytes_sent - self._network_last.bytes_sent) / time_diff
+        recv_speed = (current.bytes_recv - self._network_last.bytes_recv) / time_diff
+
+        self._network_last = current
+        self._last_check = current_time
+
+        return {
+            'send': f"{send_speed / 1024 / 1024:.1f}",
+            'receive': f"{recv_speed / 1024 / 1024:.1f}"
+        }
+
+    def get_protocol_stats(self):
+        return [
+            {
+                'name': protocol,
+                'port': port,
+                'onlineUsers': self._get_protocol_users(protocol),
+                'traffic': self._get_protocol_traffic(protocol)
+            }
+            for protocol, port in [
+                ('SSH', 22),
+                ('L2TP', 1701),
+                ('IKEv2', 500),
+                ('Cisco', 443),
+                ('WireGuard', 51820),
+                ('SingBox', 1080)
+            ]
+        ]
+
+    def _get_protocol_users(self, protocol):
+        # Implementation for getting actual protocol users
+        return 0
+
+    def _get_protocol_traffic(self, protocol):
+        # Implementation for getting actual protocol traffic
+        return {'incoming': '0 Mbps', 'outgoing': '0 Mbps'}
+
+    def get_all_stats(self):
+        network = self.get_network_usage()
+        return {
+            'resources': {
+                'cpu': self.get_cpu_usage(),
+                'ram': self.get_memory_usage(),
+                'disk': self.get_disk_usage()
+            },
+            'bandwidth': {
+                'current': network,
+                'monthly': [],  # Implement historical data
+                'daily': []     # Implement historical data
+            },
+            'protocols': self.get_protocol_stats(),
+            'users': {
+                'active': 0,
+                'expired': 0,
+                'expiredSoon': 0,
+                'deactive': 0,
+                'online': 0
+            }
+        }
+
+system_monitor = SystemMonitor()
+EOL
+
+    # Create monitoring endpoint
+    cat > "$BACKEND_DIR/app/api/monitoring.py" << 'EOL'
+from fastapi import APIRouter, Depends
+from ..utils.monitoring import system_monitor
+
+router = APIRouter()
+
+@router.get("/system")
+async def get_system_info():
+    return system_monitor.get_all_stats()
+EOL
+}
+
 # Setup Database
 setup_database() {
     log "Setting up database..."
     systemctl start postgresql
     systemctl enable postgresql
 
-    # Wait for PostgreSQL to start
+    # Wait for PostgreSQL
     for i in {1..30}; do
         if pg_isready -q; then
             break
@@ -1133,6 +1274,7 @@ setup_firewall() {
     ufw default deny incoming
     ufw default allow outgoing
 
+    # Allow essential services
     ufw allow ssh
     ufw allow http
     ufw allow https
@@ -1140,6 +1282,13 @@ setup_firewall() {
     ufw allow "$SSH_PORT"
     ufw allow "$DROPBEAR_PORT"
     ufw allow "$BADVPN_PORT/udp"
+
+    # Allow protocol ports
+    [ "$INSTALL_L2TP" = true ] && ufw allow "$L2TP_PORT"
+    [ "$INSTALL_IKEV2" = true ] && ufw allow "$IKEV2_PORT"
+    [ "$INSTALL_CISCO" = true ] && ufw allow "$CISCO_PORT"
+    [ "$INSTALL_WIREGUARD" = true ] && ufw allow "$WIREGUARD_PORT"
+    [ "$INSTALL_SINGBOX" = true ] && ufw allow "$SINGBOX_PORT"
 
     echo "y" | ufw enable
 }
@@ -1174,47 +1323,26 @@ EOL
     systemctl restart sshd
 }
 
-# Setup System Monitoring
-setup_monitoring() {
-    log "Setting up system monitoring..."
-    
-    # Create monitoring script
-    cat > "$MODULES_DIR/monitor.sh" << 'EOL'
-#!/bin/bash
+# Setup Cron Jobs
+setup_cron() {
+    log "Setting up cron jobs..."
 
-get_cpu_usage() {
-    top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}'
-}
-
-get_mem_usage() {
-    free | grep Mem | awk '{print ($3/$2) * 100}'
-}
-
-get_disk_usage() {
-    df -h / | awk 'NR==2 {print $5}' | sed 's/%//'
-}
-
-get_network_stats() {
-    if command -v vnstat &> /dev/null; then
-        vnstat -h 1
-    else
-        echo "vnstat not installed"
-    fi
-}
-
-echo "{"
-echo "  \"cpu\": $(get_cpu_usage),"
-echo "  \"memory\": $(get_mem_usage | xargs printf "%.1f"),"
-echo "  \"disk\": $(get_disk_usage),"
-echo "  \"network\": \"$(get_network_stats)\""
-echo "}"
+    # Create system monitoring cron job
+    cat > /etc/cron.d/irssh-monitor << EOL
+* * * * * root $MODULES_DIR/monitor.sh > /tmp/system_stats.json 2>> $LOG_DIR/monitor.err.log
 EOL
 
-    chmod +x "$MODULES_DIR/monitor.sh"
+    # Create bandwidth monitoring cron job
+    cat > /etc/cron.d/irssh-bandwidth << EOL
+0 * * * * root $MODULES_DIR/bandwidth.sh >> $LOG_DIR/bandwidth.log 2>&1
+EOL
 
-    # Create cron job for monitoring
-    echo "* * * * * root $MODULES_DIR/monitor.sh > /tmp/system_stats.json" > /etc/cron.d/irssh-monitor
-    chmod 644 /etc/cron.d/irssh-monitor
+    # Create backup cron job
+    cat > /etc/cron.d/irssh-backup << EOL
+0 0 * * * root $MODULES_DIR/backup.sh >> $LOG_DIR/backup.log 2>&1
+EOL
+
+    chmod 644 /etc/cron.d/irssh-*
 }
 
 # Verify Installation
@@ -1244,10 +1372,12 @@ verify_installation() {
         error "Backend API is not responding"
     fi
 
-    # Check monitoring script
-    if [ ! -x "$MODULES_DIR/monitor.sh" ]; then
-        error "Monitoring script is not executable"
-    fi
+    # Check protocol services
+    [ "$INSTALL_L2TP" = true ] && ! systemctl is-active --quiet xl2tpd && error "L2TP service is not running"
+    [ "$INSTALL_IKEV2" = true ] && ! systemctl is-active --quiet strongswan && error "IKEv2 service is not running"
+    [ "$INSTALL_CISCO" = true ] && ! systemctl is-active --quiet ocserv && error "Cisco AnyConnect service is not running"
+    [ "$INSTALL_WIREGUARD" = true ] && ! systemctl is-active --quiet wg-quick@wg0 && error "WireGuard service is not running"
+    [ "$INSTALL_SINGBOX" = true ] && ! systemctl is-active --quiet sing-box && error "SingBox service is not running"
 
     log "All services verified successfully"
 }
@@ -1258,11 +1388,16 @@ save_installation_info() {
     
     cat > "$CONFIG_DIR/installation.info" << EOL
 Installation Date: $(date +"%Y-%m-%d %H:%M:%S")
-Version: 3.4.3
+Version: 3.4.4
 Domain: ${DOMAIN}
 Web Port: ${WEB_PORT}
 SSH Port: ${SSH_PORT}
 Dropbear Port: ${DROPBEAR_PORT}
+L2TP Port: ${L2TP_PORT}
+IKEv2 Port: ${IKEV2_PORT}
+Cisco Port: ${CISCO_PORT}
+WireGuard Port: ${WIREGUARD_PORT}
+SingBox Port: ${SINGBOX_PORT}
 BadVPN Port: ${BADVPN_PORT}
 Admin Username: admin
 Admin Password: ${ADMIN_PASS}
@@ -1292,7 +1427,7 @@ main() {
     trap cleanup EXIT
     
     setup_logging
-    log "Starting IRSSH Panel installation v3.4.3"
+    log "Starting IRSSH Panel installation v3.4.4"
     
     # Get user input
     read -p "Enter domain name (e.g., panel.example.com): " DOMAIN
@@ -1300,25 +1435,43 @@ main() {
     WEB_PORT=${WEB_PORT:-443}
     read -p "Enter SSH port (default: 22): " SSH_PORT
     SSH_PORT=${SSH_PORT:-22}
-    read -p "Enter Dropbear port (default: 444): " DROPBEAR_PORT
-    DROPBEAR_PORT=${DROPBEAR_PORT:-444}
-    read -p "Enter BadVPN port (default: 7300): " BADVPN_PORT
-    BADVPN_PORT=${BADVPN_PORT:-7300}
+    
+    # Protocol installation options
+    read -p "Install L2TP/IPsec? (Y/n): " install_l2tp
+    INSTALL_L2TP=${install_l2tp:-Y}
+    [ "${INSTALL_L2TP,,}" = "y" ] && INSTALL_L2TP=true || INSTALL_L2TP=false
+
+    read -p "Install IKEv2? (Y/n): " install_ikev2
+    INSTALL_IKEV2=${install_ikev2:-Y}
+    [ "${INSTALL_IKEV2,,}" = "y" ] && INSTALL_IKEV2=true || INSTALL_IKEV2=false
+
+    read -p "Install Cisco AnyConnect? (Y/n): " install_cisco
+    INSTALL_CISCO=${install_cisco:-Y}
+    [ "${INSTALL_CISCO,,}" = "y" ] && INSTALL_CISCO=true || INSTALL_CISCO=false
+
+    read -p "Install WireGuard? (Y/n): " install_wireguard
+    INSTALL_WIREGUARD=${install_wireguard:-Y}
+    [ "${INSTALL_WIREGUARD,,}" = "y" ] && INSTALL_WIREGUARD=true || INSTALL_WIREGUARD=false
+
+    read -p "Install SingBox? (Y/n): " install_singbox
+    INSTALL_SINGBOX=${install_singbox:-Y}
+    [ "${INSTALL_SINGBOX,,}" = "y" ] && INSTALL_SINGBOX=true || INSTALL_SINGBOX=false
     
     # Run installation steps
     check_requirements
     create_backup
     setup_directories
     install_dependencies
+    install_protocols
     setup_python
+    setup_python_backend
     setup_frontend
     setup_database
-    setup_monitoring
-    setup_modules
     setup_nginx
     setup_ssl
     setup_firewall
     setup_security
+    setup_cron
     verify_installation
     save_installation_info
     
@@ -1338,11 +1491,17 @@ main() {
         echo "Panel: http://YOUR-SERVER-IP"
     fi
     echo
-    echo "Configured Ports:"
-    echo "Web Panel: $WEB_PORT"
-    echo "SSH: $SSH_PORT"
-    echo "Dropbear: $DROPBEAR_PORT"
-    echo "BadVPN: $BADVPN_PORT"
+    echo "Installed Protocols:"
+    [ "$INSTALL_SSH" = true ] && echo "- SSH (Port: $SSH_PORT)"
+    [ "$INSTALL_L2TP" = true ] && echo "- L2TP/IPsec (Port: $L2TP_PORT)"
+    [ "$INSTALL_IKEV2" = true ] && echo "- IKEv2 (Port: $IKEV2_PORT)"
+    [ "$INSTALL_CISCO" = true ] && echo "- Cisco AnyConnect (Port: $CISCO_PORT)"
+    [ "$INSTALL_WIREGUARD" = true ] && echo "- WireGuard (Port: $WIREGUARD_PORT)"
+    [ "$INSTALL_SINGBOX" = true ] && echo "- SingBox (Port: $SINGBOX_PORT)"
+    echo
+    echo "Additional Services:"
+    echo "- BadVPN: Port $BADVPN_PORT"
+    echo "- Dropbear: Port $DROPBEAR_PORT"
     echo
     echo "Installation Log: $LOG_DIR/install.log"
     echo "Installation Info: $CONFIG_DIR/installation.info"
@@ -1353,6 +1512,8 @@ main() {
     echo "3. Configure additional security settings in the panel"
     echo "4. Check the installation log for any warnings"
     echo "5. A backup of the previous installation (if any) has been saved in: $BACKUP_DIR"
+    echo
+    echo "For support, please visit the repository issues page."
 }
 
 # Start installation
