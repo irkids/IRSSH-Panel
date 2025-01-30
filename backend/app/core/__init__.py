@@ -1,29 +1,21 @@
-"""
-Core module initialization.
-This module contains core functionality for the IRSSH Panel.
-"""
+# backend/app/__init__.py
+from .core.config import settings
+from .core.database import init_db
 
+# backend/app/api/__init__.py
+from fastapi import APIRouter
+router = APIRouter()
+
+# backend/app/core/__init__.py
 from .config import settings
-from .database import Base, engine, get_db
-from .exceptions import (
-    DatabaseError,
-    AuthenticationError,
-    ConfigurationError,
-    ProtocolError
-)
-from .logger import setup_logging
+from .database import init_db, get_db
+from .security import create_access_token, verify_token
 
-# Setup logging when the module is imported
-setup_logging()
+# backend/app/models/__init__.py
+from .models import User, Protocol, Setting
 
-__all__ = [
-    'settings',
-    'Base',
-    'engine',
-    'get_db',
-    'DatabaseError',
-    'AuthenticationError',
-    'ConfigurationError',
-    'ProtocolError',
-    'setup_logging'
-]
+# backend/app/schemas/__init__.py
+from .schemas import UserCreate, UserUpdate, Token, Settings
+
+# backend/app/utils/__init__.py
+from .helpers import get_system_stats, monitor_bandwidth
