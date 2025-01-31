@@ -1009,13 +1009,35 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
     }
 EOL
 
+cat > "$BACKEND_DIR/app/core/security.py" << 'EOL'
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from datetime import datetime, timedelta
+import os
+
 SECRET_KEY = os.getenv("JWT_SECRET", "$JWT_SECRET")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+EOL
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 1440
 
     cat > "$BACKEND_DIR/app/api/monitoring.py" << 'EOL'
 from fastapi import APIRouter, WebSocket
-from app.core.security import get_password_hash
 import psutil
 import asyncio
 
@@ -1186,14 +1208,23 @@ EOL
 setup_nginx() {
     log "Configuring Nginx..."
     
-        cat > /etc/nginx/sites-available/irssh-panel << EOL
+    cat > /etc/nginx/sites-available/irssh-panel << EOL
 server {
     listen 80;
     server_name ${DOMAIN};
 
+    root ${FRONTEND_DIR}/build;
+    index index.html;
+
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer-when-downgrade" always;
+    add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
+    
     location / {
-        root ${FRONTEND_DIR}/build;
-        try_files \$uri /index.html;
+        try_files \$uri \$uri/ /index.html;
     }
 
     location /api {
@@ -1209,6 +1240,8 @@ server {
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "Upgrade";
     }
+
+    client_max_body_size 100M;
 }
 EOL
 
