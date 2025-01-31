@@ -14,6 +14,20 @@ from app.schemas.user import (
 )
 from app.api.deps import get_current_active_user
 
+from fastapi import HTTPException
+from sqlalchemy.orm import Session
+from app.core.security import get_password_hash
+
+def create_user(db: Session, username: str, password: str):
+    if db.query(User).filter(User.username == username).first():
+        raise HTTPException(status_code=400, detail="Username already exists")
+    
+    hashed_password = get_password_hash(password)
+    new_user = User(username=username, hashed_password=hashed_password)
+    db.add(new_user)
+    db.commit()
+    return new_user
+
 router = APIRouter()
 
 @router.get("/", response_model=List[UserList])
