@@ -316,15 +316,11 @@ EOL
     if [ "$INSTALL_SINGBOX" = true ]; then
         log "Installing SingBox..."
         # Download latest sing-box release
-        SINGBOX_VERSION=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep tag_name | cut -d '"' -f 4)
-        wget https://github.com/SagerNet/sing-box/releases/download/${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-amd64.tar.gz
-        tar -xzf sing-box-${SINGBOX_VERSION}-linux-amd64.tar.gz
-        mv sing-box-${SINGBOX_VERSION}-linux-amd64/sing-box /usr/local/bin/
-        chmod +x /usr/local/bin/sing-box
-
-        # Create basic configuration
-        mkdir -p /etc/sing-box
-        cat > /etc/sing-box/config.json << EOL
+SINGBOX_VERSION=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep tag_name | cut -d '"' -f 4)
+wget https://github.com/SagerNet/sing-box/releases/download/${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-amd64.tar.gz
+tar -xzf sing-box-${SINGBOX_VERSION}-linux-amd64.tar.gz
+mv sing-box-${SINGBOX_VERSION}-linux-amd64/sing-box /usr/local/bin/
+chmod +x /usr/local/bin/sing-box
 {
   "log": {
     "level": "info",
@@ -978,11 +974,7 @@ class User(Base):
 EOL
 
 mkdir -p "$BACKEND_DIR/app/core"
-    cat > "$BACKEND_DIR/app/core/security.py" << 'EOL'
-from jose import JWTError, jwt
-from passlib.context import CryptContext
-from datetime import datetime, timedelta
-import os
+BACKEND_DIR
 
 mkdir -p "$BACKEND_DIR/app/api"
     cat > "$BACKEND_DIR/app/api/auth.py" << 'EOL'
@@ -1056,6 +1048,20 @@ SECRET_KEY = os.getenv("JWT_SECRET", "$JWT_SECRET")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 1440
 
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+EOL
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def verify_password(plain_password, hashed_password):
@@ -1196,6 +1202,9 @@ setup_database() {
     sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
     sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
 
+
+
+
     # Save configuration
     cat > "$CONFIG_DIR/database.env" << EOL
 DB_HOST=localhost
@@ -1207,11 +1216,14 @@ EOL
     chmod 600 "$CONFIG_DIR/database.env"
 }
 
+read -p "Enter admin username: " ADMIN_USER
+read -p "Enter admin password: " ADMIN_PASS
+
 # Setup Nginx
 setup_nginx() {
     log "Configuring Nginx..."
     
-     cat > /etc/nginx/sites-available/irssh-panel << EOL
+cat > /etc/nginx/sites-available/irssh-panel << EOL
 server {
     listen 80;
     server_name ${DOMAIN};
@@ -1256,18 +1268,10 @@ EOL
 
 # Setup SSL
 setup_ssl() {
-    if [[ -n "$DOMAIN" ]]; then
-        log "Setting up SSL..."
-        
-        systemctl stop nginx
-
-        # Request certificate
-        certbot certonly --standalone \
-            -d "$DOMAIN" \
-            --non-interactive \
-            --agree-tos \
-            --email "admin@$DOMAIN" \
-            --http-01-port=80 || error "SSL certificate request failed"
+    log "Setting up SSL with Certbot..."
+    certbot --nginx -d ${DOMAIN} --non-interactive --agree-tos --email ${ADMIN_EMAIL}
+    systemctl restart nginx
+}
 
         # Update Nginx configuration for SSL
         cat > /etc/nginx/sites-available/irssh-panel << EOL
@@ -1409,6 +1413,14 @@ EOL
     systemctl restart sshd
 }
 
+setup_python() {
+    log "Creating Python virtual environment..."
+    python3 -m venv "$PANEL_DIR/venv"
+    source "$PANEL_DIR/venv/bin/activate"
+    pip install -U pip wheel
+    pip install fastapi uvicorn sqlalchemy psycopg2-binary passlib cryptography
+}
+
 # Setup Cron Jobs
 setup_cron() {
     log "Setting up cron jobs..."
@@ -1468,6 +1480,11 @@ verify_installation() {
     log "All services verified successfully"
 }
 
+SSH_PORT=22
+sed -i "s/#Port 22/Port $SSH_PORT/" /etc/ssh/sshd_config
+systemctl restart sshd
+
+
 # Save Installation Info
 save_installation_info() {
     log "Saving installation information..."
@@ -1505,8 +1522,13 @@ DB_NAME=${DB_NAME}
 DB_USER=${DB_USER}
 DB_PASS=${DB_PASS}
 EOL
-    chmod 600 "$CONFIG_DIR/env"
+  chmod 600 "$CONFIG_DIR/env"
 }
+
+WEB_PORT=80
+sed -i "s/listen 80/listen $WEB_PORT/" /etc/nginx/sites-available/irssh-panel
+systemctl restart nginx
+
 
 # Main Installation
 main() {
