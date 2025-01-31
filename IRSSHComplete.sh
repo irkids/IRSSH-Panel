@@ -1009,30 +1009,23 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
     }
 EOL
 
-cat > "$BACKEND_DIR/app/core/security.py" << 'EOL'
-from jose import JWTError, jwt
-from passlib.context import CryptContext
-from datetime import datetime, timedelta
-import os
+    cat > "$BACKEND_DIR/app/api/monitoring.py" << 'EOL'
+from fastapi import APIRouter, WebSocket
+import psutil
+import asyncio
 
-SECRET_KEY = os.getenv("JWT_SECRET", "$JWT_SECRET")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 1440
+router = APIRouter()
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
-
-def get_password_hash(password):
-    return pwd_context.hash(password)
-
-def create_access_token(data: dict):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+@router.websocket("/ws/stats")
+async def websocket_stats(websocket: WebSocket):
+    await websocket.accept()
+    while True:
+        cpu = psutil.cpu_percent(interval=1)
+        mem = psutil.virtual_memory().percent
+        await websocket.send_json({"cpu": cpu, "memory": mem})
+        await asyncio.sleep(2)
 EOL
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 1440
 
@@ -1052,6 +1045,16 @@ async def websocket_stats(websocket: WebSocket):
         await websocket.send_json({"cpu": cpu, "memory": mem})
         await asyncio.sleep(2)
 EOL
+
+    cat > "$BACKEND_DIR/app/core/security.py" << 'EOL'
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from datetime import datetime, timedelta
+import os
+
+SECRET_KEY = os.getenv("JWT_SECRET", "$JWT_SECRET")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -1208,7 +1211,7 @@ EOL
 setup_nginx() {
     log "Configuring Nginx..."
     
-    cat > /etc/nginx/sites-available/irssh-panel << EOL
+     cat > /etc/nginx/sites-available/irssh-panel << EOL
 server {
     listen 80;
     server_name ${DOMAIN};
