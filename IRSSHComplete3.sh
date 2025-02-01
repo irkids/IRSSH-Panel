@@ -47,6 +47,12 @@ SINGBOX_PORT=1080
 BADVPN_PORT=7300
 DROPBEAR_PORT=22722
 
+cleanup() {
+    log "Cleaning up temporary files..."
+    rm -rf /tmp/sing-box-*
+    rm -rf /tmp/system_stats.json
+}
+
 # Logging
 setup_logging() {
     mkdir -p "$LOG_DIR"
@@ -222,7 +228,7 @@ conn ikev2-vpn
     eap_identity=%identity
 EOL
         
-        systemctl restart strongswan
+       systemctl restart strongswan-starter
     fi
 
     # Install Cisco AnyConnect
@@ -320,10 +326,10 @@ EOL
         log "Installing SingBox..."
         # Download latest sing-box release
 SINGBOX_VERSION="v1.16.0"  # Use a fixed version to avoid errors
-wget "https://github.com/SagerNet/sing-box/releases/download/${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION#v}-linux-amd64.tar.gz"
-tar -xzf sing-box-${SINGBOX_VERSION#v}-linux-amd64.tar.gz
-mv sing-box-${SINGBOX_VERSION#v}-linux-amd64/sing-box /usr/local/bin/
-chmod +x /usr/local/bin/sing-box
+wget "https://github.com/SagerNet/sing-box/releases/download/${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION#v}-linux-amd64.tar.gz" || error "Failed to download SingBox"
+tar -xzf sing-box-${SINGBOX_VERSION#v}-linux-amd64.tar.gz || error "Failed to extract SingBox"
+mv sing-box-${SINGBOX_VERSION#v}-linux-amd64/sing-box /usr/local/bin/ || error "Failed to move SingBox binary"
+chmod +x /usr/local/bin/sing-box || error "Failed to set executable permissions for SingBox"
 
         # Create basic configuration
         mkdir -p /etc/sing-box
@@ -383,6 +389,18 @@ EOL
 setup_frontend() {
     log "Setting up frontend..."
     cd "$FRONTEND_DIR"
+
+    # Install dependencies
+    log "Installing frontend dependencies..."
+    npm install --legacy-peer-deps || error "Failed to install frontend dependencies"
+
+    # Install react-scripts explicitly
+    npm install react-scripts@5.0.1 --legacy-peer-deps || error "Failed to install react-scripts"
+
+    # Build the frontend
+    log "Building frontend..."
+    GENERATE_SOURCEMAP=false npm run build || error "Frontend build failed"
+}
 
     # Create package.json
     cat > package.json << 'EOL'
@@ -1395,6 +1413,29 @@ verify_installation() {
     log "All services verified successfully"
 }
 
+check_requirements() {
+    log "Checking system requirements..."
+    # Check for root privileges
+    if [ "$EUID" -ne 0 ]; then
+        error "Please run as root."
+    fi
+
+    # Check for required commands
+    for cmd in curl wget tar openssl; do
+        if ! command -v "$cmd" &> /dev/null; then
+            error "Command '$cmd' is required but not installed."
+        fi
+    done
+}
+
+create_backup() {
+    log "Creating backup of existing installation..."
+    mkdir -p "$BACKUP_DIR"
+    if [ -d "$PANEL_DIR" ]; then
+        tar -czf "$BACKUP_DIR/irssh-panel-backup-$(date +%Y%m%d%H%M%S).tar.gz" -C "$(dirname "$PANEL_DIR")" "$(basename "$PANEL_DIR")"
+    fi
+}
+
 # Save Installation Info
 save_installation_info() {
     log "Saving installation information..."
@@ -1442,34 +1483,19 @@ main() {
     setup_logging
     log "Starting IRSSH Panel installation v3.4.4"
     
-    # Get user input
-DOMAIN=""  # No domain required
-WEB_PORT=443  # Default port
-    WEB_PORT=${WEB_PORT:-443}
-    read -p "Enter SSH port (default: 22): " SSH_PORT
-    SSH_PORT=${SSH_PORT:-22}
-    
-    # Protocol installation options
-    read -p "Install L2TP/IPsec? (Y/n): " install_l2tp
-    INSTALL_L2TP=${install_l2tp:-Y}
-    [ "${INSTALL_L2TP,,}" = "y" ] && INSTALL_L2TP=true || INSTALL_L2TP=false
+    # Automate settings
+    DOMAIN=""  # No domain required
+    WEB_PORT=443  # Default port
+    SSH_PORT=22  # Default SSH port
 
-    read -p "Install IKEv2? (Y/n): " install_ikev2
-    INSTALL_IKEV2=${install_ikev2:-Y}
-    [ "${INSTALL_IKEV2,,}" = "y" ] && INSTALL_IKEV2=true || INSTALL_IKEV2=false
+    # Automatically install all protocols
+    INSTALL_SSH=true
+    INSTALL_L2TP=true
+    INSTALL_IKEV2=true
+    INSTALL_CISCO=true
+    INSTALL_WIREGUARD=true
+    INSTALL_SINGBOX=true
 
-    read -p "Install Cisco AnyConnect? (Y/n): " install_cisco
-    INSTALL_CISCO=${install_cisco:-Y}
-    [ "${INSTALL_CISCO,,}" = "y" ] && INSTALL_CISCO=true || INSTALL_CISCO=false
-
-    read -p "Install WireGuard? (Y/n): " install_wireguard
-    INSTALL_WIREGUARD=${install_wireguard:-Y}
-    [ "${INSTALL_WIREGUARD,,}" = "y" ] && INSTALL_WIREGUARD=true || INSTALL_WIREGUARD=false
-
-    read -p "Install SingBox? (Y/n): " install_singbox
-    INSTALL_SINGBOX=${install_singbox:-Y}
-    [ "${INSTALL_SINGBOX,,}" = "y" ] && INSTALL_SINGBOX=true || INSTALL_SINGBOX=false
-    
     # Run installation steps
     check_requirements
     create_backup
@@ -1487,6 +1513,9 @@ WEB_PORT=443  # Default port
     setup_cron
     verify_installation
     save_installation_info
+    
+    log "Installation completed successfully!"
+}
     
     # Final output
     log "Installation completed successfully!"
