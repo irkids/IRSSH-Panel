@@ -19,6 +19,10 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
+log() {
+    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"
+}
+
 # Generate secure keys and passwords
 DB_NAME="irssh_panel"
 DB_USER="irssh_admin"
@@ -86,7 +90,8 @@ setup_directories() {
 # Install Dependencies
 install_dependencies() {
     log "Installing system dependencies..."
-    apt-get update
+    apt-get update || error "Failed to update package list"
+    apt-get install -y net-tools iptables || error "Failed to install net-tools and iptables"
 
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         python3 python3-pip python3-venv \
@@ -101,10 +106,11 @@ install_dependencies() {
         golang \
         iptables-persistent
 
-    # Install Node.js
-    curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
-    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
-
+# Install Node.js
+    curl -fsSL https://deb.nodesource.com/setup_18.x | bash - || error "Failed to setup Node.js"
+    apt-get install -y nodejs || error "Failed to install Node.js"
+    
+    # Install npm
     npm install -g npm@8.19.4 || error "npm installation failed"
 }
 
@@ -384,6 +390,11 @@ EOL
         systemctl start sing-box
     fi
 }
+
+# Create necessary directories for frontend components
+mkdir -p "$FRONTEND_DIR/src/components/Dashboard"
+mkdir -p "$FRONTEND_DIR/src/layouts"
+mkdir -p "$FRONTEND_DIR/src/styles"
 
 # Setup Frontend
 setup_frontend() {
@@ -1133,10 +1144,10 @@ EOL
 setup_nginx() {
     log "Configuring Nginx..."
     
-    cat > /etc/nginx/sites-available/irssh-panel << EOL
+cat > /etc/nginx/sites-available/irssh-panel << EOL
 server {
-    listen 80;
-    listen [::]:80;
+    listen ${WEB_PORT};
+    listen [::]:${WEB_PORT};
     server_name ${DOMAIN};
 
     root ${FRONTEND_DIR}/build;
@@ -1215,40 +1226,22 @@ setup_ssl() {
             --http-01-port=80 || error "SSL certificate request failed"
 
         # Update Nginx configuration for SSL
-        cat > /etc/nginx/sites-available/irssh-panel << EOL
+cat > /etc/nginx/sites-available/irssh-panel << EOL
 server {
-    listen 80;
-    listen [::]:80;
+    listen ${WEB_PORT};
+    listen [::]:${WEB_PORT};
     server_name ${DOMAIN};
-    return 301 https://\$server_name\$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name ${DOMAIN};
-
-    ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
-    ssl_session_timeout 1d;
-    ssl_session_cache shared:SSL:50m;
-    ssl_session_tickets off;
-
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
-    ssl_prefer_server_ciphers off;
 
     root ${FRONTEND_DIR}/build;
     index index.html;
 
     # Security headers
-    add_header Strict-Transport-Security "max-age=31536000" always;
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-XSS-Protection "1; mode=block" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "no-referrer-when-downgrade" always;
     add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
-
+    
     location / {
         try_files \$uri \$uri/ /index.html;
     }
@@ -1453,7 +1446,7 @@ Cisco Port: ${CISCO_PORT}
 WireGuard Port: ${WIREGUARD_PORT}
 SingBox Port: ${SINGBOX_PORT}
 BadVPN Port: ${BADVPN_PORT}
-Admin Username: admin
+Admin Username: ${ADMIN_USER}
 Admin Password: ${ADMIN_PASS}
 Database Name: ${DB_NAME}
 Database User: ${DB_USER}
@@ -1483,10 +1476,17 @@ main() {
     setup_logging
     log "Starting IRSSH Panel installation v3.4.4"
     
-    # Automate settings
-    DOMAIN=""  # No domain required
-    WEB_PORT=443  # Default port
-    SSH_PORT=22  # Default SSH port
+    # Get user input for admin credentials and web port
+    read -p "Enter admin username (default: admin): " ADMIN_USER
+    ADMIN_USER=${ADMIN_USER:-admin}
+
+    read -p "Enter admin password: " ADMIN_PASS
+    while [[ -z "$ADMIN_PASS" ]]; do
+        read -p "Admin password cannot be empty. Enter admin password: " ADMIN_PASS
+    done
+
+    read -p "Enter web panel port (default: 443): " WEB_PORT
+    WEB_PORT=${WEB_PORT:-443}
 
     # Automatically install all protocols
     INSTALL_SSH=true
@@ -1519,44 +1519,40 @@ main() {
     
     # Final output
     log "Installation completed successfully!"
-    echo
-    echo "IRSSH Panel has been installed!"
-    echo
-    echo "Admin Credentials:"
-    echo "Username: admin"
-    echo "Password: $ADMIN_PASS"
-    echo
-    echo "Access URLs:"
-    if [[ -n "$DOMAIN" ]]; then
-        echo "Panel: https://$DOMAIN"
-    else
-        echo "Panel: http://YOUR-SERVER-IP"
-    fi
-    echo
-    echo "Installed Protocols:"
-    [ "$INSTALL_SSH" = true ] && echo "- SSH (Port: $SSH_PORT)"
-    [ "$INSTALL_L2TP" = true ] && echo "- L2TP/IPsec (Port: $L2TP_PORT)"
-    [ "$INSTALL_IKEV2" = true ] && echo "- IKEv2 (Port: $IKEV2_PORT)"
-    [ "$INSTALL_CISCO" = true ] && echo "- Cisco AnyConnect (Port: $CISCO_PORT)"
-    [ "$INSTALL_WIREGUARD" = true ] && echo "- WireGuard (Port: $WIREGUARD_PORT)"
-    [ "$INSTALL_SINGBOX" = true ] && echo "- SingBox (Port: $SINGBOX_PORT)"
-    echo
-    echo "Additional Services:"
-    echo "- BadVPN: Port $BADVPN_PORT"
-    echo "- Dropbear: Port $DROPBEAR_PORT"
-    echo
-    echo "Installation Log: $LOG_DIR/install.log"
-    echo "Installation Info: $CONFIG_DIR/installation.info"
-    echo
-    echo "Important Notes:"
-    echo "1. Please save these credentials securely"
-    echo "2. Change the admin password after first login"
-    echo "3. Configure additional security settings in the panel"
-    echo "4. Check the installation log for any warnings"
-    echo "5. A backup of the previous installation (if any) has been saved in: $BACKUP_DIR"
-    echo
-    echo "For support, please visit the repository issues page."
-}
-
-# Start installation
-main "$@"
+echo
+echo "IRSSH Panel has been installed!"
+echo
+echo "Admin Credentials:"
+echo "Username: $ADMIN_USER"
+echo "Password: $ADMIN_PASS"
+echo
+echo "Access URLs:"
+if [[ -n "$DOMAIN" ]]; then
+    echo "Panel: https://$DOMAIN:$WEB_PORT"
+else
+    echo "Panel: http://YOUR-SERVER-IP:$WEB_PORT"
+fi
+echo
+echo "Installed Protocols:"
+[ "$INSTALL_SSH" = true ] && echo "- SSH (Port: $SSH_PORT)"
+[ "$INSTALL_L2TP" = true ] && echo "- L2TP/IPsec (Port: $L2TP_PORT)"
+[ "$INSTALL_IKEV2" = true ] && echo "- IKEv2 (Port: $IKEV2_PORT)"
+[ "$INSTALL_CISCO" = true ] && echo "- Cisco AnyConnect (Port: $CISCO_PORT)"
+[ "$INSTALL_WIREGUARD" = true ] && echo "- WireGuard (Port: $WIREGUARD_PORT)"
+[ "$INSTALL_SINGBOX" = true ] && echo "- SingBox (Port: $SINGBOX_PORT)"
+echo
+echo "Additional Services:"
+echo "- BadVPN: Port $BADVPN_PORT"
+echo "- Dropbear: Port $DROPBEAR_PORT"
+echo
+echo "Installation Log: $LOG_DIR/install.log"
+echo "Installation Info: $CONFIG_DIR/installation.info"
+echo
+echo "Important Notes:"
+echo "1. Please save these credentials securely"
+echo "2. Change the admin password after first login"
+echo "3. Configure additional security settings in the panel"
+echo "4. Check the installation log for any warnings"
+echo "5. A backup of the previous installation (if any) has been saved in: $BACKUP_DIR"
+echo
+echo "For support, please visit the repository issues page."
