@@ -44,9 +44,9 @@ INSTALL_SINGBOX=true
 
 # Protocol ports (default values)
 SSH_PORT=22
-DROPBEAR_PORT=22722       
-WEBSOCKET_PORT=2082        
-SSH_TLS_PORT=443           
+DROPBEAR_PORT=22722
+WEBSOCKET_PORT=2082
+SSH_TLS_PORT=443
 L2TP_PORT=1701
 IKEV2_PORT=500
 CISCO_PORT=443
@@ -81,19 +81,16 @@ warn() {
 setup_directories() {
     log "Setting up directories..."
     mkdir -p "$PANEL_DIR"/{frontend,backend,config,modules/protocols}
-    mkdir -p "$FRONTEND_DIR"/{public,src/{components,styles,config,utils,assets,layouts}
+    mkdir -p "$FRONTEND_DIR"/{public,src/{components,styles,config,utils,assets,layouts}}
     mkdir -p "$BACKEND_DIR"/{app/{api,core,models,schemas,utils},migrations}
     chmod -R 755 "$PANEL_DIR"
 }
 
-# Install Dependencies
 install_dependencies() {
     log "Installing system dependencies..."
     apt-get update || error "Failed to update package list"
-    apt-get update
-    apt-get install -y software-properties-common  
-    apt-get install -y websocat stunnel4
-    apt-get install -y net-tools iptables"
+    apt-get install -y software-properties-common
+    apt-get install -y net-tools iptables
 
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         python3 python3-pip python3-venv \
@@ -106,12 +103,13 @@ install_dependencies() {
         ocserv \
         wireguard-tools \
         golang \
-        iptables-persistent
+        iptables-persistent \
+        stunnel4 websocat
 
-# Install Node.js
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -  # آپدیت نسخه
-apt-get install -y nodejs
-npm install -g npm@latest  # آپدیت به آخرین نسخه
+    # Install Node.js
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - || error "Failed to setup Node.js"
+    apt-get install -y nodejs || error "Failed to install Node.js"
+    npm install -g npm@latest || error "npm update failed"
 }
 
 # Install Protocols
