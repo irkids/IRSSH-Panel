@@ -81,15 +81,16 @@ warn() {
 setup_directories() {
     log "Setting up directories..."
     mkdir -p "$PANEL_DIR"/{frontend,backend,config,modules/protocols}
-    mkdir -p "$FRONTEND_DIR"/{public,src/{components,styles,config,utils,assets,layouts}}
+    mkdir -p "$FRONTEND_DIR"/{public,src/{components/Dashboard,styles,config,utils,assets,layouts}}
     mkdir -p "$BACKEND_DIR"/{app/{api,core,models,schemas,utils},migrations}
     chmod -R 755 "$PANEL_DIR"
 }
 
 install_dependencies() {
     log "Installing system dependencies..."
-    apt-get update || error "Failed to update package list"
-    apt-get install -y software-properties-common
+   apt-get update && apt-get upgrade -y
+   apt-get install -y software-properties-common
+   add-apt-repository universe  # اضافه شد
     apt-get install -y net-tools iptables
 
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
@@ -107,9 +108,10 @@ install_dependencies() {
         stunnel4 websocat
 
     # Install Node.js
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - || error "Failed to setup Node.js"
-    apt-get install -y nodejs || error "Failed to install Node.js"
-    npm install -g npm@latest || error "npm update failed"
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    apt-get install -y nodejs
+    corepack enable  # فعال‌سازی npm
+    npm install -g npm@latest
 }
 
 # Install Protocols
@@ -521,11 +523,12 @@ export default MainLayout;
 EOL
 
     # Create Sidebar component
+    mkdir -p "$FRONTEND_DIR/src/components"
     cat > src/components/Sidebar.js << 'EOL'
-import React from 'react';
-import { Link, useLocation } from 'react-router-dom';
-import { removeToken } from '../utils/auth';
-import clsx from 'clsx';
+    import React from 'react';
+    import { Link, useLocation } from 'react-router-dom';
+    import { removeToken } from '../utils/auth';
+    import clsx from 'clsx';
 
 const MenuItem = ({ icon, label, to, children, isActive }) => {
   const [isOpen, setIsOpen] = React.useState(false);
