@@ -399,15 +399,15 @@ mkdir -p "$FRONTEND_DIR/src/styles"
 # Setup Frontend
 setup_frontend() {
     log "Setting up frontend..."
-    cd "$FRONTEND_DIR"
-
+    cd "$FRONTEND_DIR" || error "Failed to change directory to $FRONTEND_DIR"
+    
     # Install dependencies
     log "Installing frontend dependencies..."
     npm install --legacy-peer-deps || error "Failed to install frontend dependencies"
-
+    
     # Install react-scripts explicitly
     npm install react-scripts@5.0.1 --legacy-peer-deps || error "Failed to install react-scripts"
-
+    
     # Build the frontend
     log "Building frontend..."
     GENERATE_SOURCEMAP=false npm run build || error "Frontend build failed"
@@ -1112,10 +1112,10 @@ EOL
 # Setup Database
 setup_database() {
     log "Setting up database..."
-    systemctl start postgresql
-    systemctl enable postgresql
-
-    # Wait for PostgreSQL
+    systemctl start postgresql || error "Failed to start PostgreSQL"
+    systemctl enable postgresql || error "Failed to enable PostgreSQL"
+    
+    # Wait for PostgreSQL to start
     for i in {1..30}; do
         if pg_isready -q; then
             break
