@@ -35,6 +35,7 @@ apt-get install -y net-tools iptables
 
 # Installation modes
 INSTALL_SSH=true
+INSTALL_DROPBEAR=true
 INSTALL_L2TP=true
 INSTALL_IKEV2=true
 INSTALL_CISCO=true
@@ -43,13 +44,15 @@ INSTALL_SINGBOX=true
 
 # Protocol ports (default values)
 SSH_PORT=22
+DROPBEAR_PORT=22722       
+WEBSOCKET_PORT=2082        
+SSH_TLS_PORT=443           
 L2TP_PORT=1701
 IKEV2_PORT=500
 CISCO_PORT=443
 WIREGUARD_PORT=51820
 SINGBOX_PORT=1080
 BADVPN_PORT=7300
-DROPBEAR_PORT=22722
 
 cleanup() {
     log "Cleaning up temporary files..."
@@ -65,10 +68,6 @@ setup_logging() {
     chmod 640 "$LOG_FILE"
 }
 
-log() {
-    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"
-}
-
 error() {
     echo -e "${RED}[$(date +'%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1"
     [[ "${2:-}" != "no-exit" ]] && cleanup && exit 1
@@ -82,7 +81,7 @@ warn() {
 setup_directories() {
     log "Setting up directories..."
     mkdir -p "$PANEL_DIR"/{frontend,backend,config,modules/protocols}
-    mkdir -p "$FRONTEND_DIR"/{public,src/{components,styles,config,utils,assets,layouts}}
+    mkdir -p "$FRONTEND_DIR"/{public,src/{components,styles,config,utils,assets,layouts}
     mkdir -p "$BACKEND_DIR"/{app/{api,core,models,schemas,utils},migrations}
     chmod -R 755 "$PANEL_DIR"
 }
@@ -91,7 +90,10 @@ setup_directories() {
 install_dependencies() {
     log "Installing system dependencies..."
     apt-get update || error "Failed to update package list"
-    apt-get install -y net-tools iptables || error "Failed to install net-tools and iptables"
+    apt-get update
+    apt-get install -y software-properties-common  
+    apt-get install -y websocat stunnel4
+    apt-get install -y net-tools iptables"
 
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         python3 python3-pip python3-venv \
@@ -107,11 +109,9 @@ install_dependencies() {
         iptables-persistent
 
 # Install Node.js
-    curl -fsSL https://deb.nodesource.com/setup_18.x | bash - || error "Failed to setup Node.js"
-    apt-get install -y nodejs || error "Failed to install Node.js"
-    
-    # Install npm
-    npm install -g npm@8.19.4 || error "npm installation failed"
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -  # آپدیت نسخه
+apt-get install -y nodejs
+npm install -g npm@latest  # آپدیت به آخرین نسخه
 }
 
 # Install Protocols
@@ -119,14 +119,66 @@ install_protocols() {
     log "Installing protocols..."
     mkdir -p "$PROTOCOLS_DIR"
 
-    # Install SSH
-    if [ "$INSTALL_SSH" = true ]; then
-        log "Installing SSH server..."
-        apt-get install -y openssh-server
-        cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
-        sed -i "s/#Port 22/Port $SSH_PORT/" /etc/ssh/sshd_config
-        systemctl restart ssh
-    fi
+    # Install SSH + زیرپروتکل‌ها
+if [ "$INSTALL_SSH" = true ]; then
+    log "Installing SSH server و زیرپروتکل‌ها..."
+    apt-get install -y openssh-server stunnel4 websocat
+
+    # SSH-DIRECT (پیشفرض)
+    cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
+    sed -i "s/#Port 22/Port $SSH_PORT/" /etc/ssh/sshd_config
+    systemctl restart ssh
+
+    # SSH-TLS (با استانل)
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout /etc/stunnel/stunnel.pem \
+        -out /etc/stunnel/stunnel.pem -subj "/CN=localhost"
+
+    cat > /etc/stunnel/stunnel.conf << EOL
+cert = /etc/stunnel/stunnel.pem
+socket = a:SO_REUSEADDR=1
+socket = l:TCP_NODELAY=1
+socket = r:TCP_NODELAY=1
+
+[ssh-tls]
+accept = $SSH_TLS_PORT
+connect = 127.0.0.1:$SSH_PORT
+EOL
+
+    systemctl enable stunnel4
+    systemctl restart stunnel4
+
+    # SSH-WebSocket
+    cat > /etc/systemd/system/ssh-websocket.service << EOL
+[Unit]
+Description=SSH WebSocket Wrapper
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/websocat -t -E --binary ws-listen:0.0.0.0:$WEBSOCKET_PORT tcp:127.0.0.1:$SSH_PORT
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOL
+
+    systemctl daemon-reload
+    systemctl enable ssh-websocket
+    systemctl start ssh-websocket
+fi
+
+# Install Dropbear
+if [ "$INSTALL_DROPBEAR" = true ]; then
+    log "Installing Dropbear SSH server..."
+    apt-get install -y dropbear
+    
+    # تنظیم پورت Dropbear
+    sed -i "s/DROPBEAR_PORT=22/DROPBEAR_PORT=$DROPBEAR_PORT/" /etc/default/dropbear
+    
+    # فعال‌سازی سرویس
+    systemctl enable dropbear
+    systemctl restart dropbear
+fi
 
     # Install L2TP
     if [ "$INSTALL_L2TP" = true ]; then
@@ -399,7 +451,9 @@ mkdir -p "$FRONTEND_DIR/src/styles"
 # Setup Frontend
 setup_frontend() {
     log "Setting up frontend..."
-    cd "$FRONTEND_DIR" || error "Failed to change directory to $FRONTEND_DIR"
+    cd "$FRONTEND_DIR" || error "Failed to change directory"
+npm install --legacy-peer-deps
+npm run build
     
     # Install dependencies
     log "Installing frontend dependencies..."
@@ -1304,7 +1358,9 @@ setup_firewall() {
     ufw allow https
     ufw allow "$WEB_PORT"
     ufw allow "$SSH_PORT"
-    ufw allow "$DROPBEAR_PORT"
+    ufw allow $DROPBEAR_PORT
+    ufw allow $WEBSOCKET_PORT
+    ufw allow $SSH_TLS_PORT
     ufw allow "$BADVPN_PORT/udp"
 
     # Allow protocol ports
