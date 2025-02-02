@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom styles */
+body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+        'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+        sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+/* Resource circle animation */
+.resource-circle {
+    transition: stroke-dasharray 0.5s ease;
+}
+
+/* Bandwidth chart styling */
+.bandwidth-chart {
+    width: 100%;
+    height: 100%;
+    min-height: 300px;
+}
+
+/* Protocol table styling */
+.protocol-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+}
+
+.protocol-table th,
+.protocol-table td {
+    padding: 12px;
+    text-align: left;
+}
+
+.protocol-table th {
+    background-color: #f9fafb;
+    font-weight: 600;
+}
+
+.protocol-table tr:nth-child(even) {
+    background-color: #f9fafb;
+}
+
+/* User stats grid */
+.user-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1rem;
+    padding: 1rem;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}
