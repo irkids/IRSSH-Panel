@@ -201,7 +201,17 @@ install_protocols() {
 
 install_ssh() {
     log "Configuring SSH server..."
-    apt-get install -y openssh-server stunnel4 websocat || error "Failed to install SSH dependencies"
+    
+    # Install openssh-server and stunnel4
+    apt-get install -y openssh-server stunnel4 || error "Failed to install SSH server packages"
+    
+    # Install websocat manually
+    log "Installing websocat..."
+    WEBSOCAT_VERSION="1.11.0"
+    WEBSOCAT_URL="https://github.com/vi/websocat/releases/download/v${WEBSOCAT_VERSION}/websocat.x86_64-unknown-linux-musl"
+    
+    wget -O /usr/local/bin/websocat "$WEBSOCAT_URL" || error "Failed to download websocat"
+    chmod +x /usr/local/bin/websocat || error "Failed to set websocat permissions"
 
     # Backup and configure SSH
     cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
@@ -216,6 +226,7 @@ Subsystem       sftp    /usr/lib/openssh/sftp-server
 EOL
 
     # Configure stunnel for SSH-TLS
+    mkdir -p /etc/stunnel
     cat > /etc/stunnel/stunnel.conf << EOL
 cert = /etc/stunnel/stunnel.pem
 socket = a:SO_REUSEADDR=1
@@ -240,7 +251,7 @@ Description=WebSocket for SSH
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/websocat -t --binary-protocol ws-l:0.0.0.0:$WEBSOCKET_PORT tcp:127.0.0.1:$SSH_PORT
+ExecStart=/usr/local/bin/websocat -t --binary-protocol ws-l:0.0.0.0:$WEBSOCKET_PORT tcp:127.0.0.1:$SSH_PORT
 Restart=always
 
 [Install]
@@ -248,9 +259,12 @@ WantedBy=multi-user.target
 EOL
 
     # Enable and start services
+    systemctl daemon-reload
     systemctl enable stunnel4 websocket
     systemctl restart ssh stunnel4
     systemctl start websocket
+
+    log "SSH server configuration completed successfully"
 }
 
 # [Other protocol installation functions go here - L2TP, IKEv2, Cisco, WireGuard, SingBox]
