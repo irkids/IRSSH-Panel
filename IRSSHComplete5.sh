@@ -121,31 +121,128 @@ install_dependencies() {
     # Update package lists
     apt-get update || error "Failed to update package lists"
     
-    # Install essential packages
+    # Essential system packages
+    log "Installing essential packages..."
     apt-get install -y \
         curl \
         wget \
         git \
         unzip \
         build-essential \
+        pkg-config \
+        autoconf \
+        automake \
         python3 \
         python3-pip \
+        python3-setuptools \
+        python3-venv \
         nginx \
         postgresql \
         postgresql-contrib \
         ufw \
         fail2ban \
+        net-tools \
+        iptables \
+        netfilter-persistent \
         || error "Failed to install essential packages"
 
-    # Install Node.js (LTS version)
+    # SSH and related dependencies
+    log "Installing SSH related packages..."
+    apt-get install -y \
+        openssh-server \
+        stunnel4 \
+        dropbear \
+        || error "Failed to install SSH packages"
+
+    # L2TP dependencies
+    log "Installing L2TP/IPsec packages..."
+    apt-get install -y \
+        strongswan \
+        strongswan-pki \
+        libstrongswan-extra-plugins \
+        libcharon-extra-plugins \
+        xl2tpd \
+        ppp \
+        || error "Failed to install L2TP packages"
+
+    # IKEv2 dependencies
+    log "Installing IKEv2 packages..."
+    apt-get install -y \
+        strongswan \
+        libcharon-extra-plugins \
+        || error "Failed to install IKEv2 packages"
+
+    # Cisco AnyConnect dependencies
+    log "Installing Cisco AnyConnect packages..."
+    apt-get install -y \
+        ocserv \
+        gnutls-bin \
+        || error "Failed to install Cisco AnyConnect packages"
+
+    # WireGuard dependencies
+    log "Installing WireGuard packages..."
+    apt-get install -y \
+        wireguard \
+        wireguard-tools \
+        || error "Failed to install WireGuard packages"
+
+    # SingBox dependencies
+    log "Installing SingBox prerequisites..."
+    apt-get install -y \
+        gcc \
+        g++ \
+        make \
+        || error "Failed to install SingBox prerequisites"
+
+    # BadVPN dependencies
+    log "Installing BadVPN prerequisites..."
+    apt-get install -y \
+        cmake \
+        || error "Failed to install BadVPN prerequisites"
+
+    # Install Node.js and npm
     if ! command -v node &> /dev/null; then
         log "Installing Node.js..."
-        curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
         apt-get install -y nodejs || error "Failed to install Node.js"
     fi
 
     # Install global npm packages
-    npm install -g pm2 typescript @types/node || error "Failed to install global npm packages"
+    log "Installing global npm packages..."
+    npm install -g \
+        pm2 \
+        typescript \
+        @types/node \
+        || error "Failed to install global npm packages"
+
+    # Python packages
+    log "Installing Python packages..."
+    pip3 install --upgrade pip
+    pip3 install \
+        requests \
+        psutil \
+        python-dotenv \
+        || error "Failed to install Python packages"
+
+    # Additional tools
+    log "Installing additional tools..."
+    apt-get install -y \
+        htop \
+        iftop \
+        vnstat \
+        screen \
+        supervisor \
+        || error "Failed to install additional tools"
+
+    # Install websocat
+    log "Installing websocat..."
+    WEBSOCAT_VERSION="1.11.0"
+    wget -O /usr/local/bin/websocat \
+        "https://github.com/vi/websocat/releases/download/v${WEBSOCAT_VERSION}/websocat.x86_64-unknown-linux-musl" \
+        || error "Failed to download websocat"
+    chmod +x /usr/local/bin/websocat
+
+    log "All dependencies installed successfully"
 }
 
 # Protocol Installation Modes and Ports
