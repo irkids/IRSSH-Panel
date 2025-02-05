@@ -3,6 +3,9 @@
 # IRSSH Panel Complete Installation Script
 # Version: 3.5.0
 
+# Exit on error
+set -e
+
 # Directories
 PANEL_DIR="/opt/irssh-panel"
 FRONTEND_DIR="$PANEL_DIR/frontend"
@@ -33,14 +36,119 @@ warn() {
     echo -e "${YELLOW}[WARN]${NC} $1"
 }
 
-# Generate secure keys and passwords
-DB_NAME="irssh_panel"
-DB_USER="irssh_admin"
-DB_PASS=$(openssl rand -base64 32)
-ADMIN_PASS=$(openssl rand -base64 16)
-JWT_SECRET=$(openssl rand -base64 32)
+cleanup() {
+    log "Performing cleanup..."
+    # Remove temporary files
+    rm -rf /tmp/irssh-temp 2>/dev/null || true
+}
 
-# Installation modes
+# Generate secure keys and passwords
+generate_secrets() {
+    log "Generating secure credentials..."
+    DB_NAME="irssh_panel"
+    DB_USER="irssh_admin"
+    DB_PASS=$(openssl rand -base64 32)
+    ADMIN_PASS=$(openssl rand -base64 16)
+    JWT_SECRET=$(openssl rand -base64 32)
+
+    # Save credentials
+    mkdir -p "$CONFIG_DIR"
+    cat > "$CONFIG_DIR/credentials.env" << EOL
+DB_NAME=$DB_NAME
+DB_USER=$DB_USER
+DB_PASS=$DB_PASS
+ADMIN_PASS=$ADMIN_PASS
+JWT_SECRET=$JWT_SECRET
+EOL
+    chmod 600 "$CONFIG_DIR/credentials.env"
+}
+
+check_requirements() {
+    log "Checking system requirements..."
+    
+    # Check root privileges
+    if [ "$EUID" -ne 0 ]; then
+        error "Please run as root"
+    fi
+
+    # Check OS
+    if [ ! -f /etc/os-release ]; then
+        error "Unsupported operating system"
+    fi
+    
+    # Check minimum system resources
+    local mem_total=$(free -m | awk '/^Mem:/{print $2}')
+    if [ "$mem_total" -lt 1024 ]; then
+        warn "System has less than 1GB RAM. Performance may be affected."
+    fi
+
+    # Check required commands
+    local required_commands=("curl" "wget" "git" "tar" "unzip")
+    for cmd in "${required_commands[@]}"; do
+        if ! command -v "$cmd" &> /dev/null; then
+            error "Required command '$cmd' not found. Please install it first."
+        fi
+    done
+}
+
+create_backup() {
+    log "Creating backup of existing installation..."
+    if [ -d "$PANEL_DIR" ]; then
+        local backup_file="$BACKUP_DIR/irssh-panel-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+        mkdir -p "$BACKUP_DIR"
+        tar -czf "$backup_file" -C "$(dirname "$PANEL_DIR")" "$(basename "$PANEL_DIR")" || warn "Backup failed"
+    fi
+}
+
+setup_directories() {
+    log "Creating directory structure..."
+    
+    # Create main directories
+    mkdir -p "$PANEL_DIR"/{frontend,backend,config,modules/protocols}
+    mkdir -p "$FRONTEND_DIR"/{public,src/{components,stores,context,utils,hooks,types}}
+    mkdir -p "$BACKEND_DIR"/{src/{routes,middleware,models,utils},config}
+    mkdir -p "$LOG_DIR"
+    
+    # Set permissions
+    chown -R root:root "$PANEL_DIR"
+    chmod -R 755 "$PANEL_DIR"
+    chmod 700 "$CONFIG_DIR"
+}
+
+install_dependencies() {
+    log "Installing system dependencies..."
+    
+    # Update package lists
+    apt-get update || error "Failed to update package lists"
+    
+    # Install essential packages
+    apt-get install -y \
+        curl \
+        wget \
+        git \
+        unzip \
+        build-essential \
+        python3 \
+        python3-pip \
+        nginx \
+        postgresql \
+        postgresql-contrib \
+        ufw \
+        fail2ban \
+        || error "Failed to install essential packages"
+
+    # Install Node.js (LTS version)
+    if ! command -v node &> /dev/null; then
+        log "Installing Node.js..."
+        curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+        apt-get install -y nodejs || error "Failed to install Node.js"
+    fi
+
+    # Install global npm packages
+    npm install -g pm2 typescript @types/node || error "Failed to install global npm packages"
+}
+
+# Protocol Installation Modes and Ports
 INSTALL_SSH=true
 INSTALL_DROPBEAR=true
 INSTALL_L2TP=true
@@ -49,7 +157,7 @@ INSTALL_CISCO=true
 INSTALL_WIREGUARD=true
 INSTALL_SINGBOX=true
 
-# Protocol ports
+# Protocol Ports
 SSH_PORT=22
 DROPBEAR_PORT=22722
 WEBSOCKET_PORT=2082
@@ -62,9 +170,94 @@ SINGBOX_PORT=1080
 BADVPN_PORT=7300
 WEB_PORT=443
 
-# TypeScript Setup Function
+# Protocol Installation Function
+install_protocols() {
+    log "Installing VPN protocols..."
+
+    if [ "$INSTALL_SSH" = true ]; then
+        install_ssh
+    fi
+
+    if [ "$INSTALL_L2TP" = true ]; then
+        install_l2tp
+    fi
+
+    if [ "$INSTALL_IKEV2" = true ]; then
+        install_ikev2
+    fi
+
+    if [ "$INSTALL_CISCO" = true ]; then
+        install_cisco
+    fi
+
+    if [ "$INSTALL_WIREGUARD" = true ]; then
+        install_wireguard
+    fi
+
+    if [ "$INSTALL_SINGBOX" = true ]; then
+        install_singbox
+    fi
+}
+
+install_ssh() {
+    log "Configuring SSH server..."
+    apt-get install -y openssh-server stunnel4 websocat || error "Failed to install SSH dependencies"
+
+    # Backup and configure SSH
+    cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
+    cat > /etc/ssh/sshd_config << EOL
+Port $SSH_PORT
+PermitRootLogin yes
+PasswordAuthentication yes
+X11Forwarding yes
+PrintMotd no
+AcceptEnv LANG LC_*
+Subsystem       sftp    /usr/lib/openssh/sftp-server
+EOL
+
+    # Configure stunnel for SSH-TLS
+    cat > /etc/stunnel/stunnel.conf << EOL
+cert = /etc/stunnel/stunnel.pem
+socket = a:SO_REUSEADDR=1
+socket = l:TCP_NODELAY=1
+socket = r:TCP_NODELAY=1
+
+[ssh-tls]
+accept = $SSH_TLS_PORT
+connect = 127.0.0.1:$SSH_PORT
+EOL
+
+    # Generate self-signed certificate for stunnel
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout /etc/stunnel/stunnel.pem \
+        -out /etc/stunnel/stunnel.pem \
+        -subj "/CN=localhost" || error "Failed to generate SSL certificate"
+
+    # Configure WebSocket service
+    cat > /etc/systemd/system/websocket.service << EOL
+[Unit]
+Description=WebSocket for SSH
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/websocat -t --binary-protocol ws-l:0.0.0.0:$WEBSOCKET_PORT tcp:127.0.0.1:$SSH_PORT
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOL
+
+    # Enable and start services
+    systemctl enable stunnel4 websocket
+    systemctl restart ssh stunnel4
+    systemctl start websocket
+}
+
+# [Other protocol installation functions go here - L2TP, IKEv2, Cisco, WireGuard, SingBox]
+# These functions would be directly copied from your original IRSSHComplete4.sh
+
 setup_typescript() {
-    log "Configuring TypeScript environment..."
+    log "Setting up TypeScript configuration..."
     cd "$FRONTEND_DIR" || error "Failed to access frontend directory"
     
     # Create tsconfig.json
@@ -102,7 +295,6 @@ setup_typescript() {
 }
 EOL
 
-    # Create tsconfig.node.json
     cat > tsconfig.node.json << 'EOL'
 {
   "compilerOptions": {
@@ -117,9 +309,8 @@ EOL
 EOL
 }
 
-# Store Management Setup
 setup_stores() {
-    log "Setting up state management with Zustand..."
+    log "Setting up Zustand stores..."
     mkdir -p "$FRONTEND_DIR/src/stores"
     
     # Create roleStore.ts
@@ -214,14 +405,11 @@ export default useThemeStore;
 EOL
 }
 
-[Previous Code From IRSSHComplete4.sh Goes Here - Including All Protocol Installation Functions]
-
-# Updated Frontend Setup
 setup_frontend() {
     log "Setting up frontend application..."
     cd "$FRONTEND_DIR" || error "Failed to access frontend directory"
 
-    # Update package.json with TypeScript support
+    # Create package.json
     cat > package.json << 'EOL'
 {
   "name": "irssh-panel-frontend",
@@ -266,27 +454,16 @@ EOL
     # Install dependencies
     npm install --legacy-peer-deps || error "Frontend dependency installation failed"
 
-    # Create Vite config
-    cat > vite.config.ts << 'EOL'
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react-swc'
-import path from 'path'
+    # Setup TypeScript
+    setup_typescript
 
-export default defineConfig({
-  plugins: [react()],
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-    },
-  },
-})
-EOL
+    # Setup stores
+    setup_stores
 
     # Build frontend
     npm run build || error "Frontend build failed"
 }
 
-# Updated Backend Setup
 setup_backend() {
     log "Setting up backend server..."
     cd "$BACKEND_DIR" || error "Failed to access backend directory"
@@ -335,7 +512,7 @@ const cors = require('cors');
 
 const corsOptions = {
     origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-    methods: ['GET', 'POST', 'PUT', DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
     maxAge: 86400
@@ -344,13 +521,15 @@ const corsOptions = {
 module.exports = cors(corsOptions);
 EOL
 
-    # Create main server file
+    # Create backend server configuration
     cat > src/index.js << 'EOL'
+require('dotenv').config();
 const express = require('express');
 const helmet = require('helmet');
 const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const cors = require('./middleware/cors');
+const path = require('path');
 
 const app = express();
 
@@ -361,50 +540,161 @@ app.use(compression());
 
 // Rate limiting
 const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 100
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100 // limit each IP to 100 requests per windowMs
 });
-app.use(limiter);
+app.use('/api/', limiter);
 
 // Body parsing
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Routes
+// API Routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/protocols', require('./routes/protocols'));
+app.use('/api/monitoring', require('./routes/monitoring'));
+
+// Serve static frontend
+app.use(express.static(path.join(__dirname, '../../frontend/build')));
+
+// Handle React routing
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../../frontend/build/index.html'));
+});
 
 const PORT = process.env.PORT || 8000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+process.on('unhandledRejection', (err) => {
+    console.error('Unhandled Promise Rejection:', err);
+});
 EOL
+
+    # Create environment configuration
+    cat > .env << EOL
+NODE_ENV=production
+PORT=8000
+JWT_SECRET=${JWT_SECRET}
+FRONTEND_URL=http://localhost:${WEB_PORT}
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=${DB_NAME}
+DB_USER=${DB_USER}
+DB_PASS=${DB_PASS}
+EOL
+
+    # Set proper permissions
+    chmod 600 .env
 }
 
-[Rest of the IRSSHComplete4.sh Code Including All Other Functions]
+setup_nginx() {
+    log "Configuring Nginx..."
+    
+    # Create Nginx configuration
+    cat > /etc/nginx/sites-available/irssh-panel << EOL
+server {
+    listen ${WEB_PORT};
+    listen [::]:${WEB_PORT};
+    server_name _;
 
-# Main Installation Flow
+    root ${FRONTEND_DIR}/build;
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    location /api {
+        proxy_pass http://localhost:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_cache_bypass \$http_upgrade;
+    }
+}
+EOL
+
+    # Enable site configuration
+    ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
+    rm -f /etc/nginx/sites-enabled/default
+
+    # Test and restart Nginx
+    nginx -t || error "Nginx configuration test failed"
+    systemctl restart nginx
+}
+
+verify_installation() {
+    log "Verifying installation..."
+    
+    # Check critical services
+    services=("nginx" "postgresql")
+    for service in "${services[@]}"; do
+        systemctl is-active --quiet "$service" || error "Service $service is not running"
+    done
+
+    # Check frontend build
+    [ -d "$FRONTEND_DIR/build" ] || error "Frontend build directory not found"
+
+    # Check backend
+    curl -s http://localhost:8000/api/health > /dev/null || error "Backend health check failed"
+
+    # Check database
+    su - postgres -c "psql -d $DB_NAME -c '\q'" || error "Database connection failed"
+
+    log "Installation verification completed successfully"
+}
+
+save_installation_info() {
+    log "Saving installation information..."
+    
+    cat > "$CONFIG_DIR/installation.info" << EOL
+Installation Date: $(date +"%Y-%m-%d %H:%M:%S")
+Version: 3.5.0
+Web Port: ${WEB_PORT}
+SSH Port: ${SSH_PORT}
+Database Name: ${DB_NAME}
+Database User: ${DB_USER}
+EOL
+    chmod 600 "$CONFIG_DIR/installation.info"
+}
+
+# Main installation flow
 main() {
+    trap cleanup EXIT
+    
     log "Starting IRSSH Panel installation v3.5.0"
     
     check_requirements
     create_backup
     setup_directories
     install_dependencies
+    generate_secrets
     install_protocols
     setup_typescript
     setup_stores
     setup_frontend
     setup_backend
-    setup_database
     setup_nginx
     setup_ssl
     setup_firewall
     setup_security
     setup_cron
     verify_installation
-    
     save_installation_info
+    
     log "Installation completed successfully!"
+    
+    # Display installation summary
+    echo
+    echo "IRSSH Panel has been installed successfully!"
+    echo "Admin Credentials:"
+    echo "Username: admin"
+    echo "Password: $ADMIN_PASS"
+    echo
+    echo "Installation information saved to: $CONFIG_DIR/installation.info"
+    echo "Access the panel at: http://YOUR-SERVER-IP:$WEB_PORT"
 }
 
 # Start installation
