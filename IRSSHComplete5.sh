@@ -64,31 +64,49 @@ EOL
 }
 
 check_requirements() {
-    log "Checking system requirements..."
+    log "Checking and installing basic requirements..."
     
     # Check root privileges
     if [ "$EUID" -ne 0 ]; then
         error "Please run as root"
     fi
 
-    # Check OS
+    # Check OS compatibility
     if [ ! -f /etc/os-release ]; then
         error "Unsupported operating system"
     fi
-    
-    # Check minimum system resources
-    local mem_total=$(free -m | awk '/^Mem:/{print $2}')
-    if [ "$mem_total" -lt 1024 ]; then
+    source /etc/os-release
+    if [[ "$ID" != "ubuntu" && "$ID" != "debian" ]]; then
+        error "This script requires Ubuntu or Debian"
+    fi
+
+    # First, update package lists
+    log "Updating package lists..."
+    apt-get update || error "Failed to update package lists"
+
+    # Install essential packages first
+    log "Installing essential packages..."
+    apt-get install -y curl wget git unzip build-essential python3 || error "Failed to install essential packages"
+
+    # Check system resources
+    log "Checking system resources..."
+    MEM_TOTAL=$(free -m | awk '/^Mem:/{print $2}')
+    CPU_CORES=$(nproc)
+    DISK_SPACE=$(df -m / | awk 'NR==2 {print $4}')
+
+    if [ "$MEM_TOTAL" -lt 1024 ]; then
         warn "System has less than 1GB RAM. Performance may be affected."
     fi
 
-    # Check required commands
-    local required_commands=("curl" "wget" "git" "tar" "unzip")
-    for cmd in "${required_commands[@]}"; do
-        if ! command -v "$cmd" &> /dev/null; then
-            error "Required command '$cmd' not found. Please install it first."
-        fi
-    done
+    if [ "$CPU_CORES" -lt 2 ]; then
+        warn "System has less than 2 CPU cores. Performance may be affected."
+    fi
+
+    if [ "$DISK_SPACE" -lt 5120 ]; then
+        error "Insufficient disk space. At least 5GB free space required."
+    fi
+
+    log "Basic requirements check completed successfully"
 }
 
 create_backup() {
