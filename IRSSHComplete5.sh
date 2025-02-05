@@ -172,31 +172,76 @@ WEB_PORT=443
 
 # Protocol Installation Function
 install_protocols() {
-    log "Installing VPN protocols..."
+    log "Installing VPN protocols using project modules..."
 
+    # Create modules directory
+    mkdir -p "$MODULES_DIR/protocols"
+    cd "$MODULES_DIR/protocols" || error "Failed to access modules directory"
+
+    # Download protocol modules from GitHub
+    log "Downloading protocol modules..."
+    MODULES=(
+        "vpnserver-script.py"
+        "port-script.py"
+        "ssh-script.py"
+        "l2tpv3-script.sh"
+        "ikev2-script.py"
+        "cisco-script.sh"
+        "wire-script.sh"
+        "singbox-script.sh"
+        "badvpn-script.sh"
+        "dropbear-script.sh"
+        "webport-script.sh"
+    )
+
+    REPO_URL="https://raw.githubusercontent.com/irkids/IRSSH-Panel/master/scripts/modules"
+
+    for module in "${MODULES[@]}"; do
+        wget "$REPO_URL/$module" -O "$module" || error "Failed to download $module"
+        chmod +x "$module"
+    done
+
+    # Execute protocol installations
     if [ "$INSTALL_SSH" = true ]; then
-        install_ssh
+        log "Installing SSH and related protocols..."
+        ./ssh-script.py --port "$SSH_PORT" || error "SSH installation failed"
+        ./dropbear-script.sh --port "$DROPBEAR_PORT" || error "Dropbear installation failed"
+        ./webport-script.sh --port "$WEBSOCKET_PORT" || error "WebSocket installation failed"
     fi
 
     if [ "$INSTALL_L2TP" = true ]; then
-        install_l2tp
+        log "Installing L2TP/IPsec..."
+        ./l2tpv3-script.sh --port "$L2TP_PORT" || error "L2TP installation failed"
     fi
 
     if [ "$INSTALL_IKEV2" = true ]; then
-        install_ikev2
+        log "Installing IKEv2..."
+        ./ikev2-script.py --port "$IKEV2_PORT" || error "IKEv2 installation failed"
     fi
 
     if [ "$INSTALL_CISCO" = true ]; then
-        install_cisco
+        log "Installing Cisco AnyConnect..."
+        ./cisco-script.sh --port "$CISCO_PORT" || error "Cisco installation failed"
     fi
 
     if [ "$INSTALL_WIREGUARD" = true ]; then
-        install_wireguard
+        log "Installing WireGuard..."
+        ./wire-script.sh --port "$WIREGUARD_PORT" || error "WireGuard installation failed"
     fi
 
     if [ "$INSTALL_SINGBOX" = true ]; then
-        install_singbox
+        log "Installing SingBox..."
+        ./singbox-script.sh --port "$SINGBOX_PORT" || error "SingBox installation failed"
     fi
+
+    # Install BadVPN if required
+    ./badvpn-script.sh --port "$BADVPN_PORT" || error "BadVPN installation failed"
+
+    # Configure VPN server settings
+    ./vpnserver-script.py --configure || error "VPN server configuration failed"
+    ./port-script.py --update-all || error "Port configuration failed"
+
+    log "All protocols installed successfully"
 }
 
 install_ssh() {
