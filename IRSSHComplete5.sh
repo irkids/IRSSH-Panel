@@ -260,18 +260,19 @@ setup_python_environment() {
     # Upgrade pip and install required packages
     pip install --upgrade pip
     pip install \
-        prometheus_client \
-        requests \
-        psutil \
-        python-dotenv \
-        colorama \
-        configparser \
-        supervisor \
-        psycopg2-binary \
-        PyYAML \
-        cryptography \
-        python-dateutil \
-        || error "Failed to install Python packages"
+    prometheus_client \
+    requests \
+    psutil \
+    python-dotenv \
+    colorama \
+    configparser \
+    supervisor \
+    psycopg2-binary \
+    PyYAML \
+    cryptography \
+    python-dateutil \
+    PyJWT \
+    || error "Failed to install Python packages"
     
     # Create symbolic links for required packages
     PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
