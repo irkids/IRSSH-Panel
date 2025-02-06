@@ -272,7 +272,9 @@ setup_python_environment() {
     cryptography \
     python-dateutil \
     PyJWT \
+    websockets \
     || error "Failed to install Python packages"
+
     
     # Create symbolic links for required packages
     PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
