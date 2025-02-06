@@ -33,7 +33,7 @@ import cryptography
 import aioprometheus
 import consul
 import etcd3
-import haproxy_api
+import haproxyadmin
 import numpy as np
 import markdown
 from cryptography import x509
