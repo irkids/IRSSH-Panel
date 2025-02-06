@@ -309,7 +309,6 @@ pip3 install --upgrade pip
         pika \
         apache-beam \
         helm \
-        terraform \
         consul \
         nomad \
         mlflow \
