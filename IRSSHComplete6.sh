@@ -276,7 +276,7 @@ pip3 install --upgrade pip
         aioprometheus \
         python-consul \
         etcd3 \
-        haproxy-api \
+        haproxyadmin \
         paramiko \
         fastapi \
         uvicorn \
