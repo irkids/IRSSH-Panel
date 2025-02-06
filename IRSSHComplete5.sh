@@ -274,6 +274,7 @@ pip install \
     PyJWT \
     websockets \
     aiofiles \
+    boto3 \
     || error "Failed to install Python packages"
 
     
