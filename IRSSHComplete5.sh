@@ -258,8 +258,8 @@ setup_python_environment() {
     source "$PANEL_DIR/venv/bin/activate"
     
     # Upgrade pip and install required packages
-    pip install --upgrade pip
-    pip install \
+pip install --upgrade pip
+pip install \
     prometheus_client \
     requests \
     psutil \
@@ -273,8 +273,8 @@ setup_python_environment() {
     python-dateutil \
     PyJWT \
     websockets \
+    aiofiles \
     || error "Failed to install Python packages"
-
     
     # Create symbolic links for required packages
     PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
