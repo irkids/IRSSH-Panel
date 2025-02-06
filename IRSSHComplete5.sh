@@ -276,8 +276,8 @@ pip install \
     aiofiles \
     boto3 \
     croniter \
+    pyAesCrypt \
     || error "Failed to install Python packages"
-
 
     
     # Create symbolic links for required packages
