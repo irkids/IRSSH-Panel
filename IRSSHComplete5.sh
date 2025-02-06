@@ -275,7 +275,9 @@ pip install \
     websockets \
     aiofiles \
     boto3 \
+    croniter \
     || error "Failed to install Python packages"
+
 
     
     # Create symbolic links for required packages
