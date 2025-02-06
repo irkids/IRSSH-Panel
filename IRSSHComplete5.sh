@@ -239,6 +239,63 @@ chmod +x /usr/sbin/policy-rc.d
     log "All dependencies installed successfully"
 }
 
+setup_python_environment() {
+    log "Setting up Python environment..."
+    
+    # Install Python and development packages
+    apt-get install -y \
+        python3 \
+        python3-pip \
+        python3-venv \
+        python3-dev \
+        libpq-dev \
+        gcc \
+        || error "Failed to install Python and development packages"
+    
+    # Create and activate virtual environment
+    mkdir -p "$PANEL_DIR/venv"
+    python3 -m venv "$PANEL_DIR/venv"
+    source "$PANEL_DIR/venv/bin/activate"
+    
+    # Upgrade pip and install required packages
+    pip install --upgrade pip
+    pip install \
+        prometheus_client \
+        requests \
+        psutil \
+        python-dotenv \
+        colorama \
+        configparser \
+        supervisor \
+        psycopg2-binary \
+        PyYAML \
+        cryptography \
+        python-dateutil \
+        || error "Failed to install Python packages"
+    
+    # Create symbolic links for required packages
+    PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
+    SITE_PACKAGES="$PANEL_DIR/venv/lib/python${PYTHON_VERSION}/site-packages"
+    
+    # Create symbolic links for all major packages
+    for package in prometheus_client psycopg2 requests psutil; do
+        if [ -d "$SITE_PACKAGES/$package" ]; then
+            ln -sf "$SITE_PACKAGES/$package" /usr/lib/python3/dist-packages/ || warn "Failed to create symlink for $package"
+        fi
+    done
+    
+    # Add virtual environment to system path
+    echo "export PATH=$PANEL_DIR/venv/bin:$PATH" > /etc/profile.d/irssh.sh
+    echo "source $PANEL_DIR/venv/bin/activate" >> /etc/profile.d/irssh.sh
+    chmod +x /etc/profile.d/irssh.sh
+    
+    # Verify installations
+    log "Verifying Python package installations..."
+    python3 -c "import prometheus_client, psycopg2, requests, psutil" || error "Failed to verify Python packages"
+    
+    log "Python environment setup completed"
+}
+
 # Protocol Installation Modes and Ports
 INSTALL_SSH=true
 INSTALL_DROPBEAR=true
@@ -820,6 +877,7 @@ main() {
     create_backup
     setup_directories
     install_dependencies
+    setup_python_environment
     generate_secrets
     install_protocols
     setup_typescript
