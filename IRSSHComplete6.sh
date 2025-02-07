@@ -308,8 +308,6 @@ source /opt/irssh-panel/venv/bin/activate
         grpcio-tools \
         ansible \
         pyopenssl \
-        azure-storage-blob \
-        google-cloud-storage \
         kafka-python \
         pika \
         apache-beam \
@@ -319,7 +317,6 @@ source /opt/irssh-panel/venv/bin/activate
         mlflow \
         bentoml \
         seldon-core \
-        pulumi \
         prefect \
         dask \
         opentelemetry-sdk \
