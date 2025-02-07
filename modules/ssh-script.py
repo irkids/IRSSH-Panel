@@ -2426,35 +2426,18 @@ class HAClusterManager:
     def _configure_load_balancer(self):
         """Configure HAProxy as the load balancer."""
         try:
-            haproxy = haproxy_api.HAProxy(
-                socket_path="/var/run/haproxy.sock"
-            )
+haproxy = haproxyadmin.HAProxy(socket="/var/run/haproxy.sock")
             
             # Configure frontend
-            haproxy.frontend.create(
-                name="ssh_frontend",
-                bind="*:22",
-                default_backend="ssh_backend",
-                mode="tcp"
-            )
-            
-            # Configure backend with health checks
-            haproxy.backend.create(
-                name="ssh_backend",
-                mode="tcp",
-                balance="roundrobin",
-                check_interval=2000,
-                check_fall=3,
-                check_rise=2
-            )
-            
-            # Apply configuration
-            haproxy.apply_configuration()
-            
-        except Exception as e:
-            logger.error(f"Load balancer configuration error: {e}")
-            raise
+haproxy.setparam('frontend', 'ssh_frontend', 'bind', '*:22')
+haproxy.setparam('frontend', 'ssh_frontend', 'default_backend', 'ssh_backend')
+haproxy.setparam('frontend', 'ssh_frontend', 'mode', 'tcp')
 
+            # Configure backend with health checks
+haproxy.setparam('backend', 'ssh_backend', 'balance', 'roundrobin')
+haproxy.setparam('backend', 'ssh_backend', 'mode', 'tcp')
+haproxy.setparam('backend', 'ssh_backend', 'option', 'tcp-check')
+            
     async def _monitor_cluster_health(self):
         """Monitor health of cluster nodes."""
         while True:
