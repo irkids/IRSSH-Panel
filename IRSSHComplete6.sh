@@ -274,7 +274,6 @@ pip3 install --upgrade pip
         pyAesCrypt \
         aiomysql \
         aioprometheus \
-        python-consul \
         etcd3 \
         haproxyadmin \
         paramiko \
@@ -325,7 +324,8 @@ pip3 install --upgrade pip
         grafana-api \
         || error "Failed to install Python libraries"
 
-    
+    apt-get install -y consul
+
     # Create symbolic links for required packages
     PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
     SITE_PACKAGES="$PANEL_DIR/venv/lib/python${PYTHON_VERSION}/site-packages"
