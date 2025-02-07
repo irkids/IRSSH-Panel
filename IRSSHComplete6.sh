@@ -262,10 +262,6 @@ if [ ! -d "/opt/irssh-panel/venv" ]; then
     python3 -m venv /opt/irssh-panel/venv
 fi
 
-# Remove old venv and create new one
-rm -rf /opt/irssh-panel/venv
-python3 -m venv /opt/irssh-panel/venv
-
 # Activate virtual environment
 source /opt/irssh-panel/venv/bin/activate
 
@@ -531,7 +527,7 @@ EOL
 }
 
 # [Other protocol installation functions go here - L2TP, IKEv2, Cisco, WireGuard, SingBox]
-# These functions would be directly copied from your original IRSSHComplete4.sh
+# These functions would be directly copied from your original IRSSHComplete6.sh
 
 setup_typescript() {
     log "Setting up TypeScript configuration..."
