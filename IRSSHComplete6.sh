@@ -268,8 +268,8 @@ source /opt/irssh-panel/venv/bin/activate
 # Update pip in venv
 pip install --upgrade pip
 
-    # Upgrade pip and install required packages
-pip3 install --upgrade pip
+    # Install packages in venv
+pip install \
         requests \
         prometheus_client \
         psutil \
@@ -332,6 +332,9 @@ pip3 install --upgrade pip
         newrelic \
         grafana-api \
         || error "Failed to install Python libraries"
+
+# Disable venv after installation
+deactivate
 
 # Install Consul
 apt-get install -y consul
