@@ -160,8 +160,8 @@ python3 -m venv /opt/irssh-panel/venv
 source /opt/irssh-panel/venv/bin/activate
 /opt/irssh-panel/venv/bin/pip install --upgrade pip
 /opt/irssh-panel/venv/bin/pip install requests psutil python-dotenv prometheus_client colorama
+if [ $? -ne 0 ]; then error "Failed to install Python packages"; fi
 deactivate
-        || error "Failed to install Python packages"
 
     # Essential system packages
     log "Installing essential packages..."
