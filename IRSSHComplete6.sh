@@ -177,7 +177,6 @@ deactivate
         nginx \
         postgresql \
         postgresql-contrib \
-        ufw \
         fail2ban \
         net-tools \
         iptables \
