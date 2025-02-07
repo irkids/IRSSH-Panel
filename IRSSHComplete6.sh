@@ -156,13 +156,11 @@ chmod +x /usr/sbin/policy-rc.d
         python3-venv \
         || error "Failed to install Python"
 
-    pip3 install --upgrade pip
-    pip3 install \
-        requests \
-        psutil \
-        python-dotenv \
-        prometheus_client \
-        colorama \
+python3 -m venv /opt/irssh-panel/venv
+source /opt/irssh-panel/venv/bin/activate
+/opt/irssh-panel/venv/bin/pip install --upgrade pip
+/opt/irssh-panel/venv/bin/pip install requests psutil python-dotenv prometheus_client colorama
+deactivate
         || error "Failed to install Python packages"
 
     # Essential system packages
@@ -303,7 +301,7 @@ source /opt/irssh-panel/venv/bin/activate
         matplotlib \
         seaborn \
         scikit-learn \
-        tensorflow-cpu \ 
+        tensorflow-cpu \
         jupyter \
         ipython \
         kubernetes \
@@ -317,7 +315,7 @@ source /opt/irssh-panel/venv/bin/activate
         pika \
         apache-beam \
         helm \
-        consul-kv \
+        python-consul \
         nomad \
         mlflow \
         bentoml \
