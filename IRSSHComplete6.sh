@@ -262,14 +262,18 @@ if [ ! -d "/opt/irssh-panel/venv" ]; then
     python3 -m venv /opt/irssh-panel/venv
 fi
 
+# Remove old venv and create new one
+rm -rf /opt/irssh-panel/venv
+python3 -m venv /opt/irssh-panel/venv
+
 # Activate virtual environment
 source /opt/irssh-panel/venv/bin/activate
 
 # Update pip in venv
-pip install --upgrade pip
+/opt/irssh-panel/venv/bin/pip install --upgrade pip setuptools wheel
 
     # Install packages in venv
-pip install \
+/opt/irssh-panel/venv/bin/pip install \
         requests \
         prometheus_client \
         psutil \
@@ -333,7 +337,7 @@ pip install \
         grafana-api \
         || error "Failed to install Python libraries"
 
-# Disable venv after installation
+# Deactivate virtual environment after installation
 deactivate
 
 # Install Consul
