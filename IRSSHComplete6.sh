@@ -257,9 +257,20 @@ setup_python_environment() {
     python3 -m venv "$PANEL_DIR/venv"
     source "$PANEL_DIR/venv/bin/activate"
     
+# Show packages that may install nvidia_cublas
+echo "Checking for NVIDIA dependencies..."
+pip3 list | grep nvidia
+
+# Prevent installation of GPU version
+export CUDA_VISIBLE_DEVICES=-1
+
+# Remove previous versions that may install nvidia_cublas
+pip3 uninstall -y tensorflow torch torchvision torchaudio nvidia-cublas nvidia-cudnn nvidia-cuda-runtime
+
+
     # Upgrade pip and install required packages
 pip3 install --upgrade pip
-        pip3 install \
+pip3 install --no-cache-dir \
         requests \
         prometheus_client \
         psutil \
@@ -293,8 +304,9 @@ pip3 install --upgrade pip
         matplotlib \
         seaborn \
         scikit-learn \
-        tensorflow \
-        torch \
+        tensorflow-cpu \ 
+        torch \ 
+        torchvision \
         jupyter \
         ipython \
         kubernetes \
@@ -324,7 +336,8 @@ pip3 install --upgrade pip
         grafana-api \
         || error "Failed to install Python libraries"
 
-    apt-get install -y consul
+# Install Consul
+apt-get install -y consul
 
     # Create symbolic links for required packages
     PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
