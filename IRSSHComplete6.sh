@@ -257,9 +257,19 @@ setup_python_environment() {
     python3 -m venv "$PANEL_DIR/venv"
     source "$PANEL_DIR/venv/bin/activate"
 
+# Check and create virtual environment
+if [ ! -d "/opt/irssh-panel/venv" ]; then
+    python3 -m venv /opt/irssh-panel/venv
+fi
+
+# Activate virtual environment
+source /opt/irssh-panel/venv/bin/activate
+
+# Update pip in venv
+pip install --upgrade pip
+
     # Upgrade pip and install required packages
 pip3 install --upgrade pip
-pip3 install --no-cache-dir \
         requests \
         prometheus_client \
         psutil \
