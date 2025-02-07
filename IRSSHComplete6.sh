@@ -256,17 +256,6 @@ setup_python_environment() {
     mkdir -p "$PANEL_DIR/venv"
     python3 -m venv "$PANEL_DIR/venv"
     source "$PANEL_DIR/venv/bin/activate"
-    
-# Show packages that may install nvidia_cublas
-echo "Checking for NVIDIA dependencies..."
-pip3 list | grep nvidia
-
-# Prevent installation of GPU version
-export CUDA_VISIBLE_DEVICES=-1
-
-# Remove previous versions that may install nvidia_cublas
-pip3 uninstall -y tensorflow torch torchvision torchaudio nvidia-cublas nvidia-cudnn nvidia-cuda-runtime
-
 
     # Upgrade pip and install required packages
 pip3 install --upgrade pip
@@ -305,8 +294,6 @@ pip3 install --no-cache-dir \
         seaborn \
         scikit-learn \
         tensorflow-cpu \ 
-        torch \ 
-        torchvision \
         jupyter \
         ipython \
         kubernetes \
