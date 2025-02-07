@@ -309,7 +309,7 @@ pip3 install --upgrade pip
         pika \
         apache-beam \
         helm \
-        consul \
+        python-consul \
         nomad \
         mlflow \
         bentoml \
