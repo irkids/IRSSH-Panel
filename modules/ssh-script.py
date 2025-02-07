@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 class LogLevel(Enum):
     DEBUG = "DEBUG"
     INFO = "INFO"
@@ -34,6 +33,8 @@ class CoreInfrastructure:
         logger = logging.getLogger("enhanced_ssh")
         logger.setLevel(logging.DEBUG)
         
+       import haproxyadmin
+
         # File handler with rotation
         file_handler = logging.handlers.RotatingFileHandler(
             self.config.log_dir / "enhanced_ssh.log",
@@ -2424,19 +2425,34 @@ class HAClusterManager:
                 break
 
     def _configure_load_balancer(self):
-        """Configure HAProxy as the load balancer."""
-        try:
-haproxy = haproxyadmin.HAProxy(socket="/var/run/haproxy.sock")
-            
-            # Configure frontend
-haproxy.setparam('frontend', 'ssh_frontend', 'bind', '*:22')
-haproxy.setparam('frontend', 'ssh_frontend', 'default_backend', 'ssh_backend')
-haproxy.setparam('frontend', 'ssh_frontend', 'mode', 'tcp')
+    """Configure HAProxy as the load balancer."""
+    try:
+       # Connecting to HAProxy via socket
+        haproxy = haproxyadmin.HAProxy(socket="/var/run/haproxy.sock")
 
-            # Configure backend with health checks
-haproxy.setparam('backend', 'ssh_backend', 'balance', 'roundrobin')
-haproxy.setparam('backend', 'ssh_backend', 'mode', 'tcp')
-haproxy.setparam('backend', 'ssh_backend', 'option', 'tcp-check')
+        # Checking the connection to HAProxy
+        if not haproxy:
+            raise ValueError("Could not connect to HAProxy via stats socket")
+
+        # Checking that HAProxy is running
+        info = haproxy.info()
+        logger.info(f"Connected to HAProxy: {info.get('Name', 'Unknown')} version {info.get('Version', 'Unknown')}")
+
+       # Sending commands to configure the frontend
+        haproxy.setparam('frontend', 'ssh_frontend', 'bind', '*:22')
+        haproxy.setparam('frontend', 'ssh_frontend', 'default_backend', 'ssh_backend')
+        haproxy.setparam('frontend', 'ssh_frontend', 'mode', 'tcp')
+
+        # Sending commands to configure the backend
+        haproxy.setparam('backend', 'ssh_backend', 'balance', 'roundrobin')
+        haproxy.setparam('backend', 'ssh_backend', 'mode', 'tcp')
+        haproxy.setparam('backend', 'ssh_backend', 'option', 'tcp-check')
+
+        logger.info("HAProxy configuration applied successfully.")
+
+    except Exception as e:
+        logger.error(f"Load balancer configuration error: {e}")
+        raise
             
     async def _monitor_cluster_health(self):
         """Monitor health of cluster nodes."""
