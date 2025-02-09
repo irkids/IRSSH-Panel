@@ -375,7 +375,7 @@ install_protocols() {
         psutil==5.9.8 \
         boto3==1.34.34 \
         python-dotenv==1.0.0 \
-        python-consul==1.1.0 \        # Added this line
+        python-consul==1.1.0 \
         || error "Failed to install other packages"
 
     # Verify installations
