@@ -336,48 +336,55 @@ install_protocols() {
     mkdir -p "$MODULES_DIR/protocols"
     cd "$MODULES_DIR/protocols" || error "Failed to access modules directory"
     
-    # Install ALL required Python packages globally
-    log "Installing required Python packages globally..."
-    python3 -m pip install \
-        websockets \
-        requests \
-        prometheus_client \
-        psutil \
-        aiofiles \
-        boto3 \
-        python-dotenv \
-        cryptography \
-        paramiko \
-        pyyaml \
-        fastapi \
-        uvicorn \
-        asyncio \
-        aiohttp \
-        aiodns \
-        aiosignal \
-        SQLAlchemy \
-        psycopg2-binary \
-        redis \
-        pymongo \
-        elasticsearch \
-        grpcio \
-        protobuf \
-        python-jose \
-        passlib \
-        bcrypt \
-        pyjwt \
-        pandas \
-        numpy \
+    # First install system-level packages
+    log "Installing system-level Python packages..."
+    apt-get update
+    apt-get install -y \
+        python3-pip \
+        python3-websockets \
+        python3-requests \
+        python3-prometheus-client \
+        python3-psutil \
+        python3-aiofiles \
+        python3-boto3 \
+        python3-dotenv \
+        python3-cryptography \
+        python3-paramiko \
+        python3-yaml \
+        python3-fastapi \
+        python3-uvicorn \
+        python3-asyncio \
+        python3-aiohttp \
+        python3-aiodns \
+        python3-sqlalchemy \
+        python3-psycopg2 \
+        python3-redis \
+        python3-pymongo \
+        python3-elasticsearch \
+        python3-grpcio \
+        python3-protobuf \
+        python3-jose \
+        python3-passlib \
+        python3-bcrypt \
+        python3-jwt \
+        python3-pandas \
+        python3-numpy \
+        python3-dateutil \
+        python3-tz \
+        python3-aioredis \
+        python3-httpx \
+        python3-nacl \
+        python3-mysqldb \
+        python3-dnspython \
+        || error "Failed to install system Python packages"
+
+    # Then install remaining packages via pip
+    log "Installing additional Python packages via pip..."
+    python3 -m pip install --no-cache-dir \
         croniter \
-        python-dateutil \
-        pytz \
-        aioredis \
-        httpx \
+        aiosignal \
         pycryptodomex \
-        pynacl \
-        aiomysql \
-        dnspython \
-        || error "Failed to install required Python packages"
+        || error "Failed to install additional Python packages"
     
     # Download protocol modules from GitHub
     log "Downloading protocol modules..."
