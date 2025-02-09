@@ -703,57 +703,68 @@ const useThemeStore = create<ThemeState>()(
 export default useThemeStore;
 EOL
 }
-setup_frontend() {
-   log "Setting up frontend application..."
-   cd "$FRONTEND_DIR" || error "Failed to access frontend directory"
 
-   # Create package.json
-   cat > package.json << 'EOL'
+setup_frontend() {
+    log "Setting up frontend application..."
+    cd "$FRONTEND_DIR" || error "Failed to access frontend directory"
+
+    # Create package.json
+    cat > package.json << 'EOL'
 {
- "name": "irssh-panel-frontend",
- "version": "3.5.0",
- "private": true,
- "scripts": {
-   "dev": "vite",
-   "build": "tsc && vite build",
-   "preview": "vite preview"
- },
- "dependencies": {
-   "@headlessui/react": "^1.7.17",
-   "@heroicons/react": "^2.0.18", 
-   "axios": "^1.6.2",
-   "react": "^18.2.0",
-   "react-dom": "^18.2.0",
-   "react-router-dom": "^6.21.0",
-   "react-query": "^3.39.3",
-   "react-hot-toast": "^2.4.1",
-   "zustand": "^4.4.7"
- },
- "devDependencies": {
-   "@vitejs/plugin-react": "^4.2.1",
-   "@types/node": "^20.10.4",
-   "@types/react": "^18.2.45",
-   "@types/react-dom": "^18.2.17",
-   "typescript": "^5.3.3",
-   "autoprefixer": "^10.4.16",
-   "postcss": "^8.4.32",
-   "tailwindcss": "^3.3.6",
-   "vite": "^5.0.7"
- }
+  "name": "irssh-panel-frontend",
+  "version": "3.5.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@headlessui/react": "^1.7.17",
+    "@heroicons/react": "^2.0.18",
+    "axios": "^1.6.2",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.21.0",
+    "react-query": "^3.39.3",
+    "react-hot-toast": "^2.4.1",
+    "zustand": "^4.4.7"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "@types/node": "^20.10.4",
+    "@types/react": "^18.2.45",
+    "@types/react-dom": "^18.2.17",
+    "typescript": "^5.3.3",
+    "autoprefixer": "^10.4.16",
+    "postcss": "^8.4.32",
+    "tailwindcss": "^3.3.6",
+    "vite": "^5.0.7"
+  }
 }
 EOL
 
-   # Install dependencies
-   npm install || error "Frontend dependency installation failed"
-   npm install @vitejs/plugin-react-swc --save-dev || error "Frontend dependency installation failed"
+    # Install dependencies
+    npm install || error "Frontend dependency installation failed"
 
-   # Create vite config
-   cat > vite.config.ts << 'EOL'
-   import { defineConfig } from 'vite'
-   import react from '@vitejs/plugin-react-swc'
-   import path from 'path'
+    # Create postcss.config.cjs
+    cat > postcss.config.cjs << 'EOL'
+module.exports = {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {}
+  }
+}
+EOL
 
-   export default defineConfig({
+    # Create vite.config.ts
+    cat > vite.config.ts << 'EOL'
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import path from 'path'
+
+export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
@@ -767,12 +778,109 @@ EOL
 })
 EOL
 
-   # Create directory structure
-   mkdir -p src/{components/layout,pages,context,lib} || error "Failed to create directory structure"
+    # Create tailwind.config.cjs
+    cat > tailwind.config.cjs << 'EOL'
+module.exports = {
+  content: [
+    "./index.html",
+    "./src/**/*.{js,ts,jsx,tsx}",
+  ],
+  darkMode: 'class',
+  theme: {
+    extend: {},
+  },
+  plugins: []
+}
+EOL
 
-       # Create MainLayout component
+    # Create index.html
+    cat > index.html << 'EOL'
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IRSSH Panel</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+EOL
+
+    # Create src directory structure
+    mkdir -p src/{components/layout,pages,context,lib}
+
+    # Create main.tsx
+    cat > src/main.tsx << 'EOL'
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+import { BrowserRouter } from 'react-router-dom'
+import App from './App'
+import './index.css'
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <BrowserRouter>
+      <App />
+    </BrowserRouter>
+  </React.StrictMode>,
+)
+EOL
+
+    # Create index.css
+    cat > src/index.css << 'EOL'
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+EOL
+
+    # Create App.tsx
+    cat > src/App.tsx << 'EOL'
+import { Routes, Route } from 'react-router-dom'
+import MainLayout from './components/layout/MainLayout'
+import Dashboard from './pages/Dashboard'
+import Users from './pages/Users'
+import OnlineUsers from './pages/OnlineUsers'
+import Settings from './pages/Settings'
+import Login from './pages/Login'
+
+const App = () => {
+  return (
+    <Routes>
+      <Route path="/" element={<MainLayout />}>
+        <Route index element={<Dashboard />} />
+        <Route path="users" element={<Users />} />
+        <Route path="online-users" element={<OnlineUsers />} />
+        <Route path="settings" element={<Settings />} />
+      </Route>
+      <Route path="/login" element={<Login />} />
+    </Routes>
+  )
+}
+
+export default App
+EOL
+
+    # Create pages and components
+    for page in Dashboard Users OnlineUsers Settings Login; do
+        cat > "src/pages/${page}.tsx" << EOL
+const ${page} = () => {
+  return (
+    <div>
+      <h1 className="text-2xl font-bold">${page}</h1>
+    </div>
+  );
+};
+
+export default ${page};
+EOL
+    done
+
+    # Create MainLayout
     cat > src/components/layout/MainLayout.tsx << 'EOL'
-import { Outlet } from 'react-router-dom';
+import { Outlet } from 'react-router-dom'
 
 const MainLayout = () => {
   return (
@@ -787,230 +895,14 @@ const MainLayout = () => {
 export default MainLayout;
 EOL
 
-    # Create pages
-    for page in Dashboard Users OnlineUsers Settings Login; do
-      cat > "src/pages/${page}.tsx" << EOL
-const ${page} = () => {
-  return (
-    <div>
-      <h1 className="text-2xl font-bold">${page}</h1>
-    </div>
-  );
-};
+    # Setup TypeScript
+    setup_typescript
 
-export default ${page};
-EOL
-    done
+    # Setup stores
+    setup_stores
 
-   # Create axios instance
-   cat > src/lib/axios.ts << 'EOL'
-import axios from 'axios';
-
-const instance = axios.create({
-   baseURL: '/api',
-   headers: {
-       'Content-Type': 'application/json',
-   },
-});
-
-export default instance;
-EOL
-
-   # Create AuthContext
-   cat > src/context/AuthContext.tsx << 'EOL'
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import axios from '../lib/axios';
-import { toast } from 'react-hot-toast';
-
-interface User {
-   id: string;
-   username: string;
-   email?: string;
-   role: string;
-}
-
-interface AuthContextType {
-   user: User | null;
-   isAuthenticated: boolean;
-   isLoading: boolean;
-   login: (username: string, password: string) => Promise<void>;
-   logout: () => Promise<void>;
-   updateUser: (data: Partial<User>) => Promise<void>;
-}
-
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-   const [user, setUser] = useState<User | null>(null);
-   const [isLoading, setIsLoading] = useState(true);
-   const navigate = useNavigate();
-
-   useEffect(() => {
-       checkAuth();
-   }, []);
-
-   const checkAuth = async () => {
-       try {
-           const token = localStorage.getItem('token');
-           if (!token) {
-               setIsLoading(false);
-               return;
-           }
-
-           const response = await axios.get('/auth/me');
-           setUser(response.data);
-       } catch (error) {
-           localStorage.removeItem('token');
-           setUser(null);
-       } finally {
-           setIsLoading(false);
-       }
-   };
-
-   const login = async (username: string, password: string) => {
-       try {
-           setIsLoading(true);
-           const response = await axios.post('/auth/login', { username, password });
-           const { token, user } = response.data;
-
-           localStorage.setItem('token', token);
-           setUser(user);
-           
-           axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-           
-           navigate('/dashboard');
-           toast.success('Login successful');
-       } catch (error: any) {
-           const message = error.response?.data?.message || 'Login failed';
-           toast.error(message);
-           throw error;
-       } finally {
-           setIsLoading(false);
-       }
-   };
-
-   const logout = async () => {
-       try {
-           await axios.post('/auth/logout');
-       } catch (error) {
-           console.error('Logout error:', error);
-       } finally {
-           localStorage.removeItem('token');
-           delete axios.defaults.headers.common['Authorization'];
-           setUser(null);
-           navigate('/login');
-           toast.success('Logged out successfully');
-       }
-   };
-
-   const updateUser = async (data: Partial<User>) => {
-       try {
-           const response = await axios.put(`/users/${user?.id}`, data);
-           setUser(response.data);
-           toast.success('Profile updated successfully');
-       } catch (error: any) {
-           const message = error.response?.data?.message || 'Update failed';
-           toast.error(message);
-           throw error;
-       }
-   };
-
-   return (
-       <AuthContext.Provider 
-           value={{
-               user,
-               isAuthenticated: !!user,
-               isLoading,
-               login,
-               logout,
-               updateUser
-           }}
-       >
-           {!isLoading && children}
-       </AuthContext.Provider>
-   );
-}
-
-export function useAuth() {
-   const context = useContext(AuthContext);
-   if (context === undefined) {
-       throw new Error('useAuth must be used within an AuthProvider');
-   }
-   return context;
-}
-
-axios.interceptors.response.use(
-   (response) => response,
-   async (error) => {
-       if (error.response?.status === 401) {
-           localStorage.removeItem('token');
-           window.location.href = '/login';
-       }
-       return Promise.reject(error);
-   }
-);
-EOL
-
-   # Create ThemeContext
-   cat > src/context/ThemeContext.tsx << 'EOL'
-import React, { createContext, useContext, useState, useEffect } from 'react';
-
-type Theme = 'light' | 'dark' | 'system';
-type ThemeContextType = {
-   theme: Theme;
-   setTheme: (theme: Theme) => void;
-};
-
-const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
-
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
-   const [theme, setTheme] = useState<Theme>(() => {
-       const storedTheme = localStorage.getItem('theme') as Theme;
-       return storedTheme || 'system';
-   });
-
-   useEffect(() => {
-       const root = window.document.documentElement;
-       
-       if (theme === 'system') {
-           const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches
-               ? 'dark'
-               : 'light';
-           root.classList.remove('light', 'dark');
-           root.classList.add(systemTheme);
-       } else {
-           root.classList.remove('light', 'dark');
-           root.classList.add(theme);
-       }
-       
-       localStorage.setItem('theme', theme);
-   }, [theme]);
-
-   return (
-       <ThemeContext.Provider value={{ theme, setTheme }}>
-           {children}
-       </ThemeContext.Provider>
-   );
-}
-
-export function useTheme() {
-   const context = useContext(ThemeContext);
-   if (context === undefined) {
-       throw new Error('useTheme must be used within a ThemeProvider');
-   }
-   return context;
-}
-EOL
-
-   # Setup TypeScript
-   setup_typescript
-
-   # Setup stores
-   setup_stores
-
-   # Build frontend
-   npm run build || error "Frontend build failed"
+    # Build frontend
+    npm run build || error "Frontend build failed"
 }
 
 setup_backend() {
