@@ -336,6 +336,10 @@ install_protocols() {
     mkdir -p "$MODULES_DIR/protocols"
     cd "$MODULES_DIR/protocols" || error "Failed to access modules directory"
 
+    # Install required Python packages globally
+    log "Installing required Python packages globally..."
+    python3 -m pip install websockets requests prometheus_client psutil || error "Failed to install required Python packages"
+
     # Download protocol modules from GitHub
     log "Downloading protocol modules..."
     MODULES=(
@@ -359,6 +363,8 @@ install_protocols() {
         chmod +x "$module"
     done
 
+python3 -m pip install websockets requests prometheus_client psutil || error "Failed to install required Python packages"
+
     # Execute protocol installations
     if [ "$INSTALL_SSH" = true ]; then
         log "Installing SSH and related protocols..."
@@ -366,6 +372,8 @@ install_protocols() {
         ./dropbear-script.sh --port "$DROPBEAR_PORT" || error "Dropbear installation failed"
         ./webport-script.sh --port "$WEBSOCKET_PORT" || error "WebSocket installation failed"
     fi
+
+    # Rest of the function remains the same...
 
     if [ "$INSTALL_L2TP" = true ]; then
         log "Installing L2TP/IPsec..."
