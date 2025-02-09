@@ -252,22 +252,15 @@ setup_python_environment() {
     # Create and activate virtual environment
     mkdir -p "$PANEL_DIR/venv"
     python3 -m venv "$PANEL_DIR/venv"
-    source "$PANEL_DIR/venv/bin/activate"
+    
+    # Update pip and install base packages
+    "$PANEL_DIR/venv/bin/pip" install --upgrade pip setuptools wheel
 
-# Check and create virtual environment
-if [ ! -d "/opt/irssh-panel/venv" ]; then
-    python3 -m venv /opt/irssh-panel/venv
-fi
+    # Install urllib3 first to avoid dependency issues
+    "$PANEL_DIR/venv/bin/pip" install urllib3==2.0.7
 
-# Activate virtual environment
-source /opt/irssh-panel/venv/bin/activate
-
-# Update pip in venv
-/opt/irssh-panel/venv/bin/pip install --upgrade pip setuptools wheel
-
-    # Install packages in venv
-/opt/irssh-panel/venv/bin/pip install \
-        urllib3 \
+    # Now install other packages
+    "$PANEL_DIR/venv/bin/pip" install \
         requests \
         prometheus_client \
         psutil \
@@ -294,65 +287,27 @@ source /opt/irssh-panel/venv/bin/activate
         psycopg2-binary \
         redis \
         pymongo \
-        elasticsearch \
-        numpy \
-        pandas \
-        scipy \
-        matplotlib \
-        seaborn \
-        scikit-learn \
-        tensorflow-cpu \
-        jupyter \
-        ipython \
-        kubernetes \
-        grpcio \
-        grpcio-tools \
-        ansible \
-        pyopenssl \
-        kafka-python \
-        pika \
-        apache-beam \
-        helm \
-        python-consul \
-        nomad \
-        mlflow \
-        bentoml \
-        seldon-core \
-        prefect \
-        dask \
-        opentelemetry-sdk \
-        opentelemetry-exporter-jaeger \
-        datadog \
-        sentry-sdk \
-        newrelic \
-        grafana-api \
-        || error "Failed to install Python libraries"
+        elasticsearch || error "Failed to install primary Python packages"
 
-# Deactivate virtual environment after installation
-deactivate
+     # Deactivate virtual environment after installation
+        deactivate
 
-# Install Consul
-apt-get install -y consul
-
-    # Create symbolic links for required packages
+    # Install Consul
+    apt-get install -y consul
+    
+    # Verify the installation using the virtual environment's Python
+    "$PANEL_DIR/venv/bin/python3" -c "import urllib3, requests, prometheus_client, psutil" || error "Failed to verify Python packages"
+    
+    # Create symlinks if needed
     PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
     SITE_PACKAGES="$PANEL_DIR/venv/lib/python${PYTHON_VERSION}/site-packages"
     
     # Create symbolic links for all major packages
-    for package in prometheus_client psycopg2 requests psutil; do
+    for package in urllib3 prometheus_client psycopg2 requests psutil; do
         if [ -d "$SITE_PACKAGES/$package" ]; then
             ln -sf "$SITE_PACKAGES/$package" /usr/lib/python3/dist-packages/ || warn "Failed to create symlink for $package"
         fi
     done
-    
-    # Add virtual environment to system path
-    echo "export PATH=$PANEL_DIR/venv/bin:$PATH" > /etc/profile.d/irssh.sh
-    echo "source $PANEL_DIR/venv/bin/activate" >> /etc/profile.d/irssh.sh
-    chmod +x /etc/profile.d/irssh.sh
-    
-    # Verify installations
-    log "Verifying Python package installations..."
-    python3 -c "import urllib3, prometheus_client, psycopg2, requests, psutil" || error "Failed to verify Python packages"
     
     log "Python environment setup completed"
 }
