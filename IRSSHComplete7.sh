@@ -1002,6 +1002,10 @@ EOL
    npm run build || error "Frontend build failed"
 }
 
+setup_backend() {
+ log "Setting up backend server..."
+ cd "$BACKEND_DIR" || error "Failed to access backend directory"
+
     # Install backend dependencies
     npm install || error "Backend dependency installation failed"
 
