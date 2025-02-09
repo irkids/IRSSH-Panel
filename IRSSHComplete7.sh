@@ -332,7 +332,7 @@ WEB_PORT=443
 install_protocols() {
     log "Installing VPN protocols using project modules..."
         log "Creating temporary haproxy_api module..."
-    cat > "/opt/irssh-panel/venv/lib/python3.10/site-packages/haproxy_api.py" << EOL
+    cat > "/opt/irssh-panel/venv/lib/python3.8/site-packages/haproxy_api.py" << EOL
   # Temporary module for compatibility
   class HAProxy:
     def __init__(self):
@@ -376,7 +376,7 @@ install_protocols() {
     pip uninstall -y asyncio
 
     # Then remove the entire asyncio directory from venv if exists
-    rm -rf /opt/irssh-panel/venv/lib/python3.10/site-packages/asyncio
+    rm -rf /opt/irssh-panel/venv/lib/python3.8/site-packages/asyncio
 
     # Install required packages
     log "Installing Python packages..."
@@ -426,19 +426,19 @@ install_protocols() {
     # Execute protocol installations with PYTHONPATH set
     if [ "$INSTALL_SSH" = true ]; then
         log "Installing SSH and related protocols..."
-        PYTHONPATH="/opt/irssh-panel/venv/lib/python3.10/site-packages" ./ssh-script.py --port "$SSH_PORT" || error "SSH installation failed"
+        PYTHONPATH="/opt/irssh-panel/venv/lib/python3.8/site-packages" ./ssh-script.py --port "$SSH_PORT" || error "SSH installation failed"
         ./dropbear-script.sh --port "$DROPBEAR_PORT" || error "Dropbear installation failed"
         ./webport-script.sh --port "$WEBSOCKET_PORT" || error "WebSocket installation failed"
     fi
 
     if [ "$INSTALL_L2TP" = true ]; then
         log "Installing L2TP/IPsec..."
-        PYTHONPATH="/opt/irssh-panel/venv/lib/python3.10/site-packages" ./l2tpv3-script.sh --port "$L2TP_PORT" || error "L2TP installation failed"
+        PYTHONPATH="/opt/irssh-panel/venv/lib/python3.8/site-packages" ./l2tpv3-script.sh --port "$L2TP_PORT" || error "L2TP installation failed"
     fi
 
     if [ "$INSTALL_IKEV2" = true ]; then
         log "Installing IKEv2..."
-        PYTHONPATH="/opt/irssh-panel/venv/lib/python3.10/site-packages" ./ikev2-script.py --port "$IKEV2_PORT" || error "IKEv2 installation failed"
+        PYTHONPATH="/opt/irssh-panel/venv/lib/python3.8/site-packages" ./ikev2-script.py --port "$IKEV2_PORT" || error "IKEv2 installation failed"
     fi
 
     if [ "$INSTALL_CISCO" = true ]; then
@@ -460,8 +460,8 @@ install_protocols() {
     ./badvpn-script.sh --port "$BADVPN_PORT" || error "BadVPN installation failed"
 
     # Configure VPN server settings
-    PYTHONPATH="/opt/irssh-panel/venv/lib/python3.10/site-packages" ./vpnserver-script.py --configure || error "VPN server configuration failed"
-    PYTHONPATH="/opt/irssh-panel/venv/lib/python3.10/site-packages" ./port-script.py --update-all || error "Port configuration failed"
+    PYTHONPATH="/opt/irssh-panel/venv/lib/python3.8/site-packages" ./vpnserver-script.py --configure || error "VPN server configuration failed"
+    PYTHONPATH="/opt/irssh-panel/venv/lib/python3.8/site-packages" ./port-script.py --update-all || error "Port configuration failed"
 
     # Deactivate virtual environment
     deactivate
