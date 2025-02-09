@@ -505,16 +505,30 @@ EOL
     chmod 600 /etc/stunnel/stunnel.pem
 
     # Create stunnel configuration
-    cat > /etc/stunnel/stunnel.conf << EOL
+cat > /etc/stunnel/stunnel.conf << "EOL"
 pid = /var/run/stunnel4/stunnel.pid
+setuid = stunnel4
+setgid = stunnel4
 cert = /etc/stunnel/stunnel.pem
+socket = a:SO_REUSEADDR=1
 socket = l:TCP_NODELAY=1
 socket = r:TCP_NODELAY=1
 
-[ssh]
-accept = ${SSH_TLS_PORT}
-connect = 127.0.0.1:${SSH_PORT}
+# Debugging
+debug = 7
+output = /var/log/stunnel4/stunnel.log
+
+[ssh-tls]
+client = no
+accept = 443
+connect = 127.0.0.1:22
 EOL
+
+    # Set correct permissions
+    chown stunnel4:stunnel4 /etc/stunnel/stunnel.conf
+    chmod 644 /etc/stunnel/stunnel.conf
+    chown stunnel4:stunnel4 /etc/stunnel/stunnel.pem
+    chmod 600 /etc/stunnel/stunnel.pem
 
     # Create required directories
     mkdir -p /var/run/stunnel4
