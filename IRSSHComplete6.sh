@@ -267,6 +267,7 @@ source /opt/irssh-panel/venv/bin/activate
 
     # Install packages in venv
 /opt/irssh-panel/venv/bin/pip install \
+        urllib3 \
         requests \
         prometheus_client \
         psutil \
@@ -351,7 +352,7 @@ apt-get install -y consul
     
     # Verify installations
     log "Verifying Python package installations..."
-    python3 -c "import prometheus_client, psycopg2, requests, psutil" || error "Failed to verify Python packages"
+    python3 -c "import urllib3, prometheus_client, psycopg2, requests, psutil" || error "Failed to verify Python packages"
     
     log "Python environment setup completed"
 }
