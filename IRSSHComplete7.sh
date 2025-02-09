@@ -364,7 +364,6 @@ install_protocols() {
     log "Installing Consul..."
     apt-get install -y consul || error "Failed to install Consul"
 
-    # Install other required packages
     log "Installing other required packages..."
     pip install --no-cache-dir \
         protobuf==3.20.0 \
@@ -380,7 +379,9 @@ install_protocols() {
         python-dotenv==1.0.0 \
         python-consul==1.1.0 \
         requests==2.31.0 \
-        chardet==4.0.0 || error "Failed to install other packages"
+        chardet==4.0.0 \
+        haproxy-api==1.0.0 \
+        haproxyadmin==0.2.4 || error "Failed to install other packages"
 
     # Verify installations
     log "Verifying package installations..."
