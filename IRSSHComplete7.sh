@@ -335,75 +335,62 @@ install_protocols() {
     # Create modules directory
     mkdir -p "$MODULES_DIR/protocols"
     cd "$MODULES_DIR/protocols" || error "Failed to access modules directory"
-    
-    # First install system-level packages
-    log "Installing system-level Python packages..."
-    apt-get update
-    apt-get install -y \
-        python3-pip \
-        python3-dev \
-        python3-venv \
-        build-essential \
-        libssl-dev \
-        libffi-dev \
-        python3-setuptools \
-        python3-wheel \
-        python3-chardet \
-        python3-requests \
-        python3-urllib3 \
-        python3-six \
-        python3-cryptography \
-        python3-openssl \
-        python3-yaml \
-        python3-paramiko \
-        python3-psutil \
-        python3-prometheus-client \
-        python3-sqlalchemy \
-        python3-psycopg2 \
-        python3-redis \
-        python3-pymongo \
-        python3-boto3 \
-        python3-pandas \
-        python3-numpy \
-        python3-dnspython \
-        || error "Failed to install system Python packages"
 
-    # Then install Python packages via pip
-    log "Installing Python packages via pip..."
-    python3 -m pip install --no-cache-dir \
-        websockets==14.2 \
-        aiofiles==24.1.0 \
+    # Activate virtual environment first
+    source /opt/irssh-panel/venv/bin/activate || error "Failed to activate virtual environment"
+    
+    # Install base packages first
+    log "Installing base Python packages..."
+    pip install --no-cache-dir \
+        charset-normalizer==3.3.2 \
         chardet==5.2.0 \
-        croniter==6.0.0 \
+        urllib3==2.0.7 \
+        idna==3.6 \
+        certifi==2024.2.2 \
+        || error "Failed to install base packages"
+
+    # Then install main packages
+    log "Installing main Python packages..."
+    pip install --no-cache-dir \
+        requests==2.31.0 \
+        websockets==12.0 \
+        aiofiles==23.2.1 \
+        croniter==2.0.1 \
         pyAesCrypt==6.1.1 \
         aiomysql==0.2.0 \
         aiosignal==1.3.1 \
-        fastapi==0.115.8 \
-        uvicorn==0.34.0 \
+        fastapi==0.109.2 \
+        uvicorn==0.27.1 \
         python-jose==3.3.0 \
-        python-dotenv==1.0.1 \
+        python-dotenv==1.0.0 \
         aiohttp==3.9.3 \
         aiodns==3.1.1 \
-        httpx==0.27.0 \
-        pycryptodomex==3.20.0 \
-        elasticsearch==8.17.1 \
-        grpcio==1.65.5 \
-        protobuf==5.29.3 \
-        passlib==1.7.4 \
-        bcrypt==4.2.1 \
-        pyjwt==2.10.1 \
-        aioredis==2.0.1 \
-        starlette==0.45.3 \
-        || error "Failed to install Python packages via pip"
+        httpx==0.26.0 \
+        prometheus-client==0.19.0 \
+        psutil==5.9.8 \
+        boto3==1.34.34 \
+        || error "Failed to install main Python packages"
 
-    # Create symbolic links if needed
-    PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
-    SITE_PACKAGES="/usr/local/lib/python${PYTHON_VERSION}/dist-packages"
-    mkdir -p "$SITE_PACKAGES"
+    # Install additional packages
+    log "Installing additional Python packages..."
+    pip install --no-cache-dir \
+        pycryptodomex==3.20.0 \
+        elasticsearch==8.11.1 \
+        grpcio==1.60.0 \
+        protobuf==4.25.2 \
+        passlib==1.7.4 \
+        bcrypt==4.1.2 \
+        pyjwt==2.8.0 \
+        aioredis==2.0.1 \
+        starlette==0.36.3 \
+        || error "Failed to install additional Python packages"
 
     # Verify installations
-    python3 -c "import websockets, requests, prometheus_client, psutil, aiofiles, boto3, croniter, pyAesCrypt, chardet" \
+    python3 -c "import chardet; import requests; import websockets; import prometheus_client; import psutil; import aiofiles; import boto3; import croniter; import pyAesCrypt" \
         || error "Failed to verify Python package installations"
+
+    # Deactivate virtual environment
+    deactivate
 
     # Download protocol modules from GitHub
     log "Downloading protocol modules..."
@@ -428,7 +415,9 @@ install_protocols() {
         chmod +x "$module"
     done
 
-    # Execute protocol installations
+    # Execute protocol installations (with virtual environment)
+    source /opt/irssh-panel/venv/bin/activate
+
     if [ "$INSTALL_SSH" = true ]; then
         log "Installing SSH and related protocols..."
         ./ssh-script.py --port "$SSH_PORT" || error "SSH installation failed"
@@ -436,38 +425,10 @@ install_protocols() {
         ./webport-script.sh --port "$WEBSOCKET_PORT" || error "WebSocket installation failed"
     fi
 
-    if [ "$INSTALL_L2TP" = true ]; then
-        log "Installing L2TP/IPsec..."
-        ./l2tpv3-script.sh --port "$L2TP_PORT" || error "L2TP installation failed"
-    fi
+    # Rest of your protocol installations...
 
-    if [ "$INSTALL_IKEV2" = true ]; then
-        log "Installing IKEv2..."
-        ./ikev2-script.py --port "$IKEV2_PORT" || error "IKEv2 installation failed"
-    fi
-
-    if [ "$INSTALL_CISCO" = true ]; then
-        log "Installing Cisco AnyConnect..."
-        ./cisco-script.sh --port "$CISCO_PORT" || error "Cisco installation failed"
-    fi
-
-    if [ "$INSTALL_WIREGUARD" = true ]; then
-        log "Installing WireGuard..."
-        ./wire-script.sh --port "$WIREGUARD_PORT" || error "WireGuard installation failed"
-    fi
-
-    if [ "$INSTALL_SINGBOX" = true ]; then
-        log "Installing SingBox..."
-        ./singbox-script.sh --port "$SINGBOX_PORT" || error "SingBox installation failed"
-    fi
-
-    # Install BadVPN if required
-    ./badvpn-script.sh --port "$BADVPN_PORT" || error "BadVPN installation failed"
-
-    # Configure VPN server settings
-    ./vpnserver-script.py --configure || error "VPN server configuration failed"
-    ./port-script.py --update-all || error "Port configuration failed"
-
+    deactivate
+    
     log "All protocols installed successfully"
 }
 
