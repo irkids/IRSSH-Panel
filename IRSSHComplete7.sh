@@ -365,22 +365,22 @@ install_protocols() {
     apt-get install -y consul || error "Failed to install Consul"
 
     log "Installing other required packages..."
-pip install --no-cache-dir \
-    asyncio \
-    prometheus_client \
-    psycopg2 \
-    pyyaml \
-    structlog \
-    websockets \
-    psutil \
-    chardet==4.0.0 \
-    requests==2.31.0 \
-    protobuf==3.20.0 \
-    grpcio==1.44.0 \
-    etcd3==0.12.0 \
-    python-consul==1.1.0 \
-    boto3==1.34.34 \
-    python-dotenv==1.0.0 || error "Failed to install Python packages"
+    log "Installing Python packages..."
+    pip install --no-cache-dir \
+        prometheus_client \
+        psycopg2-binary \
+        pyyaml \
+        structlog \
+        websockets \
+        psutil \
+        chardet==4.0.0 \
+        requests==2.31.0 \
+        protobuf==3.20.0 \
+        grpcio==1.44.0 \
+        etcd3==0.12.0 \
+        python-consul==1.1.0 \
+        boto3==1.34.34 \
+        python-dotenv==1.0.0 || error "Failed to install Python packages"
 
     # Verify installations
     log "Verifying package installations..."
