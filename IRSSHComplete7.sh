@@ -495,24 +495,30 @@ AcceptEnv LANG LC_*
 Subsystem       sftp    /usr/lib/openssh/sftp-server
 EOL
 
-    # Configure stunnel for SSH-TLS
+    # Configure stunnel
     mkdir -p /etc/stunnel
-    cat > /etc/stunnel/stunnel.conf << EOL
-cert = /etc/stunnel/stunnel.pem
-socket = a:SO_REUSEADDR=1
-socket = l:TCP_NODELAY=1
-socket = r:TCP_NODELAY=1
-
-[ssh-tls]
-accept = $SSH_TLS_PORT
-connect = 127.0.0.1:$SSH_PORT
-EOL
-
-    # Generate self-signed certificate for stunnel
     openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
         -keyout /etc/stunnel/stunnel.pem \
         -out /etc/stunnel/stunnel.pem \
         -subj "/CN=localhost" || error "Failed to generate SSL certificate"
+
+    chmod 600 /etc/stunnel/stunnel.pem
+
+    # Create stunnel configuration
+    cat > /etc/stunnel/stunnel.conf << EOL
+pid = /var/run/stunnel4/stunnel.pid
+cert = /etc/stunnel/stunnel.pem
+socket = l:TCP_NODELAY=1
+socket = r:TCP_NODELAY=1
+
+[ssh]
+accept = ${SSH_TLS_PORT}
+connect = 127.0.0.1:${SSH_PORT}
+EOL
+
+    # Create required directories
+    mkdir -p /var/run/stunnel4
+    chown stunnel4:stunnel4 /var/run/stunnel4
 
     # Configure WebSocket service
     cat > /etc/systemd/system/websocket.service << EOL
@@ -521,17 +527,19 @@ Description=WebSocket for SSH
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/websocat -t --binary-protocol ws-l:0.0.0.0:$WEBSOCKET_PORT tcp:127.0.0.1:$SSH_PORT
+ExecStart=/usr/local/bin/websocat -t --binary-protocol ws-l:0.0.0.0:${WEBSOCKET_PORT} tcp:127.0.0.1:${SSH_PORT}
 Restart=always
 
 [Install]
 WantedBy=multi-user.target
 EOL
 
-    # Enable and start services
+    # Reload systemd and enable services
     systemctl daemon-reload
-    systemctl enable stunnel4 websocket
-    systemctl restart ssh stunnel4
+    systemctl restart ssh
+    systemctl enable stunnel4
+    systemctl restart stunnel4
+    systemctl enable websocket
     systemctl start websocket
 
     log "SSH server configuration completed successfully"
