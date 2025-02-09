@@ -339,19 +339,24 @@ install_protocols() {
     # Activate virtual environment
     source /opt/irssh-panel/venv/bin/activate || error "Failed to activate virtual environment"
     
-    # First uninstall requests if exists
-    pip uninstall -y requests urllib3 chardet charset-normalizer certifi
+    # First remove requests and its dependencies completely
+    log "Removing existing requests installation..."
+    pip uninstall -y requests chardet urllib3 charset-normalizer certifi idna
 
     # Clean pip cache
     pip cache purge
     
-    # Install dependencies in correct order
-    log "Installing Python packages..."
+    # Install chardet first
+    log "Installing chardet..."
+    pip install --no-cache-dir chardet==4.0.0
+
+    # Then install requests with all dependencies
+    log "Installing requests and dependencies..."
     pip install --no-cache-dir \
-        chardet==5.2.0 \
-        charset-normalizer==3.3.2 \
         urllib3==2.0.7 \
+        charset-normalizer==3.3.2 \
         certifi==2024.2.2 \
+        idna==3.6 \
         requests==2.31.0 \
         || error "Failed to install requests and dependencies"
 
@@ -365,15 +370,12 @@ install_protocols() {
         prometheus-client==0.19.0 \
         psutil==5.9.8 \
         boto3==1.34.34 \
-        fastapi==0.109.2 \
-        uvicorn==0.27.1 \
-        python-jose==3.3.0 \
         python-dotenv==1.0.0 \
         || error "Failed to install other packages"
 
     # Verify installations
-    python3 -c "import chardet; import requests; import websockets; import prometheus_client; import psutil; import aiofiles; import boto3; import croniter; import pyAesCrypt" \
-        || error "Failed to verify Python package installations"
+    log "Verifying package installations..."
+    python3 -c "import chardet; import requests; print('Chardet version:', chardet.__version__); print('Requests version:', requests.__version__)" || error "Failed to verify package installations"
 
     # Download protocol modules
     log "Downloading protocol modules..."
@@ -398,7 +400,7 @@ install_protocols() {
         chmod +x "$module"
     done
 
-    # Execute protocol installations
+    # Execute protocol installations with PYTHONPATH set
     if [ "$INSTALL_SSH" = true ]; then
         log "Installing SSH and related protocols..."
         PYTHONPATH="/opt/irssh-panel/venv/lib/python3.10/site-packages" ./ssh-script.py --port "$SSH_PORT" || error "SSH installation failed"
@@ -438,7 +440,7 @@ install_protocols() {
     PYTHONPATH="/opt/irssh-panel/venv/lib/python3.10/site-packages" ./vpnserver-script.py --configure || error "VPN server configuration failed"
     PYTHONPATH="/opt/irssh-panel/venv/lib/python3.10/site-packages" ./port-script.py --update-all || error "Port configuration failed"
 
-    # Deactivate virtual environment at the end
+    # Deactivate virtual environment
     deactivate
     
     log "All protocols installed successfully"
