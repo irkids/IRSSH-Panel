@@ -341,6 +341,7 @@ install_protocols() {
     apt-get update
     apt-get install -y \
         python3-pip \
+        python3-dev \
         python3-websockets \
         python3-requests \
         python3-prometheus-client \
@@ -353,7 +354,6 @@ install_protocols() {
         python3-yaml \
         python3-fastapi \
         python3-uvicorn \
-        python3-asyncio \
         python3-aiohttp \
         python3-aiodns \
         python3-sqlalchemy \
@@ -363,27 +363,25 @@ install_protocols() {
         python3-elasticsearch \
         python3-grpcio \
         python3-protobuf \
-        python3-jose \
         python3-passlib \
         python3-bcrypt \
         python3-jwt \
         python3-pandas \
         python3-numpy \
-        python3-dateutil \
         python3-tz \
-        python3-aioredis \
-        python3-httpx \
-        python3-nacl \
-        python3-mysqldb \
         python3-dnspython \
         || error "Failed to install system Python packages"
 
-    # Then install remaining packages via pip
+    # Then install packages that are not available via apt
     log "Installing additional Python packages via pip..."
     python3 -m pip install --no-cache-dir \
         croniter \
         aiosignal \
         pycryptodomex \
+        asyncio \
+        python-jose \
+        aioredis \
+        httpx \
         || error "Failed to install additional Python packages"
     
     # Download protocol modules from GitHub
