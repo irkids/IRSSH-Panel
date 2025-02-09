@@ -331,13 +331,44 @@ WEB_PORT=443
 # Protocol Installation Function
 install_protocols() {
     log "Installing VPN protocols using project modules..."
+    
     # Create modules directory
     mkdir -p "$MODULES_DIR/protocols"
     cd "$MODULES_DIR/protocols" || error "Failed to access modules directory"
     
-    # Install required Python packages globally
+    # Install ALL required Python packages globally
     log "Installing required Python packages globally..."
-    python3 -m pip install websockets requests prometheus_client psutil aiofiles || error "Failed to install required Python packages"
+    python3 -m pip install \
+        websockets \
+        requests \
+        prometheus_client \
+        psutil \
+        aiofiles \
+        boto3 \
+        python-dotenv \
+        cryptography \
+        paramiko \
+        pyyaml \
+        fastapi \
+        uvicorn \
+        asyncio \
+        aiohttp \
+        aiodns \
+        aiosignal \
+        SQLAlchemy \
+        psycopg2-binary \
+        redis \
+        pymongo \
+        elasticsearch \
+        grpcio \
+        protobuf \
+        python-jose \
+        passlib \
+        bcrypt \
+        pyjwt \
+        pandas \
+        numpy \
+        || error "Failed to install required Python packages"
     
     # Download protocol modules from GitHub
     log "Downloading protocol modules..."
@@ -354,8 +385,9 @@ install_protocols() {
         "dropbear-script.sh"
         "webport-script.sh"
     )
-    
+
     REPO_URL="https://raw.githubusercontent.com/irkids/IRSSH-Panel/master/scripts/modules"
+
     for module in "${MODULES[@]}"; do
         wget "$REPO_URL/$module" -O "$module" || error "Failed to download $module"
         chmod +x "$module"
@@ -368,8 +400,6 @@ install_protocols() {
         ./dropbear-script.sh --port "$DROPBEAR_PORT" || error "Dropbear installation failed"
         ./webport-script.sh --port "$WEBSOCKET_PORT" || error "WebSocket installation failed"
     fi
-
-    # Rest of the function remains the same...
 
     if [ "$INSTALL_L2TP" = true ]; then
         log "Installing L2TP/IPsec..."
