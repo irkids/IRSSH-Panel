@@ -745,6 +745,27 @@ EOL
 
    # Install dependencies
    npm install || error "Frontend dependency installation failed"
+   npm install @vitejs/plugin-react-swc --save-dev || error "Frontend dependency installation failed"
+
+   # Create vite config
+   cat > vite.config.ts << 'EOL'
+   import { defineConfig } from 'vite'
+   import react from '@vitejs/plugin-react-swc'
+   import path from 'path'
+
+   export default defineConfig({
+  plugins: [react()],
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+  }
+})
+EOL
 
    # Create directory structure
    mkdir -p src/{components/layout,pages,context,lib} || error "Failed to create directory structure"
