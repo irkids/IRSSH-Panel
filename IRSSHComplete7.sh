@@ -749,8 +749,10 @@ EOL
    # Create directory structure
    mkdir -p src/{components/layout,pages,context,lib} || error "Failed to create directory structure"
 
-   # Create MainLayout component
+       # Create MainLayout component
     cat > src/components/layout/MainLayout.tsx << 'EOL'
+import { Outlet } from 'react-router-dom';
+
 const MainLayout = () => {
   return (
     <div className="min-h-screen bg-white dark:bg-gray-900">
