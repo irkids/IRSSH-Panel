@@ -520,7 +520,7 @@ output = /var/log/stunnel4/stunnel.log
 
 [ssh-tls]
 client = no
-accept = 443
+accept = 4433
 connect = 127.0.0.1:22
 EOL
 
@@ -758,7 +758,11 @@ setup_frontend() {
 EOL
 
     # Install dependencies
-    npm install --legacy-peer-deps || error "Frontend dependency installation failed"
+    npm install @vitejs/plugin-react @types/node @types/react @types/react-dom --save-dev || error "Frontend dependency installation failed"
+
+    # Copy config files from GitHub
+    wget -O tailwind.config.js "https://raw.githubusercontent.com/irkids/IRSSH-Panel/main/frontend/tailwind.config.js" || error "Failed to download tailwind config"
+    wget -O postcss.config.js "https://raw.githubusercontent.com/irkids/IRSSH-Panel/main/frontend/postcss.config.js" || error "Failed to download postcss config"
 
     # Setup TypeScript
     setup_typescript
