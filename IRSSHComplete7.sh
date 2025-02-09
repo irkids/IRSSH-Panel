@@ -331,15 +331,14 @@ WEB_PORT=443
 # Protocol Installation Function
 install_protocols() {
     log "Installing VPN protocols using project modules..."
-
     # Create modules directory
     mkdir -p "$MODULES_DIR/protocols"
     cd "$MODULES_DIR/protocols" || error "Failed to access modules directory"
-
+    
     # Install required Python packages globally
     log "Installing required Python packages globally..."
-    python3 -m pip install websockets requests prometheus_client psutil || error "Failed to install required Python packages"
-
+    python3 -m pip install websockets requests prometheus_client psutil aiofiles || error "Failed to install required Python packages"
+    
     # Download protocol modules from GitHub
     log "Downloading protocol modules..."
     MODULES=(
@@ -355,15 +354,12 @@ install_protocols() {
         "dropbear-script.sh"
         "webport-script.sh"
     )
-
+    
     REPO_URL="https://raw.githubusercontent.com/irkids/IRSSH-Panel/master/scripts/modules"
-
     for module in "${MODULES[@]}"; do
         wget "$REPO_URL/$module" -O "$module" || error "Failed to download $module"
         chmod +x "$module"
     done
-
-python3 -m pip install websockets requests prometheus_client psutil || error "Failed to install required Python packages"
 
     # Execute protocol installations
     if [ "$INSTALL_SSH" = true ]; then
