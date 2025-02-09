@@ -364,7 +364,7 @@ install_protocols() {
     log "Installing Consul..."
     apt-get install -y consul || error "Failed to install Consul"
 
-    # Install other required packages
+       # Install other required packages
     log "Installing other required packages..."
     pip install --no-cache-dir \
         websockets==12.0 \
@@ -376,7 +376,8 @@ install_protocols() {
         boto3==1.34.34 \
         python-dotenv==1.0.0 \
         python-consul==1.1.0 \
-        || error "Failed to install other packages"
+        requests==2.31.0 \
+        chardet==4.0.0 || error "Failed to install other packages"
 
     # Verify installations
     log "Verifying package installations..."
