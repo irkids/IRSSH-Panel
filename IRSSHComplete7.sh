@@ -331,7 +331,14 @@ WEB_PORT=443
 # Protocol Installation Function
 install_protocols() {
     log "Installing VPN protocols using project modules..."
-    
+        log "Creating temporary haproxy_api module..."
+    cat > "/opt/irssh-panel/venv/lib/python3.10/site-packages/haproxy_api.py" << EOL
+  # Temporary module for compatibility
+  class HAProxy:
+    def __init__(self):
+        pass
+  EOL
+
     # Create modules directory
     mkdir -p "$MODULES_DIR/protocols"
     cd "$MODULES_DIR/protocols" || error "Failed to access modules directory"
