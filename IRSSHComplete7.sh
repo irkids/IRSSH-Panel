@@ -342,49 +342,69 @@ install_protocols() {
     apt-get install -y \
         python3-pip \
         python3-dev \
-        python3-websockets \
+        python3-venv \
+        build-essential \
+        libssl-dev \
+        libffi-dev \
+        python3-setuptools \
+        python3-wheel \
+        python3-chardet \
         python3-requests \
-        python3-prometheus-client \
-        python3-psutil \
-        python3-aiofiles \
-        python3-boto3 \
-        python3-dotenv \
+        python3-urllib3 \
+        python3-six \
         python3-cryptography \
-        python3-paramiko \
+        python3-openssl \
         python3-yaml \
-        python3-fastapi \
-        python3-uvicorn \
-        python3-aiohttp \
-        python3-aiodns \
+        python3-paramiko \
+        python3-psutil \
+        python3-prometheus-client \
         python3-sqlalchemy \
         python3-psycopg2 \
         python3-redis \
         python3-pymongo \
-        python3-elasticsearch \
-        python3-grpcio \
-        python3-protobuf \
-        python3-passlib \
-        python3-bcrypt \
-        python3-jwt \
+        python3-boto3 \
         python3-pandas \
         python3-numpy \
-        python3-tz \
         python3-dnspython \
         || error "Failed to install system Python packages"
 
-    # Then install packages that are not available via apt
-    log "Installing additional Python packages via pip..."
+    # Then install Python packages via pip
+    log "Installing Python packages via pip..."
     python3 -m pip install --no-cache-dir \
-        croniter \
-        aiosignal \
-        pycryptodomex \
-        asyncio \
-        python-jose \
-        aioredis \
-        httpx \
-        pyAesCrypt \
-        || error "Failed to install additional Python packages"
-    
+        websockets==14.2 \
+        aiofiles==24.1.0 \
+        chardet==5.2.0 \
+        croniter==6.0.0 \
+        pyAesCrypt==6.1.1 \
+        aiomysql==0.2.0 \
+        aiosignal==1.3.1 \
+        fastapi==0.115.8 \
+        uvicorn==0.34.0 \
+        python-jose==3.3.0 \
+        python-dotenv==1.0.1 \
+        aiohttp==3.9.3 \
+        aiodns==3.1.1 \
+        httpx==0.27.0 \
+        pycryptodomex==3.20.0 \
+        elasticsearch==8.17.1 \
+        grpcio==1.65.5 \
+        protobuf==5.29.3 \
+        passlib==1.7.4 \
+        bcrypt==4.2.1 \
+        pyjwt==2.10.1 \
+        aioredis==2.0.1 \
+        starlette==0.45.3 \
+        || error "Failed to install Python packages via pip"
+
+    # Create symbolic links if needed
+    PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
+    SITE_PACKAGES="/usr/local/lib/python${PYTHON_VERSION}/dist-packages"
+    mkdir -p "$SITE_PACKAGES"
+
+    # Verify installations
+    python3 -c "import websockets, requests, prometheus_client, psutil, aiofiles, boto3, croniter, pyAesCrypt, chardet" \
+        || error "Failed to verify Python package installations"
+
     # Download protocol modules from GitHub
     log "Downloading protocol modules..."
     MODULES=(
