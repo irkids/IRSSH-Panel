@@ -364,9 +364,12 @@ install_protocols() {
     log "Installing Consul..."
     apt-get install -y consul || error "Failed to install Consul"
 
-       # Install other required packages
+    # Install other required packages
     log "Installing other required packages..."
     pip install --no-cache-dir \
+        protobuf==3.20.0 \
+        grpcio==1.44.0 \
+        etcd3==0.12.0 \
         websockets==12.0 \
         aiofiles==23.2.1 \
         croniter==2.0.1 \
