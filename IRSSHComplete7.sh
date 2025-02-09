@@ -382,6 +382,7 @@ install_protocols() {
         python-jose \
         aioredis \
         httpx \
+        pyAesCrypt \
         || error "Failed to install additional Python packages"
     
     # Download protocol modules from GitHub
