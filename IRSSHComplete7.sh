@@ -365,23 +365,22 @@ install_protocols() {
     apt-get install -y consul || error "Failed to install Consul"
 
     log "Installing other required packages..."
-    pip install --no-cache-dir \
-        protobuf==3.20.0 \
-        grpcio==1.44.0 \
-        etcd3==0.12.0 \
-        websockets==12.0 \
-        aiofiles==23.2.1 \
-        croniter==2.0.1 \
-        pyAesCrypt==6.1.1 \
-        prometheus-client==0.19.0 \
-        psutil==5.9.8 \
-        boto3==1.34.34 \
-        python-dotenv==1.0.0 \
-        python-consul==1.1.0 \
-        requests==2.31.0 \
-        chardet==4.0.0 \
-        haproxy-api==1.0.0 \
-        haproxyadmin==0.2.4 || error "Failed to install other packages"
+pip install --no-cache-dir \
+    asyncio \
+    prometheus_client \
+    psycopg2 \
+    pyyaml \
+    structlog \
+    websockets \
+    psutil \
+    chardet==4.0.0 \
+    requests==2.31.0 \
+    protobuf==3.20.0 \
+    grpcio==1.44.0 \
+    etcd3==0.12.0 \
+    python-consul==1.1.0 \
+    boto3==1.34.34 \
+    python-dotenv==1.0.0 || error "Failed to install Python packages"
 
     # Verify installations
     log "Verifying package installations..."
