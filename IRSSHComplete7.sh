@@ -368,6 +368,15 @@ install_protocols() {
         pyjwt \
         pandas \
         numpy \
+        croniter \
+        python-dateutil \
+        pytz \
+        aioredis \
+        httpx \
+        pycryptodomex \
+        pynacl \
+        aiomysql \
+        dnspython \
         || error "Failed to install required Python packages"
     
     # Download protocol modules from GitHub
