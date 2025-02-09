@@ -288,13 +288,7 @@ setup_python_environment() {
         redis \
         pymongo \
         elasticsearch || error "Failed to install primary Python packages"
-
-     # Deactivate virtual environment after installation
-        deactivate
-
-    # Install Consul
-    apt-get install -y consul
-    
+  
     # Verify the installation using the virtual environment's Python
     "$PANEL_DIR/venv/bin/python3" -c "import urllib3, requests, prometheus_client, psutil" || error "Failed to verify Python packages"
     
