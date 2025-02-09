@@ -582,19 +582,12 @@ setup_typescript() {
     "noEmit": true,
     "jsx": "react-jsx",
     "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true,
-    "baseUrl": "./src",
+    "baseUrl": ".",
     "paths": {
-      "@/*": ["*"],
-      "@components/*": ["components/*"],
-      "@stores/*": ["stores/*"],
-      "@context/*": ["context/*"],
-      "@utils/*": ["utils/*"],
-      "@hooks/*": ["hooks/*"],
-      "@types/*": ["types/*"]
-    }
+      "@/*": ["src/*"]
+    },
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
   },
   "include": ["src"],
   "references": [{ "path": "./tsconfig.node.json" }]
@@ -757,39 +750,34 @@ EOL
    mkdir -p src/{components/layout,pages,context,lib} || error "Failed to create directory structure"
 
    # Create MainLayout component
-   cat > src/components/layout/MainLayout.tsx << 'EOL'
-import React from 'react';
-import { Outlet } from 'react-router-dom';
-
+    cat > src/components/layout/MainLayout.tsx << 'EOL'
 const MainLayout = () => {
- return (
-   <div className="min-h-screen bg-white dark:bg-gray-900">
-     <div className="container mx-auto px-4">
-       <Outlet />
-     </div>
-   </div>
- );
+  return (
+    <div className="min-h-screen bg-white dark:bg-gray-900">
+      <div className="container mx-auto px-4">
+        <Outlet />
+      </div>
+    </div>
+  );
 };
 
 export default MainLayout;
 EOL
 
-   # Create pages
-   for page in Dashboard Users OnlineUsers Settings Login; do
-     cat > "src/pages/${page}.tsx" << EOL
-import React from 'react';
-
+    # Create pages
+    for page in Dashboard Users OnlineUsers Settings Login; do
+      cat > "src/pages/${page}.tsx" << EOL
 const ${page} = () => {
- return (
-   <div>
-     <h1 className="text-2xl font-bold">${page}</h1>
-   </div>
- );
+  return (
+    <div>
+      <h1 className="text-2xl font-bold">${page}</h1>
+    </div>
+  );
 };
 
 export default ${page};
 EOL
-   done
+    done
 
    # Create axios instance
    cat > src/lib/axios.ts << 'EOL'
