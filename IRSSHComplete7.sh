@@ -364,7 +364,14 @@ install_protocols() {
     log "Installing Consul..."
     apt-get install -y consul || error "Failed to install Consul"
 
-    log "Installing other required packages..."
+# First remove asyncio if installed in venv
+    log "Cleaning up existing packages..."
+    pip uninstall -y asyncio
+
+    # Then remove the entire asyncio directory from venv if exists
+    rm -rf /opt/irssh-panel/venv/lib/python3.10/site-packages/asyncio
+
+    # Install required packages
     log "Installing Python packages..."
     pip install --no-cache-dir \
         prometheus_client \
