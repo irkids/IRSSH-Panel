@@ -710,107 +710,297 @@ const useThemeStore = create<ThemeState>()(
 export default useThemeStore;
 EOL
 }
-
 setup_frontend() {
-    log "Setting up frontend application..."
-    cd "$FRONTEND_DIR" || error "Failed to access frontend directory"
+   log "Setting up frontend application..."
+   cd "$FRONTEND_DIR" || error "Failed to access frontend directory"
 
-    # Create package.json
-    cat > package.json << 'EOL'
+   # Create package.json
+   cat > package.json << 'EOL'
 {
-  "name": "irssh-panel-frontend",
-  "version": "3.5.0",
-  "private": true,
-  "dependencies": {
-    "@headlessui/react": "^1.7.17",
-    "@heroicons/react": "^2.0.18",
-    "axios": "^1.6.2",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-router-dom": "^6.21.0",
-    "recharts": "^2.10.3",
-    "zustand": "^4.4.7",
-    "clsx": "^2.0.0",
-    "@types/node": "^20.10.4",
-    "@types/react": "^18.2.45",
-    "@types/react-dom": "^18.2.17",
-    "typescript": "^5.3.3"
-  },
-  "devDependencies": {
-    "@typescript-eslint/eslint-plugin": "^6.14.0",
-    "@typescript-eslint/parser": "^6.14.0",
-    "@vitejs/plugin-react-swc": "^3.5.0",
-    "autoprefixer": "^10.4.16",
-    "eslint": "^8.55.0",
-    "eslint-plugin-react-hooks": "^4.6.0",
-    "eslint-plugin-react-refresh": "^0.4.5",
-    "postcss": "^8.4.32",
-    "tailwindcss": "^3.3.6",
-    "vite": "^5.0.7"
-  },
-  "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "lint": "eslint src --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "preview": "vite preview"
-  }
+ "name": "irssh-panel-frontend",
+ "version": "3.5.0",
+ "private": true,
+ "scripts": {
+   "dev": "vite",
+   "build": "tsc && vite build",
+   "preview": "vite preview"
+ },
+ "dependencies": {
+   "@headlessui/react": "^1.7.17",
+   "@heroicons/react": "^2.0.18", 
+   "axios": "^1.6.2",
+   "react": "^18.2.0",
+   "react-dom": "^18.2.0",
+   "react-router-dom": "^6.21.0",
+   "react-query": "^3.39.3",
+   "react-hot-toast": "^2.4.1",
+   "zustand": "^4.4.7"
+ },
+ "devDependencies": {
+   "@vitejs/plugin-react": "^4.2.1",
+   "@types/node": "^20.10.4",
+   "@types/react": "^18.2.45",
+   "@types/react-dom": "^18.2.17",
+   "typescript": "^5.3.3",
+   "autoprefixer": "^10.4.16",
+   "postcss": "^8.4.32",
+   "tailwindcss": "^3.3.6",
+   "vite": "^5.0.7"
+ }
 }
 EOL
 
-    # Install dependencies
-    npm install @vitejs/plugin-react @types/node @types/react @types/react-dom --save-dev || error "Frontend dependency installation failed"
+   # Install dependencies
+   npm install || error "Frontend dependency installation failed"
 
-    # Copy config files from GitHub
-    wget -O tailwind.config.js "https://raw.githubusercontent.com/irkids/IRSSH-Panel/main/frontend/tailwind.config.js" || error "Failed to download tailwind config"
-    wget -O postcss.config.js "https://raw.githubusercontent.com/irkids/IRSSH-Panel/main/frontend/postcss.config.js" || error "Failed to download postcss config"
+   # Create directory structure
+   mkdir -p src/{components/layout,pages,context,lib} || error "Failed to create directory structure"
 
-    # Setup TypeScript
-    setup_typescript
+   # Create MainLayout component
+   cat > src/components/layout/MainLayout.tsx << 'EOL'
+import React from 'react';
+import { Outlet } from 'react-router-dom';
 
-    # Setup stores
-    setup_stores
+const MainLayout = () => {
+ return (
+   <div className="min-h-screen bg-white dark:bg-gray-900">
+     <div className="container mx-auto px-4">
+       <Outlet />
+     </div>
+   </div>
+ );
+};
 
-    # Build frontend
-    npm run build || error "Frontend build failed"
+export default MainLayout;
+EOL
+
+   # Create pages
+   for page in Dashboard Users OnlineUsers Settings Login; do
+     cat > "src/pages/${page}.tsx" << EOL
+import React from 'react';
+
+const ${page} = () => {
+ return (
+   <div>
+     <h1 className="text-2xl font-bold">${page}</h1>
+   </div>
+ );
+};
+
+export default ${page};
+EOL
+   done
+
+   # Create axios instance
+   cat > src/lib/axios.ts << 'EOL'
+import axios from 'axios';
+
+const instance = axios.create({
+   baseURL: '/api',
+   headers: {
+       'Content-Type': 'application/json',
+   },
+});
+
+export default instance;
+EOL
+
+   # Create AuthContext
+   cat > src/context/AuthContext.tsx << 'EOL'
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import axios from '../lib/axios';
+import { toast } from 'react-hot-toast';
+
+interface User {
+   id: string;
+   username: string;
+   email?: string;
+   role: string;
 }
 
-setup_backend() {
-    log "Setting up backend server..."
-    cd "$BACKEND_DIR" || error "Failed to access backend directory"
+interface AuthContextType {
+   user: User | null;
+   isAuthenticated: boolean;
+   isLoading: boolean;
+   login: (username: string, password: string) => Promise<void>;
+   logout: () => Promise<void>;
+   updateUser: (data: Partial<User>) => Promise<void>;
+}
 
-    # Create package.json for backend
-    cat > package.json << 'EOL'
-{
-  "name": "irssh-panel-backend",
-  "version": "3.5.0",
-  "private": true,
-  "scripts": {
-    "start": "node src/index.js",
-    "start:dev": "nodemon src/index.js",
-    "test": "jest",
-    "lint": "eslint ."
-  },
-  "dependencies": {
-    "express": "^4.18.2",
-    "mongoose": "^8.0.3",
-    "jsonwebtoken": "^9.0.2",
-    "bcryptjs": "^2.4.3",
-    "cors": "^2.8.5",
-    "dotenv": "^16.3.1",
-    "helmet": "^7.1.0",
-    "winston": "^3.11.0",
-    "express-validator": "^7.0.1",
-    "express-rate-limit": "^7.1.5",
-    "compression": "^1.7.4"
-  },
-  "devDependencies": {
-    "nodemon": "^3.0.2",
-    "jest": "^29.7.0",
-    "supertest": "^6.3.3",
-    "eslint": "^8.55.0"
-  }
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+   const [user, setUser] = useState<User | null>(null);
+   const [isLoading, setIsLoading] = useState(true);
+   const navigate = useNavigate();
+
+   useEffect(() => {
+       checkAuth();
+   }, []);
+
+   const checkAuth = async () => {
+       try {
+           const token = localStorage.getItem('token');
+           if (!token) {
+               setIsLoading(false);
+               return;
+           }
+
+           const response = await axios.get('/auth/me');
+           setUser(response.data);
+       } catch (error) {
+           localStorage.removeItem('token');
+           setUser(null);
+       } finally {
+           setIsLoading(false);
+       }
+   };
+
+   const login = async (username: string, password: string) => {
+       try {
+           setIsLoading(true);
+           const response = await axios.post('/auth/login', { username, password });
+           const { token, user } = response.data;
+
+           localStorage.setItem('token', token);
+           setUser(user);
+           
+           axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+           
+           navigate('/dashboard');
+           toast.success('Login successful');
+       } catch (error: any) {
+           const message = error.response?.data?.message || 'Login failed';
+           toast.error(message);
+           throw error;
+       } finally {
+           setIsLoading(false);
+       }
+   };
+
+   const logout = async () => {
+       try {
+           await axios.post('/auth/logout');
+       } catch (error) {
+           console.error('Logout error:', error);
+       } finally {
+           localStorage.removeItem('token');
+           delete axios.defaults.headers.common['Authorization'];
+           setUser(null);
+           navigate('/login');
+           toast.success('Logged out successfully');
+       }
+   };
+
+   const updateUser = async (data: Partial<User>) => {
+       try {
+           const response = await axios.put(`/users/${user?.id}`, data);
+           setUser(response.data);
+           toast.success('Profile updated successfully');
+       } catch (error: any) {
+           const message = error.response?.data?.message || 'Update failed';
+           toast.error(message);
+           throw error;
+       }
+   };
+
+   return (
+       <AuthContext.Provider 
+           value={{
+               user,
+               isAuthenticated: !!user,
+               isLoading,
+               login,
+               logout,
+               updateUser
+           }}
+       >
+           {!isLoading && children}
+       </AuthContext.Provider>
+   );
+}
+
+export function useAuth() {
+   const context = useContext(AuthContext);
+   if (context === undefined) {
+       throw new Error('useAuth must be used within an AuthProvider');
+   }
+   return context;
+}
+
+axios.interceptors.response.use(
+   (response) => response,
+   async (error) => {
+       if (error.response?.status === 401) {
+           localStorage.removeItem('token');
+           window.location.href = '/login';
+       }
+       return Promise.reject(error);
+   }
+);
+EOL
+
+   # Create ThemeContext
+   cat > src/context/ThemeContext.tsx << 'EOL'
+import React, { createContext, useContext, useState, useEffect } from 'react';
+
+type Theme = 'light' | 'dark' | 'system';
+type ThemeContextType = {
+   theme: Theme;
+   setTheme: (theme: Theme) => void;
+};
+
+const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
+
+export function ThemeProvider({ children }: { children: React.ReactNode }) {
+   const [theme, setTheme] = useState<Theme>(() => {
+       const storedTheme = localStorage.getItem('theme') as Theme;
+       return storedTheme || 'system';
+   });
+
+   useEffect(() => {
+       const root = window.document.documentElement;
+       
+       if (theme === 'system') {
+           const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches
+               ? 'dark'
+               : 'light';
+           root.classList.remove('light', 'dark');
+           root.classList.add(systemTheme);
+       } else {
+           root.classList.remove('light', 'dark');
+           root.classList.add(theme);
+       }
+       
+       localStorage.setItem('theme', theme);
+   }, [theme]);
+
+   return (
+       <ThemeContext.Provider value={{ theme, setTheme }}>
+           {children}
+       </ThemeContext.Provider>
+   );
+}
+
+export function useTheme() {
+   const context = useContext(ThemeContext);
+   if (context === undefined) {
+       throw new Error('useTheme must be used within a ThemeProvider');
+   }
+   return context;
 }
 EOL
+
+   # Setup TypeScript
+   setup_typescript
+
+   # Setup stores
+   setup_stores
+
+   # Build frontend
+   npm run build || error "Frontend build failed"
+}
 
     # Install backend dependencies
     npm install || error "Backend dependency installation failed"
