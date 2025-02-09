@@ -360,6 +360,10 @@ install_protocols() {
         requests==2.31.0 \
         || error "Failed to install requests and dependencies"
 
+    # Install Consul if needed
+    log "Installing Consul..."
+    apt-get install -y consul || error "Failed to install Consul"
+
     # Install other required packages
     log "Installing other required packages..."
     pip install --no-cache-dir \
@@ -371,6 +375,7 @@ install_protocols() {
         psutil==5.9.8 \
         boto3==1.34.34 \
         python-dotenv==1.0.0 \
+        python-consul==1.1.0 \        # Added this line
         || error "Failed to install other packages"
 
     # Verify installations
