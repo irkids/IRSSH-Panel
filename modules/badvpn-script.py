@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
 
+import os
+import sys
+import subprocess
+import shutil
+import logging
+import psycopg2
+from datetime import datetime
+import socket
+import re
+
 # Advanced Logging Configuration
 logging.basicConfig(
     level=logging.INFO, 
