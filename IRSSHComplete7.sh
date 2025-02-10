@@ -1,5 +1,40 @@
 #!/bin/bash
 
+check_existing_components() {
+    log "Checking existing components..."
+    local COMPONENTS=(
+        ["Frontend"]="/opt/irssh-panel/frontend/package.json"
+        ["Backend"]="/opt/irssh-panel/backend/package.json"
+        ["PostgreSQL"]="postgresql"
+        ["Nginx"]="nginx"
+        ["Node.js"]="nodejs"
+        ["Python3"]="python3"
+    )
+
+    for component in "${!COMPONENTS[@]}"; do
+        local installed=false
+        if [[ ${COMPONENTS[$component]} == *"/"* ]]; then
+            # Check files
+            if [ -f "${COMPONENTS[$component]}" ]; then
+                installed=true
+            fi
+        else
+            # Check packages
+            if dpkg -l | grep -q "^ii  ${COMPONENTS[$component]} "; then
+                installed=true
+            fi
+        fi
+
+        if [ "$installed" = true ]; then
+            read -p "$component is already installed. Skip installation? [Y/n] " choice
+            choice=${choice:-Y}
+            if [[ $choice =~ ^[Yy]$ ]]; then
+                declare -g "SKIP_${component//-/_}_INSTALL=true"
+            fi
+        fi
+    done
+}
+
 read -p "Enter custom port for web panel (4-5 digits) or press Enter for random port: " WEB_PORT
 if [ -z "$WEB_PORT" ]; then
     # Generate random port between 1234 and 65432
@@ -1129,6 +1164,15 @@ EOL
 setup_nginx() {
     log "Configuring Nginx..."
 
+    # Stop any service using required ports
+    fuser -k "${WEB_PORT}/tcp" 2>/dev/null || true
+    systemctl stop nginx
+
+    # Check for existing configuration
+    if [ -f "/etc/nginx/sites-enabled/default" ]; then
+        rm -f /etc/nginx/sites-enabled/default
+    fi
+
     # Create Nginx configuration
     cat > /etc/nginx/sites-available/irssh-panel << EOL
 server {
@@ -1161,32 +1205,27 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_cache_bypass \$http_upgrade;
     }
-
-    # Additional security headers
-    add_header X-Frame-Options "SAMEORIGIN";
-    add_header X-XSS-Protection "1; mode=block";
-    add_header X-Content-Type-Options "nosniff";
 }
 EOL
-
-    # Update firewall rules for web port
-    ufw allow ${WEB_PORT}/tcp
-
-    # Enable site and remove default
-    rm -f /etc/nginx/sites-enabled/default
-    ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
 
     # Set correct permissions
     chown -R www-data:www-data ${FRONTEND_DIR}/dist
     chmod -R 755 ${FRONTEND_DIR}/dist
 
+    # Enable site configuration
+    ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
+
     # Test configuration
     nginx -t || error "Nginx configuration test failed"
 
-    # Restart Nginx
-    systemctl restart nginx || error "Failed to restart Nginx"
+    # Start Nginx with debug output
+    systemctl start nginx || {
+        log "Nginx failed to start. Checking logs..."
+        journalctl -xe --unit=nginx.service
+        error "Failed to start Nginx. See logs above."
+    }
 
-    log "Nginx configuration completed with port ${WEB_PORT}"
+    log "Nginx configuration completed successfully"
 }
 
 verify_installation() {
@@ -1433,25 +1472,27 @@ main() {
     
     log "Starting IRSSH Panel installation v3.5.0"
     
+    check_existing_components  # Add this line
+    
     check_requirements
     create_backup
     setup_directories
-    install_dependencies
-    setup_python_environment
+    [ "${SKIP_Python3_INSTALL}" != "true" ] && install_dependencies
+    [ "${SKIP_Python3_INSTALL}" != "true" ] && setup_python_environment
     generate_secrets
-    setup_database
+    [ "${SKIP_PostgreSQL_INSTALL}" != "true" ] && setup_database
     install_protocols
-    setup_typescript
-    setup_stores
-    setup_frontend
-    setup_backend
-    setup_nginx
+    [ "${SKIP_Frontend_INSTALL}" != "true" ] && setup_typescript
+    [ "${SKIP_Frontend_INSTALL}" != "true" ] && setup_stores
+    [ "${SKIP_Frontend_INSTALL}" != "true" ] && setup_frontend
+    [ "${SKIP_Backend_INSTALL}" != "true" ] && setup_backend
+    [ "${SKIP_Nginx_INSTALL}" != "true" ] && setup_nginx
     setup_ssl
     setup_firewall
     setup_security
     setup_cron
     verify_installation
-    save_installation_info
+    save_installation_inf
     
     log "Installation completed successfully!"
     
