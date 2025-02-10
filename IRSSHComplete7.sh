@@ -1,57 +1,11 @@
 #!/bin/bash
 
-check_existing_components() {
-    log "Checking existing components..."
-    
-    # Check Frontend
-    if [ -f "/opt/irssh-panel/frontend/package.json" ]; then
-        read -p "Frontend is already installed. Skip installation? [Y/n] " choice
-        choice=${choice:-Y}
-        if [[ $choice =~ ^[Yy]$ ]]; then
-            SKIP_FRONTEND_INSTALL=true
-        fi
+# IRSSH Panel Complete Installation Script
+# Version: 3.5.0
 
-    # Check Backend
-    if [ -f "/opt/irssh-panel/backend/package.json" ]; then
-        read -p "Backend is already installed. Skip installation? [Y/n] " choice
-        choice=${choice:-Y}
-        if [[ $choice =~ ^[Yy]$ ]]; then
-            SKIP_BACKEND_INSTALL=true
-        fi
+WEB_PORT=""
 
-    # Check PostgreSQL
-    if dpkg -l | grep -q "^ii  postgresql "; then
-        read -p "PostgreSQL is already installed. Skip installation? [Y/n] " choice
-        choice=${choice:-Y}
-        if [[ $choice =~ ^[Yy]$ ]]; then
-            SKIP_POSTGRESQL_INSTALL=true
-        fi
-
-    # Check Nginx
-    if dpkg -l | grep -q "^ii  nginx "; then
-        read -p "Nginx is already installed. Skip installation? [Y/n] " choice
-        choice=${choice:-Y}
-        if [[ $choice =~ ^[Yy]$ ]]; then
-            SKIP_NGINX_INSTALL=true
-        fi
-
-    # Check NodeJS
-    if dpkg -l | grep -q "^ii  nodejs "; then
-        read -p "NodeJS is already installed. Skip installation? [Y/n] " choice
-        choice=${choice:-Y}
-        if [[ $choice =~ ^[Yy]$ ]]; then
-            SKIP_NODEJS_INSTALL=true
-        fi
-
-    # Check Python3
-    if dpkg -l | grep -q "^ii  python3 "; then
-        read -p "Python3 is already installed. Skip installation? [Y/n] " choice
-        choice=${choice:-Y}
-        if [[ $choice =~ ^[Yy]$ ]]; then
-            SKIP_PYTHON_INSTALL=true
-        fi
-}
-
+# Ask for web port
 read -p "Enter custom port for web panel (4-5 digits) or press Enter for random port: " WEB_PORT
 if [ -z "$WEB_PORT" ]; then
     # Generate random port between 1234 and 65432
@@ -67,8 +21,65 @@ else
     fi
 fi
 
-# IRSSH Panel Complete Installation Script
-# Version: 3.5.0
+# Add these variables at the start
+SKIP_FRONTEND_INSTALL=false
+SKIP_BACKEND_INSTALL=false
+SKIP_POSTGRESQL_INSTALL=false
+SKIP_NGINX_INSTALL=false
+SKIP_NODEJS_INSTALL=false
+SKIP_PYTHON_INSTALL=false
+
+check_existing_components() {
+    log "Checking existing components..."
+    
+    if command -v nginx >/dev/null 2>&1; then
+        read -p "Nginx is already installed. Skip installation? [Y/n] " choice
+        choice=${choice:-Y}
+        if [[ $choice =~ ^[Yy]$ ]]; then
+            SKIP_NGINX_INSTALL=true
+        fi
+    fi
+
+    if command -v node >/dev/null 2>&1; then
+        read -p "NodeJS is already installed. Skip installation? [Y/n] " choice
+        choice=${choice:-Y}
+        if [[ $choice =~ ^[Yy]$ ]]; then
+            SKIP_NODEJS_INSTALL=true
+        fi
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+        read -p "Python3 is already installed. Skip installation? [Y/n] " choice
+        choice=${choice:-Y}
+        if [[ $choice =~ ^[Yy]$ ]]; then
+            SKIP_PYTHON_INSTALL=true
+        fi
+    fi
+
+    if command -v psql >/dev/null 2>&1; then
+        read -p "PostgreSQL is already installed. Skip installation? [Y/n] " choice
+        choice=${choice:-Y}
+        if [[ $choice =~ ^[Yy]$ ]]; then
+            SKIP_POSTGRESQL_INSTALL=true
+        fi
+    fi
+
+    if [ -d "/opt/irssh-panel/frontend" ]; then
+        read -p "Frontend is already installed. Skip installation? [Y/n] " choice
+        choice=${choice:-Y}
+        if [[ $choice =~ ^[Yy]$ ]]; then
+            SKIP_FRONTEND_INSTALL=true
+        fi
+    fi
+
+    if [ -d "/opt/irssh-panel/backend" ]; then
+        read -p "Backend is already installed. Skip installation? [Y/n] " choice
+        choice=${choice:-Y}
+        if [[ $choice =~ ^[Yy]$ ]]; then
+            SKIP_BACKEND_INSTALL=true
+        fi
+    fi
+}
 
 # Exit on error
 set -e
