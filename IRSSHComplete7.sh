@@ -473,7 +473,7 @@ log "Installing VPN protocols using project modules..."
     # Execute protocol installations with activated venv
     if [ "$INSTALL_SSH" = true ]; then
         log "Installing SSH and related protocols..."
-        PYTHONPATH="/opt/irssh-panel/venv/lib/python3.10/site-packages" python3 ./ssh-script.py --port "$SSH_PORT" || error "SSH installation failed"
+        PYTHONPATH="/opt/irssh-panel/venv/lib/python3.8/site-packages" python3 ./ssh-script.py --port "$SSH_PORT" || error "SSH installation failed"
         ./dropbear-script.sh --port "$DROPBEAR_PORT" || error "Dropbear installation failed"
         ./webport-script.sh --port "$WEBSOCKET_PORT" || error "WebSocket installation failed"
     fi
