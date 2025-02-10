@@ -383,87 +383,30 @@ WEB_PORT=443
 # Protocol Installation Function
 install_protocols() {
     log "Installing VPN protocols using project modules..."
-            log "Creating temporary haproxy_api module..."
-    # Get Python version
+    
+    # Create temporary haproxy_api
     PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
-    SITE_PACKAGES="/opt/irssh-panel/venv/lib/python${PYTHON_VERSION}/site-packages"
-    
-    # Create directory if not exists
-    mkdir -p "$SITE_PACKAGES"
-    
-    # Create temporary haproxy_api module
-    cat > "$SITE_PACKAGES/haproxy_api.py" << 'EOL'
-# Temporary module for compatibility
+    mkdir -p "/opt/irssh-panel/venv/lib/python${PYTHON_VERSION}/site-packages"
+    cat > "/opt/irssh-panel/venv/lib/python${PYTHON_VERSION}/site-packages/haproxy_api.py" << 'EOL'
 class HAProxy:
     def __init__(self):
         pass
 EOL
 
-    # Create modules directory
+    # Create modules directory and download files
     mkdir -p "$MODULES_DIR/protocols"
     cd "$MODULES_DIR/protocols" || error "Failed to access modules directory"
 
-    # Activate virtual environment
-    source /opt/irssh-panel/venv/bin/activate || error "Failed to activate virtual environment"
-    
-    # First remove requests and its dependencies completely
-    log "Removing existing requests installation..."
-    pip uninstall -y requests chardet urllib3 charset-normalizer certifi idna
-
-    # Clean pip cache
-    pip cache purge
-    
-    # Install chardet first
-    log "Installing chardet..."
-    pip install --no-cache-dir chardet==4.0.0
-
-    # Then install requests with all dependencies
-    log "Installing requests and dependencies..."
+    # Base Python packages
     pip install --no-cache-dir \
-        urllib3==2.0.7 \
-        charset-normalizer==3.3.2 \
-        certifi==2024.2.2 \
-        idna==3.6 \
+        urllib3==1.26.20 \
         requests==2.31.0 \
-        || error "Failed to install requests and dependencies"
-
-    # Install Consul if needed
-    log "Installing Consul..."
-    apt-get install -y consul || error "Failed to install Consul"
-
-# First remove asyncio if installed in venv
-    log "Cleaning up existing packages..."
-    pip uninstall -y asyncio
-
-    # Then remove the entire asyncio directory from venv if exists
-    rm -rf /opt/irssh-panel/venv/lib/python3.8/site-packages/asyncio
-
-    # Install required packages
-    log "Installing Python packages..."
-    pip install --no-cache-dir \
         prometheus_client \
         psycopg2-binary \
         pyyaml \
         structlog \
         websockets \
-        psutil \
-        chardet==4.0.0 \
-        requests==2.31.0 \
-        protobuf==3.20.0 \
-        grpcio==1.44.0 \
-        etcd3==0.12.0 \
-        python-consul==1.1.0 \
-        boto3==1.34.34 \
-        python-dotenv==1.0.0 \
-        numpy \
-        markdown \
-        pandas \
-        scipy \
-        matplotlib || error "Failed to install Python packages"
-
-    # Verify installations
-    log "Verifying package installations..."
-    python3 -c "import chardet; import requests; print('Chardet version:', chardet.__version__); print('Requests version:', requests.__version__)" || error "Failed to verify package installations"
+        psutil || error "Failed to install base packages"
 
     # Download protocol modules
     log "Downloading protocol modules..."
@@ -481,57 +424,23 @@ EOL
         "webport-script.sh"
     )
 
-    REPO_URL="https://raw.githubusercontent.com/irkids/IRSSH-Panel/master/scripts/modules"
+    REPO_URL="https://raw.githubusercontent.com/irkids/IRSSH-Panel/main/modules"
 
     for module in "${MODULES[@]}"; do
         wget "$REPO_URL/$module" -O "$module" || error "Failed to download $module"
         chmod +x "$module"
     done
 
-    # Execute protocol installations with PYTHONPATH set
-    if [ "$INSTALL_SSH" = true ]; then
-        log "Installing SSH and related protocols..."
-        PYTHONPATH="/opt/irssh-panel/venv/lib/python3.8/site-packages" ./ssh-script.py --port "$SSH_PORT" || error "SSH installation failed"
-        ./dropbear-script.sh --port "$DROPBEAR_PORT" || error "Dropbear installation failed"
-        ./webport-script.sh --port "$WEBSOCKET_PORT" || error "WebSocket installation failed"
-    fi
+    [ "$INSTALL_SSH" = true ] && PYTHONPATH="/opt/irssh-panel/venv/lib/python${PYTHON_VERSION}/site-packages" python3 ./ssh-script.py --port "$SSH_PORT"
+    [ "$INSTALL_SSH" = true ] && ./dropbear-script.sh --port "$DROPBEAR_PORT"
+    [ "$INSTALL_SSH" = true ] && ./webport-script.sh --port "$WEBSOCKET_PORT"
+    [ "$INSTALL_L2TP" = true ] && ./l2tpv3-script.sh --port "$L2TP_PORT"
+    [ "$INSTALL_IKEV2" = true ] && PYTHONPATH="/opt/irssh-panel/venv/lib/python${PYTHON_VERSION}/site-packages" python3 ./ikev2-script.py --port "$IKEV2_PORT"
+    [ "$INSTALL_CISCO" = true ] && ./cisco-script.sh --port "$CISCO_PORT"
+    [ "$INSTALL_WIREGUARD" = true ] && ./wire-script.sh --port "$WIREGUARD_PORT"
+    [ "$INSTALL_SINGBOX" = true ] && ./singbox-script.sh --port "$SINGBOX_PORT"
 
-    if [ "$INSTALL_L2TP" = true ]; then
-        log "Installing L2TP/IPsec..."
-        PYTHONPATH="/opt/irssh-panel/venv/lib/python3.8/site-packages" ./l2tpv3-script.sh --port "$L2TP_PORT" || error "L2TP installation failed"
-    fi
-
-    if [ "$INSTALL_IKEV2" = true ]; then
-        log "Installing IKEv2..."
-        PYTHONPATH="/opt/irssh-panel/venv/lib/python3.8/site-packages" ./ikev2-script.py --port "$IKEV2_PORT" || error "IKEv2 installation failed"
-    fi
-
-    if [ "$INSTALL_CISCO" = true ]; then
-        log "Installing Cisco AnyConnect..."
-        ./cisco-script.sh --port "$CISCO_PORT" || error "Cisco installation failed"
-    fi
-
-    if [ "$INSTALL_WIREGUARD" = true ]; then
-        log "Installing WireGuard..."
-        ./wire-script.sh --port "$WIREGUARD_PORT" || error "WireGuard installation failed"
-    fi
-
-    if [ "$INSTALL_SINGBOX" = true ]; then
-        log "Installing SingBox..."
-        ./singbox-script.sh --port "$SINGBOX_PORT" || error "SingBox installation failed"
-    fi
-
-    # Install BadVPN if required
-    ./badvpn-script.sh --port "$BADVPN_PORT" || error "BadVPN installation failed"
-
-    # Configure VPN server settings
-    PYTHONPATH="/opt/irssh-panel/venv/lib/python3.8/site-packages" ./vpnserver-script.py --configure || error "VPN server configuration failed"
-    PYTHONPATH="/opt/irssh-panel/venv/lib/python3.8/site-packages" ./port-script.py --update-all || error "Port configuration failed"
-
-    # Deactivate virtual environment
-    deactivate
-    
-    log "All protocols installed successfully"
+    log "Protocols installation completed"
 }
 
 install_ssh() {
