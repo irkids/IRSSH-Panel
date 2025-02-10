@@ -438,19 +438,9 @@ EOL
     # Then remove the entire asyncio directory from venv if exists
     rm -rf /opt/irssh-panel/venv/lib/python3.8/site-packages/asyncio
 
-log "Installing VPN protocols using project modules..."
-    
-    # Create modules directory
-    mkdir -p "$MODULES_DIR/protocols"
-    cd "$MODULES_DIR/protocols" || error "Failed to access modules directory"
-
-    # Activate virtual environment
-    source /opt/irssh-panel/venv/bin/activate || error "Failed to activate virtual environment"
-
     # Install required packages
     log "Installing Python packages..."
     pip install --no-cache-dir \
-        markdown \
         prometheus_client \
         psycopg2-binary \
         pyyaml \
@@ -466,9 +456,14 @@ log "Installing VPN protocols using project modules..."
         boto3==1.34.34 \
         python-dotenv==1.0.0 \
         numpy \
+        markdown \
         pandas \
         scipy \
         matplotlib || error "Failed to install Python packages"
+
+    # Verify installations
+    log "Verifying package installations..."
+    python3 -c "import chardet; import requests; print('Chardet version:', chardet.__version__); print('Requests version:', requests.__version__)" || error "Failed to verify package installations"
 
     # Download protocol modules
     log "Downloading protocol modules..."
@@ -533,10 +528,10 @@ log "Installing VPN protocols using project modules..."
     PYTHONPATH="/opt/irssh-panel/venv/lib/python3.8/site-packages" ./vpnserver-script.py --configure || error "VPN server configuration failed"
     PYTHONPATH="/opt/irssh-panel/venv/lib/python3.8/site-packages" ./port-script.py --update-all || error "Port configuration failed"
 
- # Deactivate virtual environment at the end
+    # Deactivate virtual environment
     deactivate
-
-    log "Protocols installation completed"
+    
+    log "All protocols installed successfully"
 }
 
 install_ssh() {
