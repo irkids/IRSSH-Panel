@@ -908,10 +908,44 @@ EOL
 }
 
 setup_backend() {
- log "Setting up backend server..."
- cd "$BACKEND_DIR" || error "Failed to access backend directory"
+    log "Setting up backend server..."
+    cd "$BACKEND_DIR" || error "Failed to access backend directory"
 
-    # Install backend dependencies
+    # Create package.json for backend
+    cat > package.json << 'EOL'
+{
+  "name": "irssh-panel-backend",
+  "version": "3.5.0",
+  "private": true,
+  "scripts": {
+    "start": "node src/index.js",
+    "start:dev": "nodemon src/index.js",
+    "test": "jest",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "mongoose": "^8.0.3",
+    "jsonwebtoken": "^9.0.2",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "helmet": "^7.1.0",
+    "winston": "^3.11.0",
+    "express-validator": "^7.0.1",
+    "express-rate-limit": "^7.1.5",
+    "compression": "^1.7.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2",
+    "jest": "^29.7.0",
+    "supertest": "^6.3.3",
+    "eslint": "^8.55.0"
+  }
+}
+EOL
+
+    # Install dependencies
     npm install || error "Backend dependency installation failed"
 
     # Setup CORS configuration
@@ -930,7 +964,7 @@ const corsOptions = {
 module.exports = cors(corsOptions);
 EOL
 
-    # Create backend server configuration
+    # Create main server file
     cat > src/index.js << 'EOL'
 require('dotenv').config();
 const express = require('express');
@@ -964,12 +998,17 @@ app.use('/api/users', require('./routes/users'));
 app.use('/api/protocols', require('./routes/protocols'));
 app.use('/api/monitoring', require('./routes/monitoring'));
 
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+    res.status(200).json({ status: 'ok' });
+});
+
 // Serve static frontend
-app.use(express.static(path.join(__dirname, '../../frontend/build')));
+app.use(express.static(path.join(__dirname, '../../frontend/dist')));
 
 // Handle React routing
 app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../../frontend/build/index.html'));
+    res.sendFile(path.join(__dirname, '../../frontend/dist/index.html'));
 });
 
 const PORT = process.env.PORT || 8000;
@@ -979,6 +1018,21 @@ process.on('unhandledRejection', (err) => {
     console.error('Unhandled Promise Rejection:', err);
 });
 EOL
+
+    # Create basic route files
+    mkdir -p src/routes
+    for route in auth users protocols monitoring; do
+        cat > "src/routes/${route}.js" << EOL
+const express = require('express');
+const router = express.Router();
+
+router.get('/', (req, res) => {
+    res.json({ message: '${route} endpoint' });
+});
+
+module.exports = router;
+EOL
+    done
 
     # Create environment configuration
     cat > .env << EOL
@@ -995,6 +1049,8 @@ EOL
 
     # Set proper permissions
     chmod 600 .env
+
+    log "Backend setup completed successfully"
 }
 
 setup_nginx() {
