@@ -1,5 +1,20 @@
 #!/bin/bash
 
+read -p "Enter custom port for web panel (4-5 digits) or press Enter for random port: " WEB_PORT
+if [ -z "$WEB_PORT" ]; then
+    # Generate random port between 10000 and 65535
+    WEB_PORT=$(shuf -i 10000-65535 -n 1)
+    log "Generated random port: $WEB_PORT"
+else
+    # Validate custom port
+    if ! [[ "$WEB_PORT" =~ ^[0-9]{4,5}$ ]]; then
+        error "Invalid port number. Must be 4-5 digits."
+    fi
+    if [ "$WEB_PORT" -lt 10000 ] || [ "$WEB_PORT" -gt 65535 ]; then
+        error "Port must be between 10000 and 65535"
+    fi
+fi
+
 # IRSSH Panel Complete Installation Script
 # Version: 3.5.0
 
@@ -1103,48 +1118,64 @@ EOL
 setup_nginx() {
     log "Configuring Nginx..."
 
-    # Stop any service using port 80
-    fuser -k 80/tcp 2>/dev/null || true
-
     # Create Nginx configuration
     cat > /etc/nginx/sites-available/irssh-panel << EOL
 server {
-    listen 80;
-    listen [::]:80;
+    listen ${WEB_PORT};
+    listen [::]:${WEB_PORT};
     server_name _;
 
     root ${FRONTEND_DIR}/dist;
     index index.html;
 
+    # Enable gzip compression
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+
+    # Serve static files
     location / {
         try_files \$uri \$uri/ /index.html;
+        add_header Cache-Control "public, no-cache";
     }
 
+    # Backend API proxy
     location /api {
         proxy_pass http://localhost:8000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection 'upgrade';
         proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_cache_bypass \$http_upgrade;
     }
+
+    # Additional security headers
+    add_header X-Frame-Options "SAMEORIGIN";
+    add_header X-XSS-Protection "1; mode=block";
+    add_header X-Content-Type-Options "nosniff";
 }
 EOL
 
-    # Enable site configuration
-    ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
-    rm -f /etc/nginx/sites-enabled/default
+    # Update firewall rules for web port
+    ufw allow ${WEB_PORT}/tcp
 
-    # Make sure the nginx user exists
-    id -u www-data &>/dev/null || useradd -r -s /sbin/nologin www-data
+    # Enable site and remove default
+    rm -f /etc/nginx/sites-enabled/default
+    ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
 
     # Set correct permissions
     chown -R www-data:www-data ${FRONTEND_DIR}/dist
     chmod -R 755 ${FRONTEND_DIR}/dist
 
-    # Test and restart Nginx
+    # Test configuration
     nginx -t || error "Nginx configuration test failed"
-    systemctl restart nginx || error "Failed to start Nginx"
+
+    # Restart Nginx
+    systemctl restart nginx || error "Failed to restart Nginx"
+
+    log "Nginx configuration completed with port ${WEB_PORT}"
 }
 
 verify_installation() {
