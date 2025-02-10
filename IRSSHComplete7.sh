@@ -32,52 +32,21 @@ SKIP_PYTHON_INSTALL=false
 check_existing_components() {
     log "Checking existing components..."
     
-    if command -v nginx >/dev/null 2>&1; then
-        read -p "Nginx is already installed. Skip installation? [Y/n] " choice
-        choice=${choice:-Y}
-        if [[ $choice =~ ^[Yy]$ ]]; then
-            SKIP_NGINX_INSTALL=true
-        fi
+    local ALL_SKIP=false
+    read -p "Do you want to skip installation of all existing components? [Y/n] " choice
+    choice=${choice:-Y}
+    if [[ $choice =~ ^[Yy]$ ]]; then
+        ALL_SKIP=true
     fi
 
-    if command -v node >/dev/null 2>&1; then
-        read -p "NodeJS is already installed. Skip installation? [Y/n] " choice
-        choice=${choice:-Y}
-        if [[ $choice =~ ^[Yy]$ ]]; then
-            SKIP_NODEJS_INSTALL=true
-        fi
-    fi
-
-    if command -v python3 >/dev/null 2>&1; then
-        read -p "Python3 is already installed. Skip installation? [Y/n] " choice
-        choice=${choice:-Y}
-        if [[ $choice =~ ^[Yy]$ ]]; then
-            SKIP_PYTHON_INSTALL=true
-        fi
-    fi
-
-    if command -v psql >/dev/null 2>&1; then
-        read -p "PostgreSQL is already installed. Skip installation? [Y/n] " choice
-        choice=${choice:-Y}
-        if [[ $choice =~ ^[Yy]$ ]]; then
-            SKIP_POSTGRESQL_INSTALL=true
-        fi
-    fi
-
-    if [ -d "/opt/irssh-panel/frontend" ]; then
-        read -p "Frontend is already installed. Skip installation? [Y/n] " choice
-        choice=${choice:-Y}
-        if [[ $choice =~ ^[Yy]$ ]]; then
-            SKIP_FRONTEND_INSTALL=true
-        fi
-    fi
-
-    if [ -d "/opt/irssh-panel/backend" ]; then
-        read -p "Backend is already installed. Skip installation? [Y/n] " choice
-        choice=${choice:-Y}
-        if [[ $choice =~ ^[Yy]$ ]]; then
-            SKIP_BACKEND_INSTALL=true
-        fi
+    # If user chooses to reject all
+    if [ "$ALL_SKIP" = true ]; then
+        SKIP_FRONTEND_INSTALL=$([ -d "/opt/irssh-panel/frontend" ] && echo "true" || echo "false")
+        SKIP_BACKEND_INSTALL=$([ -d "/opt/irssh-panel/backend" ] && echo "true" || echo "false")
+        SKIP_POSTGRESQL_INSTALL=$(command -v psql >/dev/null 2>&1 && echo "true" || echo "false")
+        SKIP_NGINX_INSTALL=$(command -v nginx >/dev/null 2>&1 && echo "true" || echo "false")
+        SKIP_NODEJS_INSTALL=$(command -v node >/dev/null 2>&1 && echo "true" || echo "false")
+        SKIP_PYTHON_INSTALL=$(command -v python3 >/dev/null 2>&1 && echo "true" || echo "false")
     fi
 }
 
@@ -1280,6 +1249,7 @@ verify_installation() {
 save_installation_info() {
     log "Saving installation information..."
     
+    mkdir -p "$CONFIG_DIR"
     cat > "$CONFIG_DIR/installation.info" << EOL
 Installation Date: $(date +"%Y-%m-%d %H:%M:%S")
 Version: 3.5.0
@@ -1287,8 +1257,13 @@ Web Port: ${WEB_PORT}
 SSH Port: ${SSH_PORT}
 Database Name: ${DB_NAME}
 Database User: ${DB_USER}
+Installation Directory: ${PANEL_DIR}
+Frontend URL: http://localhost:${WEB_PORT}
+Backend URL: http://localhost:8000
 EOL
+
     chmod 600 "$CONFIG_DIR/installation.info"
+    log "Installation information saved successfully"
 }
 
 setup_ssl() {
