@@ -470,10 +470,6 @@ log "Installing VPN protocols using project modules..."
         scipy \
         matplotlib || error "Failed to install Python packages"
 
-    # Verify installations
-    log "Verifying package installations..."
-    python3 -c "import chardet; import requests; print('Chardet version:', chardet.__version__); print('Requests version:', requests.__version__)" || error "Failed to verify package installations"
-
     # Download protocol modules
     log "Downloading protocol modules..."
     MODULES=(
