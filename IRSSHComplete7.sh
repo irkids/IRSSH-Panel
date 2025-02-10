@@ -733,6 +733,7 @@ setup_frontend() {
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.1",
+    "@vitejs/plugin-react-swc": "^3.5.0",
     "@types/node": "^20.10.4",
     "@types/react": "^18.2.45",
     "@types/react-dom": "^18.2.17",
@@ -745,7 +746,8 @@ setup_frontend() {
 }
 EOL
 
-    # Install dependencies
+    # Clean install
+    rm -rf node_modules package-lock.json
     npm install || error "Frontend dependency installation failed"
 
     # Create postcss.config.cjs
@@ -758,10 +760,10 @@ module.exports = {
 }
 EOL
 
-    # Create vite.config.ts
+   # Create vite.config.ts with plugin-react-swc
     cat > vite.config.ts << 'EOL'
 import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import react from '@vitejs/plugin-react-swc'
 import path from 'path'
 
 export default defineConfig({
