@@ -91,11 +91,22 @@ setup_database() {
         sleep 1
     done
 
-    # Create database and user
-    su - postgres -c "psql -c \"CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';\"" || error "Failed to create database user"
-    su - postgres -c "psql -c \"CREATE DATABASE $DB_NAME OWNER $DB_USER;\"" || error "Failed to create database"
+    # Check if user exists
+    if ! su - postgres -c "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'\"" | grep -q 1; then
+        # Create user if not exists
+        su - postgres -c "psql -c \"CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';\"" || error "Failed to create database user"
+    else
+        # Update password if user exists
+        su - postgres -c "psql -c \"ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';\"" || error "Failed to update database user password"
+    fi
 
-    # Grant privileges
+    # Check if database exists
+    if ! su - postgres -c "psql -lqt | cut -d \| -f 1 | grep -qw $DB_NAME"; then
+        # Create database if not exists
+        su - postgres -c "psql -c \"CREATE DATABASE $DB_NAME OWNER $DB_USER;\"" || error "Failed to create database"
+    fi
+
+    # Grant privileges (will update if already exists)
     su - postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;\"" || error "Failed to grant privileges"
 
     log "Database setup completed successfully"
