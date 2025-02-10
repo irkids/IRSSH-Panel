@@ -1454,28 +1454,26 @@ main() {
     
     log "Starting IRSSH Panel installation v3.5.0"
     
-    check_existing_components  # Add this line
-    
     check_requirements
     create_backup
     setup_directories
-    [ "${SKIP_Python3_INSTALL}" != "true" ] && install_dependencies
-    [ "${SKIP_Python3_INSTALL}" != "true" ] && setup_python_environment
+    install_dependencies
+    setup_python_environment
     generate_secrets
-    [ "${SKIP_PostgreSQL_INSTALL}" != "true" ] && setup_database
+    setup_database
     install_protocols
-    [ "${SKIP_Frontend_INSTALL}" != "true" ] && setup_typescript
-    [ "${SKIP_Frontend_INSTALL}" != "true" ] && setup_stores
-    [ "${SKIP_Frontend_INSTALL}" != "true" ] && setup_frontend
-    [ "${SKIP_Backend_INSTALL}" != "true" ] && setup_backend
-    [ "${SKIP_Nginx_INSTALL}" != "true" ] && setup_nginx
+    setup_typescript
+    setup_stores
+    setup_frontend
+    setup_backend
+    setup_nginx
     setup_ssl
     setup_firewall
     setup_security
     setup_cron
     verify_installation
     save_installation_info
-    
+        
     log "Installation completed successfully!"
     
     # Display installation summary
