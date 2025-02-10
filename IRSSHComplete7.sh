@@ -2,16 +2,16 @@
 
 read -p "Enter custom port for web panel (4-5 digits) or press Enter for random port: " WEB_PORT
 if [ -z "$WEB_PORT" ]; then
-    # Generate random port between 10000 and 65535
-    WEB_PORT=$(shuf -i 10000-65535 -n 1)
+    # Generate random port between 1234 and 65432
+    WEB_PORT=$(shuf -i 1234-65432 -n 1)
     log "Generated random port: $WEB_PORT"
 else
     # Validate custom port
     if ! [[ "$WEB_PORT" =~ ^[0-9]{4,5}$ ]]; then
         error "Invalid port number. Must be 4-5 digits."
     fi
-    if [ "$WEB_PORT" -lt 10000 ] || [ "$WEB_PORT" -gt 65535 ]; then
-        error "Port must be between 10000 and 65535"
+    if [ "$WEB_PORT" -lt 1234 ] || [ "$WEB_PORT" -gt 65432 ]; then
+        error "Port must be between 1234 and 65432"
     fi
 fi
 
