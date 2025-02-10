@@ -3,43 +3,59 @@
 check_existing_components() {
     log "Checking existing components..."
     
-    local COMPONENT_NAMES=("Frontend" "Backend" "PostgreSQL" "Nginx" "NodeJS" "Python3")
-    local COMPONENT_PATHS=(
-        "/opt/irssh-panel/frontend/package.json"
-        "/opt/irssh-panel/backend/package.json"
-        "postgresql"
-        "nginx"
-        "nodejs"
-        "python3"
-    )
-
-    for i in "${!COMPONENT_NAMES[@]}"; do
-        local component="${COMPONENT_NAMES[$i]}"
-        local path="${COMPONENT_PATHS[$i]}"
-        local installed=false
-
-        if [[ $path == *"/"* ]]; then
-            # Check files
-            if [ -f "$path" ]; then
-                installed=true
-            fi
-        else
-            # Check packages
-            if dpkg -l | grep -q "^ii  $path "; then
-                installed=true
-            fi
+    # Check Frontend
+    if [ -f "/opt/irssh-panel/frontend/package.json" ]; then
+        read -p "Frontend is already installed. Skip installation? [Y/n] " choice
+        choice=${choice:-Y}
+        if [[ $choice =~ ^[Yy]$ ]]; then
+            SKIP_FRONTEND_INSTALL=true
         fi
+    fi
 
-        if [ "$installed" = true ]; then
-            read -p "$component is already installed. Skip installation? [Y/n] " choice
-            choice=${choice:-Y}
-            if [[ $choice =~ ^[Yy]$ ]]; then
-                # Convert component name to valid variable name (remove dots and dashes)
-                local var_name="SKIP_${component//[.-]/_}_INSTALL"
-                declare -g "$var_name=true"
-            fi
+    # Check Backend
+    if [ -f "/opt/irssh-panel/backend/package.json" ]; then
+        read -p "Backend is already installed. Skip installation? [Y/n] " choice
+        choice=${choice:-Y}
+        if [[ $choice =~ ^[Yy]$ ]]; then
+            SKIP_BACKEND_INSTALL=true
         fi
-    done
+    fi
+
+    # Check PostgreSQL
+    if dpkg -l | grep -q "^ii  postgresql "; then
+        read -p "PostgreSQL is already installed. Skip installation? [Y/n] " choice
+        choice=${choice:-Y}
+        if [[ $choice =~ ^[Yy]$ ]]; then
+            SKIP_POSTGRESQL_INSTALL=true
+        fi
+    fi
+
+    # Check Nginx
+    if dpkg -l | grep -q "^ii  nginx "; then
+        read -p "Nginx is already installed. Skip installation? [Y/n] " choice
+        choice=${choice:-Y}
+        if [[ $choice =~ ^[Yy]$ ]]; then
+            SKIP_NGINX_INSTALL=true
+        fi
+    fi
+
+    # Check NodeJS
+    if dpkg -l | grep -q "^ii  nodejs "; then
+        read -p "NodeJS is already installed. Skip installation? [Y/n] " choice
+        choice=${choice:-Y}
+        if [[ $choice =~ ^[Yy]$ ]]; then
+            SKIP_NODEJS_INSTALL=true
+        fi
+    fi
+
+    # Check Python3
+    if dpkg -l | grep -q "^ii  python3 "; then
+        read -p "Python3 is already installed. Skip installation? [Y/n] " choice
+        choice=${choice:-Y}
+        if [[ $choice =~ ^[Yy]$ ]]; then
+            SKIP_PYTHON_INSTALL=true
+        fi
+    fi
 }
 
 read -p "Enter custom port for web panel (4-5 digits) or press Enter for random port: " WEB_PORT
