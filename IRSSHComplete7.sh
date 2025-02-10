@@ -1155,6 +1155,42 @@ setup_ssl() {
     log "SSL certificates setup completed"
 }
 
+setup_firewall() {
+    log "Setting up firewall rules..."
+
+    # Install UFW if not present
+    apt-get install -y ufw || error "Failed to install UFW"
+
+    # Reset UFW to default state
+    ufw --force reset
+
+    # Default policies
+    ufw default deny incoming
+    ufw default allow outgoing
+
+    # Allow SSH
+    ufw allow ${SSH_PORT}/tcp
+
+    # Allow web ports
+    ufw allow 80/tcp
+    ufw allow 443/tcp
+    
+    # Allow other VPN protocols
+    [ "$INSTALL_L2TP" = true ] && ufw allow ${L2TP_PORT}/tcp
+    [ "$INSTALL_IKEV2" = true ] && ufw allow ${IKEV2_PORT}/udp
+    [ "$INSTALL_CISCO" = true ] && ufw allow ${CISCO_PORT}/tcp
+    [ "$INSTALL_WIREGUARD" = true ] && ufw allow ${WIREGUARD_PORT}/udp
+    [ "$INSTALL_SINGBOX" = true ] && ufw allow ${SINGBOX_PORT}/tcp
+
+    # Allow websocket port if needed
+    ufw allow ${WEBSOCKET_PORT}/tcp
+
+    # Enable UFW non-interactively
+    echo "y" | ufw enable
+
+    log "Firewall setup completed"
+}
+
 # Main installation flow
 main() {
     trap cleanup EXIT
