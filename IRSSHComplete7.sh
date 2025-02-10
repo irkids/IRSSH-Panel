@@ -21,35 +21,6 @@ else
     fi
 fi
 
-# Add these variables at the start
-SKIP_FRONTEND_INSTALL=false
-SKIP_BACKEND_INSTALL=false
-SKIP_POSTGRESQL_INSTALL=false
-SKIP_NGINX_INSTALL=false
-SKIP_NODEJS_INSTALL=false
-SKIP_PYTHON_INSTALL=false
-
-check_existing_components() {
-    log "Checking existing components..."
-    
-    local ALL_SKIP=false
-    read -p "Do you want to skip installation of all existing components? [Y/n] " choice
-    choice=${choice:-Y}
-    if [[ $choice =~ ^[Yy]$ ]]; then
-        ALL_SKIP=true
-    fi
-
-    # If user chooses to reject all
-    if [ "$ALL_SKIP" = true ]; then
-        SKIP_FRONTEND_INSTALL=$([ -d "/opt/irssh-panel/frontend" ] && echo "true" || echo "false")
-        SKIP_BACKEND_INSTALL=$([ -d "/opt/irssh-panel/backend" ] && echo "true" || echo "false")
-        SKIP_POSTGRESQL_INSTALL=$(command -v psql >/dev/null 2>&1 && echo "true" || echo "false")
-        SKIP_NGINX_INSTALL=$(command -v nginx >/dev/null 2>&1 && echo "true" || echo "false")
-        SKIP_NODEJS_INSTALL=$(command -v node >/dev/null 2>&1 && echo "true" || echo "false")
-        SKIP_PYTHON_INSTALL=$(command -v python3 >/dev/null 2>&1 && echo "true" || echo "false")
-    fi
-}
-
 # Exit on error
 set -e
 
@@ -412,13 +383,21 @@ WEB_PORT=443
 # Protocol Installation Function
 install_protocols() {
     log "Installing VPN protocols using project modules..."
-        log "Creating temporary haproxy_api module..."
-    cat > "/opt/irssh-panel/venv/lib/python3.8/site-packages/haproxy_api.py" << EOL
-  # Temporary module for compatibility
-  class HAProxy:
+            log "Creating temporary haproxy_api module..."
+    # Get Python version
+    PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
+    SITE_PACKAGES="/opt/irssh-panel/venv/lib/python${PYTHON_VERSION}/site-packages"
+    
+    # Create directory if not exists
+    mkdir -p "$SITE_PACKAGES"
+    
+    # Create temporary haproxy_api module
+    cat > "$SITE_PACKAGES/haproxy_api.py" << 'EOL'
+# Temporary module for compatibility
+class HAProxy:
     def __init__(self):
         pass
-  EOL
+EOL
 
     # Create modules directory
     mkdir -p "$MODULES_DIR/protocols"
