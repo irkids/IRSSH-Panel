@@ -419,7 +419,7 @@ EOL
         "cisco-script.sh"
         "wire-script.sh"
         "singbox-script.sh"
-        "badvpn-script.sh"
+        "badvpn-script.py"
         "dropbear-script.sh"
         "webport-script.sh"
     )
