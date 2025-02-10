@@ -438,9 +438,19 @@ EOL
     # Then remove the entire asyncio directory from venv if exists
     rm -rf /opt/irssh-panel/venv/lib/python3.8/site-packages/asyncio
 
+log "Installing VPN protocols using project modules..."
+    
+    # Create modules directory
+    mkdir -p "$MODULES_DIR/protocols"
+    cd "$MODULES_DIR/protocols" || error "Failed to access modules directory"
+
+    # Activate virtual environment
+    source /opt/irssh-panel/venv/bin/activate || error "Failed to activate virtual environment"
+
     # Install required packages
     log "Installing Python packages..."
     pip install --no-cache-dir \
+        markdown \
         prometheus_client \
         psycopg2-binary \
         pyyaml \
@@ -456,10 +466,17 @@ EOL
         boto3==1.34.34 \
         python-dotenv==1.0.0 \
         numpy \
-        markdown \
         pandas \
         scipy \
         matplotlib || error "Failed to install Python packages"
+
+    # Execute protocol installations with activated venv
+    if [ "$INSTALL_SSH" = true ]; then
+        log "Installing SSH and related protocols..."
+        PYTHONPATH="/opt/irssh-panel/venv/lib/python3.10/site-packages" python3 ./ssh-script.py --port "$SSH_PORT" || error "SSH installation failed"
+        ./dropbear-script.sh --port "$DROPBEAR_PORT" || error "Dropbear installation failed"
+        ./webport-script.sh --port "$WEBSOCKET_PORT" || error "WebSocket installation failed"
+    fi
 
     # Verify installations
     log "Verifying package installations..."
@@ -528,10 +545,10 @@ EOL
     PYTHONPATH="/opt/irssh-panel/venv/lib/python3.8/site-packages" ./vpnserver-script.py --configure || error "VPN server configuration failed"
     PYTHONPATH="/opt/irssh-panel/venv/lib/python3.8/site-packages" ./port-script.py --update-all || error "Port configuration failed"
 
-    # Deactivate virtual environment
+ # Deactivate virtual environment at the end
     deactivate
-    
-    log "All protocols installed successfully"
+
+    log "Protocols installation completed"
 }
 
 install_ssh() {
