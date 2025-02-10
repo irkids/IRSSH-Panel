@@ -2,25 +2,30 @@
 
 check_existing_components() {
     log "Checking existing components..."
-    local COMPONENTS=(
-        ["Frontend"]="/opt/irssh-panel/frontend/package.json"
-        ["Backend"]="/opt/irssh-panel/backend/package.json"
-        ["PostgreSQL"]="postgresql"
-        ["Nginx"]="nginx"
-        ["Node.js"]="nodejs"
-        ["Python3"]="python3"
+    
+    local COMPONENT_NAMES=("Frontend" "Backend" "PostgreSQL" "Nginx" "NodeJS" "Python3")
+    local COMPONENT_PATHS=(
+        "/opt/irssh-panel/frontend/package.json"
+        "/opt/irssh-panel/backend/package.json"
+        "postgresql"
+        "nginx"
+        "nodejs"
+        "python3"
     )
 
-    for component in "${!COMPONENTS[@]}"; do
+    for i in "${!COMPONENT_NAMES[@]}"; do
+        local component="${COMPONENT_NAMES[$i]}"
+        local path="${COMPONENT_PATHS[$i]}"
         local installed=false
-        if [[ ${COMPONENTS[$component]} == *"/"* ]]; then
+
+        if [[ $path == *"/"* ]]; then
             # Check files
-            if [ -f "${COMPONENTS[$component]}" ]; then
+            if [ -f "$path" ]; then
                 installed=true
             fi
         else
             # Check packages
-            if dpkg -l | grep -q "^ii  ${COMPONENTS[$component]} "; then
+            if dpkg -l | grep -q "^ii  $path "; then
                 installed=true
             fi
         fi
@@ -29,7 +34,9 @@ check_existing_components() {
             read -p "$component is already installed. Skip installation? [Y/n] " choice
             choice=${choice:-Y}
             if [[ $choice =~ ^[Yy]$ ]]; then
-                declare -g "SKIP_${component//-/_}_INSTALL=true"
+                # Convert component name to valid variable name (remove dots and dashes)
+                local var_name="SKIP_${component//[.-]/_}_INSTALL"
+                declare -g "$var_name=true"
             fi
         fi
     done
