@@ -1191,6 +1191,146 @@ setup_firewall() {
     log "Firewall setup completed"
 }
 
+setup_security() {
+    log "Setting up additional security measures..."
+
+    # Install fail2ban if not present
+    apt-get install -y fail2ban || error "Failed to install fail2ban"
+
+    # Configure fail2ban
+    cat > /etc/fail2ban/jail.local << 'EOL'
+[DEFAULT]
+bantime = 3600
+findtime = 600
+maxretry = 5
+
+[sshd]
+enabled = true
+port = ssh,22722
+logpath = %(sshd_log)s
+maxretry = 3
+
+[nginx-http-auth]
+enabled = true
+filter = nginx-http-auth
+port = http,https
+logpath = /var/log/nginx/error.log
+
+[nginx-limit-req]
+enabled = true
+filter = nginx-limit-req
+port = http,https
+logpath = /var/log/nginx/error.log
+
+[nginx-botsearch]
+enabled = true
+filter = nginx-botsearch
+port = http,https
+logpath = /var/log/nginx/access.log
+maxretry = 2
+EOL
+
+    # Set secure permissions on important directories
+    chmod 700 "$CONFIG_DIR"
+    chmod 700 "$LOG_DIR"
+    
+    # Secure shared memory
+    echo "tmpfs /run/shm tmpfs defaults,noexec,nosuid 0 0" >> /etc/fstab
+    
+    # Update SSH configuration for better security
+    sed -i 's/#PermitRootLogin yes/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+    
+    # Restart security services
+    systemctl restart fail2ban
+    systemctl enable fail2ban
+    
+    log "Security setup completed"
+}
+
+setup_cron() {
+    log "Setting up cron jobs..."
+
+    # Create cron directory if not exists
+    mkdir -p "$PANEL_DIR/cron"
+
+    # Create cleanup script
+    cat > "$PANEL_DIR/cron/cleanup.sh" << 'EOL'
+#!/bin/bash
+# Cleanup old logs
+find /var/log/irssh -type f -name "*.log" -mtime +30 -delete
+# Cleanup old backups
+find /opt/irssh-backups -type f -mtime +7 -delete
+EOL
+    chmod +x "$PANEL_DIR/cron/cleanup.sh"
+
+    # Add cron jobs
+    (crontab -l 2>/dev/null || true; echo "0 0 * * * $PANEL_DIR/cron/cleanup.sh") | crontab -
+    (crontab -l 2>/dev/null || true; echo "*/5 * * * * systemctl is-active --quiet nginx || systemctl restart nginx") | crontab -
+    (crontab -l 2>/dev/null || true; echo "*/5 * * * * systemctl is-active --quiet stunnel4 || systemctl restart stunnel4") | crontab -
+
+    log "Cron jobs setup completed"
+}
+
+verify_installation() {
+    log "Verifying installation..."
+    
+    # Check critical services
+    services=("nginx" "postgresql" "stunnel4" "fail2ban")
+    for service in "${services[@]}"; do
+        if ! systemctl is-active --quiet "$service"; then
+            error "Service $service is not running"
+        fi
+    done
+
+    # Check frontend build
+    if [ ! -d "$FRONTEND_DIR/dist" ]; then
+        error "Frontend build directory not found"
+    fi
+
+    # Check backend
+    if ! curl -s http://localhost:8000/api/health > /dev/null; then
+        error "Backend health check failed"
+    fi
+
+    # Check database
+    if ! su - postgres -c "psql -d $DB_NAME -c '\q'" 2>/dev/null; then
+        error "Database connection failed"
+    fi
+
+    # Check SSL certificates
+    if [ ! -f "/etc/nginx/ssl/irssh-panel.crt" ] || [ ! -f "/etc/nginx/ssl/irssh-panel.key" ]; then
+        error "SSL certificates not found"
+    fi
+
+    log "Installation verification completed successfully"
+}
+
+save_installation_info() {
+    log "Saving installation information..."
+    
+    # Create config directory if not exists
+    mkdir -p "$CONFIG_DIR"
+    
+    # Save installation details
+    cat > "$CONFIG_DIR/installation.info" << EOL
+Installation Date: $(date +"%Y-%m-%d %H:%M:%S")
+Version: 3.5.0
+Web Port: ${WEB_PORT}
+SSH Port: ${SSH_PORT}
+Database Name: ${DB_NAME}
+Database User: ${DB_USER}
+Installation Directory: ${PANEL_DIR}
+Frontend URL: http://localhost:${WEB_PORT}
+Backend URL: http://localhost:8000
+EOL
+
+    # Set secure permissions
+    chmod 600 "$CONFIG_DIR/installation.info"
+    
+    log "Installation information saved successfully"
+}
+
 # Main installation flow
 main() {
     trap cleanup EXIT
