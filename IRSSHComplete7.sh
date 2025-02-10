@@ -1135,6 +1135,26 @@ EOL
     chmod 600 "$CONFIG_DIR/installation.info"
 }
 
+setup_ssl() {
+    log "Setting up SSL certificates..."
+    
+    # Create SSL directory
+    mkdir -p /etc/nginx/ssl
+    
+    # Generate self-signed certificate
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout /etc/nginx/ssl/irssh-panel.key \
+        -out /etc/nginx/ssl/irssh-panel.crt \
+        -subj "/CN=irssh-panel" \
+        || error "Failed to generate SSL certificate"
+    
+    # Set correct permissions
+    chmod 600 /etc/nginx/ssl/irssh-panel.key
+    chmod 644 /etc/nginx/ssl/irssh-panel.crt
+    
+    log "SSL certificates setup completed"
+}
+
 # Main installation flow
 main() {
     trap cleanup EXIT
