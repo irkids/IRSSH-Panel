@@ -10,7 +10,6 @@ check_existing_components() {
         if [[ $choice =~ ^[Yy]$ ]]; then
             SKIP_FRONTEND_INSTALL=true
         fi
-    fi
 
     # Check Backend
     if [ -f "/opt/irssh-panel/backend/package.json" ]; then
@@ -19,7 +18,6 @@ check_existing_components() {
         if [[ $choice =~ ^[Yy]$ ]]; then
             SKIP_BACKEND_INSTALL=true
         fi
-    fi
 
     # Check PostgreSQL
     if dpkg -l | grep -q "^ii  postgresql "; then
@@ -28,7 +26,6 @@ check_existing_components() {
         if [[ $choice =~ ^[Yy]$ ]]; then
             SKIP_POSTGRESQL_INSTALL=true
         fi
-    fi
 
     # Check Nginx
     if dpkg -l | grep -q "^ii  nginx "; then
@@ -37,7 +34,6 @@ check_existing_components() {
         if [[ $choice =~ ^[Yy]$ ]]; then
             SKIP_NGINX_INSTALL=true
         fi
-    fi
 
     # Check NodeJS
     if dpkg -l | grep -q "^ii  nodejs "; then
@@ -46,7 +42,6 @@ check_existing_components() {
         if [[ $choice =~ ^[Yy]$ ]]; then
             SKIP_NODEJS_INSTALL=true
         fi
-    fi
 
     # Check Python3
     if dpkg -l | grep -q "^ii  python3 "; then
@@ -55,7 +50,6 @@ check_existing_components() {
         if [[ $choice =~ ^[Yy]$ ]]; then
             SKIP_PYTHON_INSTALL=true
         fi
-    fi
 }
 
 read -p "Enter custom port for web panel (4-5 digits) or press Enter for random port: " WEB_PORT
