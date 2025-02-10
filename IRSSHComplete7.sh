@@ -63,6 +63,29 @@ EOL
     chmod 600 "$CONFIG_DIR/credentials.env"
 }
 
+setup_database() {
+    log "Setting up PostgreSQL database..."
+
+    # Make sure PostgreSQL is running
+    systemctl start postgresql
+    systemctl enable postgresql
+
+    # Wait for PostgreSQL to be ready
+    until pg_isready; do
+        log "Waiting for PostgreSQL to be ready..."
+        sleep 1
+    done
+
+    # Create database and user
+    su - postgres -c "psql -c \"CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';\"" || error "Failed to create database user"
+    su - postgres -c "psql -c \"CREATE DATABASE $DB_NAME OWNER $DB_USER;\"" || error "Failed to create database"
+
+    # Grant privileges
+    su - postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;\"" || error "Failed to grant privileges"
+
+    log "Database setup completed successfully"
+}
+
 check_requirements() {
     log "Checking and installing basic requirements..."
     
@@ -1374,6 +1397,7 @@ main() {
     install_dependencies
     setup_python_environment
     generate_secrets
+    setup_database
     install_protocols
     setup_typescript
     setup_stores
