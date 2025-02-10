@@ -1495,7 +1495,7 @@ main() {
     setup_security
     setup_cron
     verify_installation
-    save_installation_inf
+    save_installation_info
     
     log "Installation completed successfully!"
     
