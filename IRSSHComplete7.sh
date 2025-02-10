@@ -948,6 +948,25 @@ EOL
     # Install dependencies
     npm install || error "Backend dependency installation failed"
 
+    # Create systemd service for backend
+    cat > /etc/systemd/system/irssh-backend.service << EOL
+[Unit]
+Description=IRSSH Panel Backend
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=${BACKEND_DIR}
+ExecStart=/usr/bin/node src/index.js
+Restart=always
+Environment=NODE_ENV=production
+Environment=PORT=8000
+
+[Install]
+WantedBy=multi-user.target
+EOL
+
     # Setup CORS configuration
     mkdir -p src/middleware
     cat > src/middleware/cors.js << 'EOL'
@@ -1049,6 +1068,11 @@ EOL
 
     # Set proper permissions
     chmod 600 .env
+
+    # Reload systemd and start backend service
+    systemctl daemon-reload
+    systemctl enable irssh-backend
+    systemctl start irssh-backend
 
     log "Backend setup completed successfully"
 }
@@ -1276,7 +1300,7 @@ verify_installation() {
     log "Verifying installation..."
     
     # Check critical services
-    services=("nginx" "postgresql" "stunnel4" "fail2ban")
+    services=("nginx" "postgresql" "stunnel4" "fail2ban" "irssh-backend")
     for service in "${services[@]}"; do
         if ! systemctl is-active --quiet "$service"; then
             error "Service $service is not running"
@@ -1288,10 +1312,17 @@ verify_installation() {
         error "Frontend build directory not found"
     fi
 
-    # Check backend
-    if ! curl -s http://localhost:8000/api/health > /dev/null; then
-        error "Backend health check failed"
-    fi
+    # Wait for backend to be ready (max 30 seconds)
+    local max_attempts=30
+    local attempt=1
+    while ! curl -s http://localhost:8000/api/health > /dev/null; do
+        if [ $attempt -ge $max_attempts ]; then
+            error "Backend health check failed after $max_attempts attempts"
+        fi
+        log "Waiting for backend to be ready... (attempt $attempt/$max_attempts)"
+        sleep 1
+        ((attempt++))
+    done
 
     # Check database
     if ! su - postgres -c "psql -d $DB_NAME -c '\q'" 2>/dev/null; then
