@@ -1055,15 +1055,18 @@ EOL
 
 setup_nginx() {
     log "Configuring Nginx..."
-    
+
+    # Stop any service using port 80
+    fuser -k 80/tcp 2>/dev/null || true
+
     # Create Nginx configuration
     cat > /etc/nginx/sites-available/irssh-panel << EOL
 server {
-    listen ${WEB_PORT};
-    listen [::]:${WEB_PORT};
+    listen 80;
+    listen [::]:80;
     server_name _;
 
-    root ${FRONTEND_DIR}/build;
+    root ${FRONTEND_DIR}/dist;
     index index.html;
 
     location / {
@@ -1085,9 +1088,16 @@ EOL
     ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
     rm -f /etc/nginx/sites-enabled/default
 
+    # Make sure the nginx user exists
+    id -u www-data &>/dev/null || useradd -r -s /sbin/nologin www-data
+
+    # Set correct permissions
+    chown -R www-data:www-data ${FRONTEND_DIR}/dist
+    chmod -R 755 ${FRONTEND_DIR}/dist
+
     # Test and restart Nginx
     nginx -t || error "Nginx configuration test failed"
-    systemctl restart nginx
+    systemctl restart nginx || error "Failed to start Nginx"
 }
 
 verify_installation() {
