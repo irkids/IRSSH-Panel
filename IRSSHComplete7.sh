@@ -470,14 +470,6 @@ log "Installing VPN protocols using project modules..."
         scipy \
         matplotlib || error "Failed to install Python packages"
 
-    # Execute protocol installations with activated venv
-    if [ "$INSTALL_SSH" = true ]; then
-        log "Installing SSH and related protocols..."
-        PYTHONPATH="/opt/irssh-panel/venv/lib/python3.8/site-packages" python3 ./ssh-script.py --port "$SSH_PORT" || error "SSH installation failed"
-        ./dropbear-script.sh --port "$DROPBEAR_PORT" || error "Dropbear installation failed"
-        ./webport-script.sh --port "$WEBSOCKET_PORT" || error "WebSocket installation failed"
-    fi
-
     # Verify installations
     log "Verifying package installations..."
     python3 -c "import chardet; import requests; print('Chardet version:', chardet.__version__); print('Requests version:', requests.__version__)" || error "Failed to verify package installations"
@@ -504,6 +496,14 @@ log "Installing VPN protocols using project modules..."
         wget "$REPO_URL/$module" -O "$module" || error "Failed to download $module"
         chmod +x "$module"
     done
+
+    # Execute protocol installations with activated venv
+    if [ "$INSTALL_SSH" = true ]; then
+        log "Installing SSH and related protocols..."
+        PYTHONPATH="/opt/irssh-panel/venv/lib/python3.8/site-packages" python3 ./ssh-script.py --port "$SSH_PORT" || error "SSH installation failed"
+        ./dropbear-script.sh --port "$DROPBEAR_PORT" || error "Dropbear installation failed"
+        ./webport-script.sh --port "$WEBSOCKET_PORT" || error "WebSocket installation failed"
+    fi
 
     # Execute protocol installations with PYTHONPATH set
     if [ "$INSTALL_SSH" = true ]; then
