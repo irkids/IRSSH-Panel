@@ -455,7 +455,11 @@ EOL
         python-consul==1.1.0 \
         boto3==1.34.34 \
         python-dotenv==1.0.0 \
-        numpy || error "Failed to install Python packages"
+        numpy \
+        markdown \
+        pandas \
+        scipy \
+        matplotlib || error "Failed to install Python packages"
 
     # Verify installations
     log "Verifying package installations..."
