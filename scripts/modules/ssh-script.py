@@ -216,6 +216,29 @@ class SSHBaseProtocol(ABC):
 
 class SSHDirectProtocol(SSHBaseProtocol):
     """Direct SSH protocol implementation"""
+    
+    async def authenticate_user(self, reader, writer):
+        """Authenticate users when connecting"""
+        writer.write(b"Enter username: ")
+        await writer.drain()
+        username = (await reader.read(100)).decode().strip()
+
+        writer.write(b"Enter password: ")
+        await writer.drain()
+        password = (await reader.read(100)).decode().strip()
+
+        auth = SSHAuthenticator()
+        if not auth.authenticate(username, password):
+            writer.write(b"Authentication failed.\n")
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+            return False
+
+        writer.write(b"Authentication successful!\n")
+        await writer.drain()
+        return True
+
     async def start(self):
         server = await asyncio.start_server(
             self.handle_connection,
@@ -223,34 +246,37 @@ class SSHDirectProtocol(SSHBaseProtocol):
             self.config.port,
             backlog=self.config.backlog
         )
+
         self.logger.info(f"SSH-DIRECT started on {self.config.host}:{self.config.port}")
         return server
 
-    async def handle_connection(self, reader, writer):
-        """Handle SSH connection"""
-        try:
-            peer = writer.get_extra_info('peername')
-            self.logger.info(f"New connection from {peer}")
-            self.active_connections.add(writer)
-            
-            while True:
-                data = await reader.read(8192)
-                if not data:
-                    break
-                    
-                # Process SSH data
-                response = await self._process_ssh_data(data)
-                if response:
-                    writer.write(response)
-                    await writer.drain()
-                    
-        except Exception as e:
-            self.logger.error(f"Connection error: {e}")
-            ERROR_COUNTER.labels(type='connection').inc()
-        finally:
-            self.active_connections.remove(writer)
-            writer.close()
-            await writer.wait_closed()
+async def handle_connection(self, reader, writer):
+    """Handle SSH connection"""
+    try:
+        peer = writer.get_extra_info('peername')
+        self.logger.info(f"New connection from {peer}")
+
+        if not await self.authenticate_user(reader, writer):
+            return
+
+        while True:
+            data = await reader.read(8192)
+            if not data:
+                break
+                
+            # Process SSH data
+            response = await self._process_ssh_data(data)
+            if response:
+                writer.write(response)
+                await writer.drain()
+                
+    except Exception as e:
+        self.logger.error(f"Connection error: {e}")
+        ERROR_COUNTER.labels(type='connection').inc()
+    finally:
+        self.active_connections.remove(writer)
+        writer.close()
+        await writer.wait_closed()
 
 class SSHTLSProtocol(SSHBaseProtocol):
     """SSH over TLS protocol implementation"""
@@ -336,8 +362,9 @@ class SSHWebSocketProtocol(SSHBaseProtocol):
 class EnhancedSSHServer:
     """Main SSH server class"""
     def __init__(self, config_path: str = "/etc/enhanced_ssh/config.yaml"):
-        self.config = self._load_config(config_path)
         self.logger = self._setup_logging()
+        self.config = self._load_config(config_path)
+
         self.db_pool = DatabasePool(self.config)
         self.resource_manager = ResourceManager(self.config)
         self.protocols = {}
