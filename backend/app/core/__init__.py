@@ -11,6 +11,13 @@ from .config import settings
 from .database import init_db, get_db
 from .security import create_access_token, verify_token
 
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("backend")
+
+logger.info("Logger initialized for backend core module")
+
 # backend/app/models/__init__.py
 from .models import User, Protocol, Setting
 
