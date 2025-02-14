@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+import os
+os.environ.setdefault("SSH_DB_HOST", "localhost")
+os.environ.setdefault("SSH_DB_PORT", "5432")
+os.environ.setdefault("SSH_DB_NAME", "ssh_manager")
+os.environ.setdefault("SSH_DB_USER", "ssh_user")
+os.environ.setdefault("SSH_DB_PASSWORD", "your_password_here")
 
 import asyncio
 import logging
