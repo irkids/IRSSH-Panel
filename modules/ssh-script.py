@@ -449,6 +449,52 @@ async def main():
         # Start Prometheus metrics server
         prom.start_http_server(9100)
         
+if __name__ == "__main__":
+    import os
+ # Creating the /etc/enhanced_ssh directory
+    config_dir = "/etc/enhanced_ssh"
+    config_file = os.path.join(config_dir, "config.yaml")
+    os.makedirs(config_dir, exist_ok=True)
+    
+    # If config.yaml file doesn't exist, we create it with default settings
+    if not os.path.exists(config_file):
+        with open(config_file, "w") as f:
+            f.write("db_host: localhost\n")
+            f.write("db_port: 5432\n")
+            f.write("db_name: ssh_manager\n")
+            f.write("db_user: ssh_user\n")
+            f.write("db_password: MySecureP@ssw0rd\n")
+
+    # Create log directory if it doesn't exist
+    os.makedirs('/var/log/enhanced_ssh', exist_ok=True)
+
+   # Configuring logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler('/var/log/enhanced_ssh/server.log')
+        ]
+    )
+    
+    # Setting up signal handlers
+    signal_handler()
+    
+    # Creating an event loop and running the main program
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_until_complete(main())
+    except Exception as e:
+        logging.error(f"Fatal error: {e}")
+        sys.exit(1)
+    finally:
+        try:
+            pending = asyncio.all_tasks(loop)
+            loop.run_until_complete(asyncio.gather(*pending))
+        finally:
+            loop.close()
+
         # Start SSH server
         await server.start()
         
