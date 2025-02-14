@@ -547,9 +547,22 @@ def signal_handler():
 
 if __name__ == "__main__":
     import os
+    # Creating the /etc/enhanced_ssh directory and config.yaml file with default settings
+    config_dir = "/etc/enhanced_ssh"
+    config_file = os.path.join(config_dir, "config.yaml")
+    os.makedirs(config_dir, exist_ok=True)
+    if not os.path.exists(config_file):
+        with open(config_file, "w") as f:
+            f.write("db_host: localhost\n")
+            f.write("db_port: 5432\n")
+            f.write("db_name: ssh_manager\n")
+            f.write("db_user: ssh_user\n")
+            f.write("db_password: MySecureP@ssw0rd\n")
+
+    # Create log directory if it doesn't exist
     os.makedirs('/var/log/enhanced_ssh', exist_ok=True)
 
-    # Configure logging
+    # Setting up logging
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -558,23 +571,20 @@ if __name__ == "__main__":
             logging.FileHandler('/var/log/enhanced_ssh/server.log')
         ]
     )
-    
-    # Setup signal handlers
+
+    # Setting up signal handlers
     signal_handler()
-    
-    # Create event loop
+
+    # Creating the event loop and running the main program
     loop = asyncio.get_event_loop()
-    
     try:
-        # Run main application
         loop.run_until_complete(main())
+    except KeyboardInterrupt:
+        logging.info("Received shutdown signal")
     except Exception as e:
         logging.error(f"Fatal error: {e}")
         sys.exit(1)
     finally:
-        # Cleanup
-        try:
-            pending = asyncio.all_tasks(loop)
-            loop.run_until_complete(asyncio.gather(*pending))
-        finally:
-            loop.close()
+        pending = asyncio.all_tasks(loop)
+        loop.run_until_complete(asyncio.gather(*pending))
+        loop.close()
