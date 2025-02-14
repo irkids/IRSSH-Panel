@@ -178,6 +178,7 @@ setup_directories() {
     mkdir -p "$FRONTEND_DIR"/{public,src/{components,stores,context,utils,hooks,types}}
     mkdir -p "$BACKEND_DIR"/{src/{routes,middleware,models,utils},config}
     mkdir -p "$LOG_DIR"
+    mkdir -p /var/log/enhanced_ssh
     
     # Set permissions
     chown -R root:root "$PANEL_DIR"
@@ -273,6 +274,46 @@ deactivate
         screen \
         supervisor \
         || error "Failed to install additional tools"
+
+# Install and configure PostgreSQL
+echo "Installing PostgreSQL..."
+apt update
+apt install -y postgresql postgresql-contrib
+
+# Start PostgreSQL service
+echo "Starting PostgreSQL..."
+systemctl enable postgresql
+systemctl start postgresql
+
+# Setup PostgreSQL database and user
+echo "Configuring PostgreSQL..."
+sudo -u postgres psql <<EOF
+CREATE DATABASE ssh_manager;
+CREATE USER irssh_admin WITH ENCRYPTED PASSWORD 'irsshMy@server';
+GRANT ALL PRIVILEGES ON DATABASE ssh_manager TO irssh_admin;
+ALTER SYSTEM SET password_encryption = 'md5';
+EOF
+
+# Modify pg_hba.conf for md5 authentication
+echo "Updating pg_hba.conf..."
+PG_HBA="/etc/postgresql/14/main/pg_hba.conf"
+if grep -q "local   all             all                                     peer" "$PG_HBA"; then
+    sed -i 's/local   all             all                                     peer/local   all             all                                     md5/' "$PG_HBA"
+fi
+if grep -q "host    all             all             127.0.0.1/32            scram-sha-256" "$PG_HBA"; then
+    sed -i 's/host    all             all             127.0.0.1\/32            scram-sha-256/host    all             all             127.0.0.1\/32            md5/' "$PG_HBA"
+fi
+
+# Create /etc/enhanced_ssh directory and config.yaml file
+echo "Creating config.yaml..."
+mkdir -p /etc/enhanced_ssh
+cat <<EOL > /etc/enhanced_ssh/config.yaml
+db_host: localhost
+db_port: 5432
+db_name: ssh_manager
+db_user: irssh_admin
+db_password: irsshMy@server
+EOL
 
     # Install websocat
     log "Installing websocat..."
@@ -1336,6 +1377,29 @@ verify_installation() {
 
     log "Installation verification completed successfully"
 }
+
+    # Setup systemd service
+echo "Creating systemd service..."
+cat <<EOL > /etc/systemd/system/irssh-panel.service
+[Unit]
+Description=IRSSH Panel Service
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/irssh-panel/modules/protocols/ssh-script.py
+WorkingDirectory=/opt/irssh-panel/modules/protocols/
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOL
+
+# Reload systemd and start the service
+echo "Enabling and starting IRSSH Panel service..."
+systemctl daemon-reload
+systemctl enable irssh-panel
+systemctl start irssh-panel
 
 save_installation_info() {
     log "Saving installation information..."
