@@ -4,7 +4,7 @@ os.environ.setdefault("SSH_DB_HOST", "localhost")
 os.environ.setdefault("SSH_DB_PORT", "5432")
 os.environ.setdefault("SSH_DB_NAME", "ssh_manager")
 os.environ.setdefault("SSH_DB_USER", "ssh_user")
-os.environ.setdefault("SSH_DB_PASSWORD", "your_password_here")
+os.environ.setdefault("SSH_DB_PASSWORD", "SCRAM-SHA-256$4096:/ReBlqoM6ktVBRWRL9AA+g==$7zRf07anW9X6anq9mu+tZmzqgdre7AI6tO2YAWRsqy0=:MYxeFEe4xR/zmTeMa9yory8tLBiBKLv+YEcnAKZDMhg=")
 
 import asyncio
 import logging
