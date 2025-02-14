@@ -494,7 +494,11 @@ def signal_handler():
     signal.signal(signal.SIGHUP, handle_sighup)
 
 if __name__ == "__main__":
-    # Configure logging
+ 
+import os
+os.makedirs('/var/log/enhanced_ssh', exist_ok=True)
+
+   # Configure logging
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
