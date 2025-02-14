@@ -6,11 +6,10 @@ os.environ.setdefault("SSH_DB_NAME", "ssh_manager")
 os.environ.setdefault("SSH_DB_USER", "ssh_user")
 os.environ.setdefault("SSH_DB_PASSWORD", "SCRAM-SHA-256$4096:/ReBlqoM6ktVBRWRL9AA+g==$7zRf07anW9X6anq9mu+tZmzqgdre7AI6tO2YAWRsqy0=:MYxeFEe4xR/zmTeMa9yory8tLBiBKLv+YEcnAKZDMhg=")
 
+import sys
 import asyncio
 import logging
 import logging.handlers
-import os
-import sys
 import subprocess
 import prometheus_client as prom
 import socket
@@ -441,113 +440,27 @@ class EnhancedSSHServer:
             self.logger.error(f"Error stopping server: {e}")
             raise
 
-async def main():
-    """Main entry point"""
-    server = EnhancedSSHServer()
-    
-    try:
-        # Start Prometheus metrics server
-        prom.start_http_server(9100)
-        
-if __name__ == "__main__":
-    import os
- # Creating the /etc/enhanced_ssh directory
-    config_dir = "/etc/enhanced_ssh"
-    config_file = os.path.join(config_dir, "config.yaml")
-    os.makedirs(config_dir, exist_ok=True)
-    
-    # If config.yaml file doesn't exist, we create it with default settings
-    if not os.path.exists(config_file):
-        with open(config_file, "w") as f:
-            f.write("db_host: localhost\n")
-            f.write("db_port: 5432\n")
-            f.write("db_name: ssh_manager\n")
-            f.write("db_user: ssh_user\n")
-            f.write("db_password: MySecureP@ssw0rd\n")
-
-    # Create log directory if it doesn't exist
-    os.makedirs('/var/log/enhanced_ssh', exist_ok=True)
-
-   # Configuring logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler('/var/log/enhanced_ssh/server.log')
-        ]
-    )
-    
-    # Setting up signal handlers
-    signal_handler()
-    
-    # Creating an event loop and running the main program
-    loop = asyncio.get_event_loop()
-    try:
-        loop.run_until_complete(main())
-    except Exception as e:
-        logging.error(f"Fatal error: {e}")
-        sys.exit(1)
-    finally:
-        try:
-            pending = asyncio.all_tasks(loop)
-            loop.run_until_complete(asyncio.gather(*pending))
-        finally:
-            loop.close()
-
-        # Start SSH server
-        await server.start()
-        
-    except KeyboardInterrupt:
-        server.logger.info("Received shutdown signal")
-        await server.stop()
-    except Exception as e:
-        server.logger.error(f"Critical error: {e}")
-        sys.exit(1)
-    finally:
-        # Cleanup tasks
-        server.logger.info("Performing cleanup tasks...")
-        try:
-            # Close database connections
-            if hasattr(server, 'db_pool'):
-                server.db_pool._pool.closeall()
-            
-            # Close any remaining connections
-            for protocol in server.protocols.values():
-                for conn in protocol.active_connections:
-                    try:
-                        if hasattr(conn, 'close'):
-                            await conn.close()
-                    except:
-                        pass
-            
-            # Final cleanup
-            await asyncio.gather(*[
-                protocol.stop() for protocol in server.protocols.values()
-            ])
-            
-        except Exception as e:
-            server.logger.error(f"Cleanup error: {e}")
-
 def signal_handler():
-    """Setup signal handlers"""
+    """Setup signal handlers."""
     import signal
-    
     def handle_sigterm(signum, frame):
         logging.info("Received SIGTERM signal")
         asyncio.get_event_loop().stop()
-    
     def handle_sighup(signum, frame):
         logging.info("Received SIGHUP signal")
-        # Could implement config reload here
-        pass
-    
     signal.signal(signal.SIGTERM, handle_sigterm)
     signal.signal(signal.SIGHUP, handle_sighup)
 
+async def main():
+    """Main entry point."""
+    server = EnhancedSSHServer()
+    prom.start_http_server(9100)
+    await server.start()
+    while True:
+        await asyncio.sleep(3600)
+
 if __name__ == "__main__":
-    import os
-    # Creating the /etc/enhanced_ssh directory and config.yaml file with default settings
+    # Create /etc/enhanced_ssh directory and config.yaml file if they don't exist.
     config_dir = "/etc/enhanced_ssh"
     config_file = os.path.join(config_dir, "config.yaml")
     os.makedirs(config_dir, exist_ok=True)
@@ -558,11 +471,11 @@ if __name__ == "__main__":
             f.write("db_name: ssh_manager\n")
             f.write("db_user: ssh_user\n")
             f.write("db_password: MySecureP@ssw0rd\n")
-
-    # Create log directory if it doesn't exist
+    
+    # Create log directory if it doesn't exist.
     os.makedirs('/var/log/enhanced_ssh', exist_ok=True)
 
-    # Setting up logging
+    # Configure logging.
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -572,10 +485,10 @@ if __name__ == "__main__":
         ]
     )
 
-    # Setting up signal handlers
+    # Setup signal handlers.
     signal_handler()
 
-    # Creating the event loop and running the main program
+    # Create event loop and run the main program.
     loop = asyncio.get_event_loop()
     try:
         loop.run_until_complete(main())
