@@ -176,6 +176,27 @@ cleanup() {
 check_requirements() {
     info "Checking system requirements..."
     
+# Check Python version
+    if ! command -v python3 &> /dev/null; then
+        info "Installing Python3..."
+        apt-get update
+        apt-get install -y python3 python3-pip
+    fi
+    
+    PYTHON_VERSION=$(python3 -c 'import platform; print(platform.python_version())')
+    PYTHON_MAJOR=$(echo "$PYTHON_VERSION" | cut -d. -f1)
+    PYTHON_MINOR=$(echo "$PYTHON_VERSION" | cut -d. -f2)
+    
+    if [ "$PYTHON_MAJOR" -lt 3 ] || ([ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 8 ]); then
+        info "Upgrading Python to required version..."
+        apt-get update
+        apt-get install -y software-properties-common
+        add-apt-repository -y ppa:deadsnakes/ppa
+        apt-get update
+        apt-get install -y python3.8 python3.8-venv python3.8-dev
+        update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.8 1
+    fi
+
     # Check root privileges
     if [ "$EUID" -ne 0 ]; then
         error "Please run as root"
