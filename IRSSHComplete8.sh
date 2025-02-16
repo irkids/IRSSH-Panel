@@ -1110,10 +1110,88 @@ main() {
     setup_directories
     
     # Generate configuration
-    generate_config
+    # Generate configuration
+generate_config() {
+    info "Generating configuration..."
+    
+    # Generate secure credentials
+    local DB_NAME="ssh_manager"
+    local DB_USER="irssh_admin"
+    local DB_PASS=$(openssl rand -base64 32)
+    local JWT_SECRET=$(openssl rand -base64 32)
+    
+    # Create config directory if not exists
+    mkdir -p "$CONFIG_DIR"
+    
+    # Create config.yaml
+    cat > "$CONFIG_DIR/config.yaml" << EOL
+db_host: localhost
+db_port: 5432
+db_name: $DB_NAME
+db_user: $DB_USER
+db_password: $DB_PASS
+web_port: ${PORTS[WEB]}
+jwt_secret: $JWT_SECRET
+EOL
+    
+    chmod 600 "$CONFIG_DIR/config.yaml"
+    
+    # Create backend .env file
+    mkdir -p "$PANEL_DIR/backend"
+    cat > "$PANEL_DIR/backend/.env" << EOL
+NODE_ENV=production
+PORT=8000
+JWT_SECRET=$JWT_SECRET
+FRONTEND_URL=http://localhost:${PORTS[WEB]}
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=$DB_NAME
+DB_USER=$DB_USER
+DB_PASS=$DB_PASS
+EOL
+    
+    chmod 600 "$PANEL_DIR/backend/.env"
+    
+    # Export variables for use in other functions
+    export DB_NAME DB_USER DB_PASS JWT_SECRET
+    
+    info "Configuration generated successfully"
+}
     
     # Core services setup
-    setup_database
+    setup_database() {
+    info "Setting up PostgreSQL database..."
+    
+    # Install PostgreSQL if not present
+    apt-get install -y postgresql postgresql-contrib || error "Failed to install PostgreSQL"
+    
+    # Start and enable PostgreSQL
+    systemctl start postgresql
+    systemctl enable postgresql
+    
+    # Wait for PostgreSQL to be ready
+    local max_attempts=30
+    local attempt=1
+    while ! pg_isready; do
+        if [ $attempt -ge $max_attempts ]; then
+            error "PostgreSQL failed to start after $max_attempts attempts"
+        fi
+        info "Waiting for PostgreSQL... (attempt $attempt/$max_attempts)"
+        sleep 1
+        ((attempt++))
+    done
+    
+    # Setup database and user
+    su - postgres -c "psql -c \"CREATE USER \\\"$DB_USER\\\" WITH PASSWORD '$DB_PASS';\""
+    su - postgres -c "psql -c \"CREATE DATABASE \\\"$DB_NAME\\\" OWNER \\\"$DB_USER\\\";\""
+    su - postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE \\\"$DB_NAME\\\" TO \\\"$DB_USER\\\";\""
+    
+    # Verify database connection
+    PGPASSWORD="$DB_PASS" psql -h localhost -U "$DB_USER" -d "$DB_NAME" -c '\q' || error "Database connection verification failed"
+    
+    info "Database setup completed successfully"
+}
+
     setup_python
     setup_nodejs
     setup_ssl
