@@ -393,6 +393,25 @@ EOF
     info "Database setup completed successfully"
 }
 
+check_firewall() {
+    info "Checking firewall rules..."
+    
+    # Check if UFW is installed
+    if ! command -v ufw &> /dev/null; then
+        apt-get install -y ufw
+    fi
+    
+    # Enable UFW if not enabled
+    if ! ufw status | grep -q "Status: active"; then
+        echo "y" | ufw enable
+    fi
+    
+    # Allow web port
+    ufw allow ${PORTS[WEB]}/tcp
+    
+    info "Firewall configuration completed"
+}
+
 # Install and configure Python environment
 setup_python() {
     info "Setting up Python environment..."
@@ -1043,41 +1062,21 @@ setup_nginx() {
     # Install Nginx if not present
     apt-get install -y nginx || error "Failed to install Nginx"
     
+    # Stop Nginx if running
+    systemctl stop nginx
+    
     # Create Nginx configuration
     cat > /etc/nginx/sites-available/irssh-panel << EOL
 server {
-    listen ${PORTS[WEB]} ssl http2;
-    listen [::]:${PORTS[WEB]} ssl http2;
+    listen ${PORTS[WEB]};
+    listen [::]:${PORTS[WEB]};
     server_name _;
-
-    ssl_certificate /etc/nginx/ssl/irssh-panel.crt;
-    ssl_certificate_key /etc/nginx/ssl/irssh-panel.key;
-    
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
-    ssl_prefer_server_ciphers off;
-    
-    ssl_session_timeout 1d;
-    ssl_session_cache shared:SSL:10m;
-    ssl_session_tickets off;
-    
-    ssl_stapling on;
-    ssl_stapling_verify on;
-    resolver 8.8.8.8 8.8.4.4 valid=300s;
-    resolver_timeout 5s;
 
     root $PANEL_DIR/frontend/dist;
     index index.html;
 
-    gzip on;
-    gzip_vary on;
-    gzip_proxied any;
-    gzip_comp_level 6;
-    gzip_types text/plain text/css text/xml application/json application/javascript text/javascript application/x-javascript application/xml+rss;
-
     location / {
         try_files \$uri \$uri/ /index.html;
-        add_header Cache-Control "no-store, no-cache, must-revalidate";
     }
 
     location /api {
@@ -1089,21 +1088,6 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_cache_bypass \$http_upgrade;
-        
-        # Security headers
-        add_header X-Frame-Options "SAMEORIGIN" always;
-        add_header X-XSS-Protection "1; mode=block" always;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header Referrer-Policy "no-referrer-when-downgrade" always;
-        add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
-    }
-
-    # Deny access to . files
-    location ~ /\. {
-        deny all;
-        access_log off;
-        log_not_found off;
     }
 }
 EOL
@@ -1111,10 +1095,12 @@ EOL
     # Enable site and remove default
     ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
     rm -f /etc/nginx/sites-enabled/default
-    
-    # Test and restart Nginx
-    nginx -t || error "Nginx configuration test failed"
-    systemctl restart nginx
+
+    # Open port in UFW
+    ufw allow ${PORTS[WEB]}/tcp
+
+    # Test and start Nginx
+    nginx -t && systemctl start nginx || warn "Nginx failed to start"
     
     info "Nginx setup completed"
 }
@@ -1180,8 +1166,11 @@ EOL
     
     info "Configuration generated successfully"
 }
-    
-    # Core services setup
+
+    setup_nginx
+    check_firewall
+
+        # Core services setup
     setup_database() {
     info "Setting up PostgreSQL database..."
     
@@ -1354,11 +1343,32 @@ Web Port: ${PORTS[WEB]}
 SSH Port: ${PORTS[SSH]}
 Installation Directory: ${PANEL_DIR}
 Configuration Directory: ${CONFIG_DIR}
-Frontend URL: https://YOUR-SERVER-IP:${PORTS[WEB]}
+Frontend URL: http://YOUR-SERVER-IP:${PORTS[WEB]}
 Backend URL: http://localhost:8000
 EOL
     
     chmod 600 "$CONFIG_DIR/installation.info"
+    
+    # Display summary
+    cat << EOL
+
+IRSSH Panel Installation Summary
+-------------------------------
+Version: ${VERSION}
+Installation Directory: ${PANEL_DIR}
+Web Interface: http://YOUR-SERVER-IP:${PORTS[WEB]}
+Configuration Directory: ${CONFIG_DIR}
+Log Directory: ${LOG_DIR}
+
+All service configurations and credentials have been saved to:
+${CONFIG_DIR}/installation.info
+
+Please make sure to:
+1. Configure your firewall to allow port ${PORTS[WEB]}
+2. Change default passwords
+3. Access the panel at http://YOUR-SERVER-IP:${PORTS[WEB]}
+
+EOL
     
     info "Installation information saved"
 }
