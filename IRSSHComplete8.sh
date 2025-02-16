@@ -176,27 +176,6 @@ cleanup() {
 check_requirements() {
     info "Checking system requirements..."
     
-# Check Python version
-    if ! command -v python3 &> /dev/null; then
-        info "Installing Python3..."
-        apt-get update
-        apt-get install -y python3 python3-pip
-    fi
-    
-    PYTHON_VERSION=$(python3 -c 'import platform; print(platform.python_version())')
-    PYTHON_MAJOR=$(echo "$PYTHON_VERSION" | cut -d. -f1)
-    PYTHON_MINOR=$(echo "$PYTHON_VERSION" | cut -d. -f2)
-    
-    if [ "$PYTHON_MAJOR" -lt 3 ] || ([ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 8 ]); then
-        info "Upgrading Python to required version..."
-        apt-get update
-        apt-get install -y software-properties-common
-        add-apt-repository -y ppa:deadsnakes/ppa
-        apt-get update
-        apt-get install -y python3.8 python3.8-venv python3.8-dev
-        update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.8 1
-    fi
-
     # Check root privileges
     if [ "$EUID" -ne 0 ]; then
         error "Please run as root"
@@ -228,7 +207,20 @@ check_requirements() {
         error "Insufficient disk space. At least ${REQUIRED_DISK}MB required."
     fi
     
-    # Check software versions
+    # Install Python 3.8 if not present
+    if ! command -v python3.8 &> /dev/null; then
+        info "Installing Python 3.8..."
+        apt-get update
+        apt-get install -y software-properties-common
+        if [[ "$ID" == "ubuntu" ]]; then
+            add-apt-repository -y ppa:deadsnakes/ppa
+        fi
+        apt-get update
+        apt-get install -y python3.8 python3.8-venv python3.8-dev
+        update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.8 1
+    fi
+
+    # Check Node.js
     if ! command -v node &> /dev/null; then
         info "Installing Node.js..."
         curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
@@ -238,11 +230,6 @@ check_requirements() {
     NODE_VERSION=$(node -v | sed 's/v\([0-9]*\).*/\1/')
     if [ "$NODE_VERSION" -lt "$MIN_NODE_VERSION" ]; then
         error "Node.js version must be $MIN_NODE_VERSION or higher"
-    fi
-    
-    PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
-    if [ "$(echo "$PYTHON_VERSION < $MIN_PYTHON_VERSION" | bc)" -eq 1 ]; then
-        error "Python version must be $MIN_PYTHON_VERSION or higher"
     fi
     
     info "System requirements check completed"
