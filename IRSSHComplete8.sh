@@ -1,5 +1,25 @@
 #!/bin/bash
 
+# Ask for web port at the beginning of the script
+get_web_port() {
+    info "Setup web interface port..."
+    read -p "Enter custom port for web panel (4-5 digits) or press Enter for random port: " WEB_PORT
+    if [ -z "$WEB_PORT" ]; then
+        # Generate random port between 1234 and 65432
+        WEB_PORT=$(shuf -i 1234-65432 -n 1)
+        info "Generated random port: $WEB_PORT"
+    else
+        # Validate custom port
+        if ! [[ "$WEB_PORT" =~ ^[0-9]{4,5}$ ]]; then
+            error "Invalid port number. Must be 4-5 digits."
+        fi
+        if [ "$WEB_PORT" -lt 1234 ] || [ "$WEB_PORT" -gt 65432 ]; then
+            error "Port must be between 1234 and 65432"
+        fi
+    fi
+    PORTS[WEB]=$WEB_PORT
+}
+
 # IRSSH Panel Complete Installation Script
 # Version: 3.5.2
 # This script includes all original functionality plus improvements and fixes
@@ -1104,7 +1124,10 @@ main() {
     trap cleanup EXIT
     
     log "INFO" "Starting IRSSH Panel installation v${VERSION}"
-    
+
+    # Get web port from user
+    get_web_port
+
     # Initial setup
     check_requirements
     setup_directories
@@ -1206,11 +1229,139 @@ EOL
     [ "${PROTOCOLS[DROPBEAR]}" = true ] && install_dropbear
     
     # Final configuration
-    setup_nginx
-    setup_security
-    setup_cron
-    verify_installation
-    save_installation_info
+ setup_nginx() {
+    info "Setting up Nginx web server..."
+    
+    # Install Nginx if not present
+    apt-get install -y nginx || error "Failed to install Nginx"
+    
+    # Stop Nginx if running
+    systemctl stop nginx
+    
+    # Create Nginx configuration
+    cat > /etc/nginx/sites-available/irssh-panel << EOL
+server {
+    listen ${PORTS[WEB]} ssl;
+    listen [::]:${PORTS[WEB]} ssl;
+    server_name _;
+
+    ssl_certificate /etc/nginx/ssl/irssh-panel.crt;
+    ssl_certificate_key /etc/nginx/ssl/irssh-panel.key;
+    
+    root $PANEL_DIR/frontend/dist;
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    location /api {
+        proxy_pass http://localhost:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOL
+
+    # Enable site and remove default
+    ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
+    rm -f /etc/nginx/sites-enabled/default
+
+    # Test and start Nginx
+    nginx -t && systemctl start nginx || warn "Nginx failed to start"
+    
+    info "Nginx setup completed"
+}
+
+    setup_security() {
+    info "Setting up security measures..."
+    
+    # Install fail2ban
+    apt-get install -y fail2ban || error "Failed to install fail2ban"
+    
+    # Configure fail2ban
+    cat > /etc/fail2ban/jail.local << 'EOL'
+[DEFAULT]
+bantime = 3600
+findtime = 600
+maxretry = 5
+
+[sshd]
+enabled = true
+port = ssh
+logpath = %(sshd_log)s
+maxretry = 3
+EOL
+
+    systemctl restart fail2ban
+    systemctl enable fail2ban
+    
+    info "Security setup completed"
+}
+
+setup_cron() {
+    info "Setting up maintenance cron jobs..."
+    
+    # Create cleanup script
+    mkdir -p "$PANEL_DIR/scripts"
+    cat > "$PANEL_DIR/scripts/cleanup.sh" << 'EOL'
+#!/bin/bash
+# Cleanup old logs
+find /var/log/irssh -type f -name "*.log" -mtime +30 -delete
+# Cleanup old backups
+find /opt/irssh-backups -type f -mtime +7 -delete
+EOL
+    
+    chmod +x "$PANEL_DIR/scripts/cleanup.sh"
+    
+    # Add cron jobs
+    (crontab -l 2>/dev/null || true; echo "0 0 * * * $PANEL_DIR/scripts/cleanup.sh") | crontab -
+    
+    info "Cron jobs setup completed"
+}
+
+verify_installation() {
+    info "Verifying installation..."
+    
+    # Check critical services
+    local services=("nginx" "postgresql" "irssh-panel" "irssh-backend" "sing-box" "dropbear")
+    for service in "${services[@]}"; do
+        if ! systemctl is-active --quiet "$service"; then
+            warn "Service $service is not running"
+        fi
+    done
+    
+    # Check web server
+    if ! curl -k -s "https://localhost:${PORTS[WEB]}" > /dev/null; then
+        warn "Web server is not responding on port ${PORTS[WEB]}"
+    fi
+    
+    info "Installation verification completed"
+}
+
+save_installation_info() {
+    info "Saving installation information..."
+    
+    cat > "$CONFIG_DIR/installation.info" << EOL
+Installation Date: $(date +"%Y-%m-%d %H:%M:%S")
+Version: ${VERSION}
+Web Port: ${PORTS[WEB]}
+SSH Port: ${PORTS[SSH]}
+Installation Directory: ${PANEL_DIR}
+Configuration Directory: ${CONFIG_DIR}
+Frontend URL: https://YOUR-SERVER-IP:${PORTS[WEB]}
+Backend URL: http://localhost:8000
+EOL
+    
+    chmod 600 "$CONFIG_DIR/installation.info"
+    
+    info "Installation information saved"
+}
     
     info "Installation completed successfully!"
     
