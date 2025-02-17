@@ -492,15 +492,10 @@ EOL
 
 # Database Setup
 setup_database() {
-    info "Setting up PostgreSQL database."
-
-    # Add PostgreSQL repository
-    echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | tee /etc/apt/sources.list.d/pgdg.list
-    wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
-    apt-get update
-
+    info "Setting up PostgreSQL database..."
+    
     # Install PostgreSQL
-    apt-get install -y "postgresql-${DB_VERSION}" "postgresql-contrib-${DB_VERSION}" || error "Failed to install PostgreSQL"
+    apt-get install -y postgresql postgresql-contrib || error "Failed to install PostgreSQL"
     
     # Start and enable PostgreSQL
     systemctl start postgresql
@@ -518,111 +513,30 @@ setup_database() {
         ((attempt++))
     done
     
-    # Configure pg_hba.conf for IPv4 and IPv6
-    local PG_HBA="/etc/postgresql/${DB_VERSION}/main/pg_hba.conf"
+    # Configure pg_hba.conf for authentication
+    local PG_HBA="/etc/postgresql/14/main/pg_hba.conf"
     cp "$PG_HBA" "${PG_HBA}.backup"
     
-    # Update authentication methods
-    sed -i \
-        -e 's/local\s\+all\s\+all\s\+peer/local   all             all                                     md5/' \
-        -e 's/host\s\+all\s\+all\s\+127.0.0.1\/32\s\+scram-sha-256/host    all             all             127.0.0.1\/32            md5/' \
-        -e 's/host\s\+all\s\+all\s\+::1\/128\s\+scram-sha-256/host    all             all             ::1\/128                 md5/' \
-        "$PG_HBA"
+    # Update authentication methods - اضافه کردن این بخش
+    sed -i 's/peer/trust/g' "$PG_HBA"
+    sed -i 's/scram-sha-256/trust/g' "$PG_HBA"
     
-    # Reload PostgreSQL configuration
-    systemctl reload postgresql
+    # Restart PostgreSQL to apply changes
+    systemctl restart postgresql
     
     # Setup database and user
-    cd "${TEMP_DIR}" || error "Failed to access temp directory"
+    su - postgres -c "psql -c \"CREATE USER \\\"$DB_USER\\\" WITH PASSWORD '$DB_PASS' CREATEDB;\""
+    su - postgres -c "psql -c \"CREATE DATABASE \\\"$DB_NAME\\\" OWNER \\\"$DB_USER\\\";\""
+    su - postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE \\\"$DB_NAME\\\" TO \\\"$DB_USER\\\";\""
     
-    # Create SQL setup file
-    cat > setup.sql << EOL
--- Create user if not exists
-DO \$\$
-BEGIN
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${DB_USER}') THEN
-        CREATE USER "${DB_USER}" WITH PASSWORD '${DB_PASS}';
-    ELSE
-        ALTER USER "${DB_USER}" WITH PASSWORD '${DB_PASS}';
-    END IF;
-END
-\$\$;
-
--- Create database if not exists
-SELECT 'CREATE DATABASE ${DB_NAME} OWNER "${DB_USER}"'
-WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '${DB_NAME}');
-
--- Grant privileges
-GRANT ALL PRIVILEGES ON DATABASE "${DB_NAME}" TO "${DB_USER}";
-
--- Connect to the database and create extensions
-\c ${DB_NAME}
-
--- Create required extensions
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
-CREATE EXTENSION IF NOT EXISTS "citext";
-
--- Create schema
-CREATE SCHEMA IF NOT EXISTS app;
-
--- Set search path
-ALTER DATABASE "${DB_NAME}" SET search_path TO app, public;
-
--- Create tables
-CREATE TABLE IF NOT EXISTS app.users (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    username CITEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
-    email CITEXT UNIQUE,
-    role TEXT NOT NULL DEFAULT 'user',
-    status TEXT NOT NULL DEFAULT 'active',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS app.vpn_accounts (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES app.users(id) ON DELETE CASCADE,
-    protocol TEXT NOT NULL,
-    username TEXT NOT NULL,
-    password TEXT,
-    config TEXT,
-    status TEXT NOT NULL DEFAULT 'active',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS app.sessions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES app.users(id) ON DELETE CASCADE,
-    protocol TEXT NOT NULL,
-    ip_address INET,
-    connected_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    disconnected_at TIMESTAMP WITH TIME ZONE,
-    bytes_sent BIGINT DEFAULT 0,
-    bytes_received BIGINT DEFAULT 0
-);
-
--- Create indexes
-CREATE INDEX IF NOT EXISTS idx_users_username ON app.users(username);
-CREATE INDEX IF NOT EXISTS idx_users_email ON app.users(email);
-CREATE INDEX IF NOT EXISTS idx_vpn_accounts_user_id ON app.vpn_accounts(user_id);
-CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON app.sessions(user_id);
-CREATE INDEX IF NOT EXISTS idx_sessions_connected_at ON app.sessions(connected_at);
-
--- Create admin user
-INSERT INTO app.users (username, password_hash, role)
-VALUES ('${ADMIN_USER}', '${ADMIN_PASS_HASH}', 'admin')
-ON CONFLICT (username) DO UPDATE
-SET password_hash = EXCLUDED.password_hash;
-EOL
-
-    # Execute SQL setup
-    PGPASSWORD="$DB_PASS" psql -U "$DB_USER" -d postgres -f setup.sql || error "Failed to setup database"
+    # Switch back to md5 authentication
+    sed -i 's/trust/md5/g' "$PG_HBA"
+    systemctl restart postgresql
     
     # Verify database connection
-    PGPASSWORD="$DB_PASS" psql -h localhost -U "$DB_USER" -d "$DB_NAME" -c '\q' || error "Database connection verification failed"
+    if ! PGPASSWORD="$DB_PASS" psql -h localhost -U "$DB_USER" -d "$DB_NAME" -c '\q'; then
+        error "Database connection verification failed"
+    fi
     
     info "Database setup completed successfully"
 }
