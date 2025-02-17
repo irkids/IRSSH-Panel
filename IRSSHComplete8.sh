@@ -2066,7 +2066,7 @@ setup_monitoring() {
     if [ "$ENABLE_MONITORING" != "y" ]; then
         info "Monitoring system disabled, skipping..."
         return 0
-    }
+    fi
     
     # Install monitoring tools
     apt-get install -y \
