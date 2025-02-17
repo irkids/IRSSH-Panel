@@ -492,8 +492,13 @@ EOL
 
 # Database Setup
 setup_database() {
-    info "Setting up PostgreSQL database..."
-    
+    info "Setting up PostgreSQL database."
+
+    # Add PostgreSQL repository
+    echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | tee /etc/apt/sources.list.d/pgdg.list
+    wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
+    apt-get update
+
     # Install PostgreSQL
     apt-get install -y "postgresql-${DB_VERSION}" "postgresql-contrib-${DB_VERSION}" || error "Failed to install PostgreSQL"
     
@@ -2066,7 +2071,7 @@ setup_monitoring() {
     if [ "$ENABLE_MONITORING" != "y" ]; then
         info "Monitoring system disabled, skipping..."
         return 0
-    fi
+fi
     
     # Install monitoring tools
     apt-get install -y \
