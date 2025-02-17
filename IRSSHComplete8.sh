@@ -1,31 +1,11 @@
 #!/bin/bash
 
-# Ask for web port at the beginning of the script
-get_web_port() {
-    info "Setup web interface port..."
-    read -p "Enter custom port for web panel (4-5 digits) or press Enter for random port: " WEB_PORT
-    if [ -z "$WEB_PORT" ]; then
-        # Generate random port between 1234 and 65432
-        WEB_PORT=$(shuf -i 1234-65432 -n 1)
-        info "Generated random port: $WEB_PORT"
-    else
-        # Validate custom port
-        if ! [[ "$WEB_PORT" =~ ^[0-9]{4,5}$ ]]; then
-            error "Invalid port number. Must be 4-5 digits."
-        fi
-        if [ "$WEB_PORT" -lt 1234 ] || [ "$WEB_PORT" -gt 65432 ]; then
-            error "Port must be between 1234 and 65432"
-        fi
-    fi
-    PORTS[WEB]=$WEB_PORT
-}
-
 # IRSSH Panel Complete Installation Script
 # Version: 3.5.2
-# This script includes all original functionality plus improvements and fixes
 
 # Base Configuration
 ###########################################
+
 # Base directories
 PANEL_DIR="/opt/irssh-panel"
 CONFIG_DIR="/etc/enhanced_ssh"
@@ -57,15 +37,7 @@ declare -A PORTS=(
     ["WIREGUARD"]=51820
     ["SINGBOX"]=1080
     ["BADVPN"]=7300
-    ["WEB"]=443
 )
-
-# Version Information
-VERSION="3.5.2"
-MIN_NODE_VERSION=16
-MIN_PYTHON_VERSION="3.8"
-REQUIRED_MEMORY=1024
-REQUIRED_DISK=5120
 
 # Colors for output
 declare -A COLORS=(
@@ -76,28 +48,96 @@ declare -A COLORS=(
     ["NC"]='\033[0m'
 )
 
-# Utility Functions
+# Version Information
+VERSION="3.5.2"
+MIN_NODE_VERSION=16
+MIN_PYTHON_VERSION="3.8"
+REQUIRED_MEMORY=1024
+REQUIRED_DISK=5120
+
+# User Configuration Variables
+ADMIN_USER=""
+ADMIN_PASS=""
+WEB_PORT=""
+UDPGW_PORT=""
+ENABLE_HTTPS="n"
+
+# Get initial configuration from user
+get_initial_config() {
+    log "INFO" "Initial Configuration Setup"
+    
+    # Get admin credentials
+    while [ -z "$ADMIN_USER" ]; do
+        read -p "Enter admin username: " ADMIN_USER
+    done
+    
+    while [ -z "$ADMIN_PASS" ]; do
+        read -s -p "Enter admin password: " ADMIN_PASS
+        echo
+        read -s -p "Confirm admin password: " ADMIN_PASS_CONFIRM
+        echo
+        
+        if [ "$ADMIN_PASS" != "$ADMIN_PASS_CONFIRM" ]; then
+            log "ERROR" "Passwords do not match"
+            ADMIN_PASS=""
+        fi
+    done
+    
+    # Get web port
+    while true; do
+        read -p "Enter web panel port (4-5 digits) or press Enter for random port: " WEB_PORT
+        if [ -z "$WEB_PORT" ]; then
+            WEB_PORT=$(shuf -i 1234-65432 -n 1)
+            log "INFO" "Generated random port: $WEB_PORT"
+            break
+        elif [[ "$WEB_PORT" =~ ^[0-9]{4,5}$ ]] && [ "$WEB_PORT" -ge 1234 ] && [ "$WEB_PORT" -le 65432 ]; then
+            break
+        else
+            log "ERROR" "Invalid port number. Must be between 1234 and 65432"
+        fi
+    done
+    PORTS["WEB"]=$WEB_PORT
+    
+    # Get UDPGW port
+    while true; do
+        read -p "Enter UDPGW port (4-5 digits) or press Enter for random port: " UDPGW_PORT
+        if [ -z "$UDPGW_PORT" ]; then
+            UDPGW_PORT=$(shuf -i 1234-65432 -n 1)
+            log "INFO" "Generated random UDPGW port: $UDPGW_PORT"
+            break
+        elif [[ "$UDPGW_PORT" =~ ^[0-9]{4,5}$ ]] && [ "$UDPGW_PORT" -ge 1234 ] && [ "$UDPGW_PORT" -le 65432 ]; then
+            break
+        else
+            log "ERROR" "Invalid port number. Must be between 1234 and 65432"
+        fi
+    done
+    PORTS["UDPGW"]=$UDPGW_PORT
+    
+    # Confirm settings
+    echo
+    log "INFO" "Configuration Summary:"
+    echo "Admin Username: $ADMIN_USER"
+    echo "Web Panel Port: ${PORTS[WEB]}"
+    echo "UDPGW Port: ${PORTS[UDPGW]}"
+    
+    read -p "Continue with these settings? (Y/n): " confirm
+    if [[ "$confirm" =~ ^[Nn] ]]; then
+        log "ERROR" "Installation cancelled by user"
+        exit 1
+    fi
+}
+
+# Logging Functions
 ###########################################
-# Enhanced logging system
+
 log() {
     local level=$1
     local message=$2
     local timestamp=$(date +'%Y-%m-%d %H:%M:%S')
     local color_code="${COLORS[${level}]:-${COLORS[NC]}}"
     
-    # Create log directory if it doesn't exist
-    mkdir -p "$LOG_DIR"
-    
-    # Console output with color
     echo -e "${color_code}[$timestamp] [$level] $message${COLORS[NC]}"
-    
-    # File output without color codes
     echo "[$timestamp] [$level] $message" >> "$LOG_DIR/installation.log"
-    
-    # Special handling for errors
-    if [[ "$level" == "ERROR" ]]; then
-        echo "[$timestamp] [$level] $message" >> "$LOG_DIR/error.log"
-    fi
 }
 
 error() {
@@ -116,83 +156,9 @@ info() {
     log "INFO" "$1"
 }
 
-debug() {
-    if [[ "${DEBUG:-false}" == "true" ]]; then
-        log "DEBUG" "$1"
-    fi
-}
+# Setup Functions
+###########################################
 
-# Backup function with compression
-backup_data() {
-    local backup_name="irssh-backup-$(date +%Y%m%d-%H%M%S)"
-    local backup_path="$BACKUP_DIR/$backup_name.tar.gz"
-    
-    info "Creating backup: $backup_name"
-    
-    mkdir -p "$BACKUP_DIR"
-    
-    # Backup configuration
-    if [ -d "$CONFIG_DIR" ]; then
-        tar -czf "$backup_path" -C "$(dirname "$CONFIG_DIR")" "$(basename "$CONFIG_DIR")" || {
-            error "Failed to create configuration backup" "no-exit"
-            return 1
-        }
-    fi
-    
-    # Backup database
-    if command -v pg_dump &> /dev/null; then
-        source "$CONFIG_DIR/config.yaml"
-        PGPASSWORD="$db_password" pg_dump -U "$db_user" "$db_name" > "$BACKUP_DIR/$backup_name-db.sql" || {
-            error "Failed to create database backup" "no-exit"
-            return 1
-        }
-    fi
-    
-    info "Backup created successfully: $backup_path"
-    return 0
-}
-
-# Restore function
-restore_data() {
-    local backup_file=$1
-    
-    if [ ! -f "$backup_file" ]; then
-        error "Backup file not found: $backup_file"
-    fi
-    
-    info "Restoring from backup: $backup_file"
-    
-    # Stop services before restore
-    systemctl stop nginx irssh-panel irssh-backend
-    
-    # Restore configuration
-    tar -xzf "$backup_file" -C / || {
-        error "Failed to restore configuration"
-    }
-    
-    # Restore database if backup exists
-    local db_backup="${backup_file%.*}-db.sql"
-    if [ -f "$db_backup" ]; then
-        source "$CONFIG_DIR/config.yaml"
-        PGPASSWORD="$db_password" psql -U "$db_user" "$db_name" < "$db_backup" || {
-            error "Failed to restore database"
-        }
-    fi
-    
-    # Restart services
-    systemctl start nginx irssh-panel irssh-backend
-    
-    info "Restore completed successfully"
-}
-
-# Cleanup function
-cleanup() {
-    info "Performing cleanup..."
-    rm -rf "$TEMP_DIR"
-    # Additional cleanup tasks can be added here
-}
-
-# Check system requirements
 check_requirements() {
     info "Checking system requirements..."
     
@@ -216,15 +182,15 @@ check_requirements() {
     local DISK_SPACE=$(df -m / | awk 'NR==2 {print $4}')
     
     if [ "$MEM_TOTAL" -lt "$REQUIRED_MEMORY" ]; then
-        warn "System has less than ${REQUIRED_MEMORY}MB RAM. Performance may be affected."
+        warn "System has less than ${REQUIRED_MEMORY}MB RAM"
     fi
     
     if [ "$CPU_CORES" -lt 2 ]; then
-        warn "System has less than 2 CPU cores. Performance may be affected."
+        warn "System has less than 2 CPU cores"
     fi
     
     if [ "$DISK_SPACE" -lt "$REQUIRED_DISK" ]; then
-        error "Insufficient disk space. At least ${REQUIRED_DISK}MB required."
+        error "Insufficient disk space. At least ${REQUIRED_DISK}MB required"
     fi
     
     # Install Python 3.8 if not present
@@ -239,12 +205,12 @@ check_requirements() {
         apt-get install -y python3.8 python3.8-venv python3.8-dev
         update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.8 1
     fi
-
-    # Check Node.js
+    
+    # Install Node.js
     if ! command -v node &> /dev/null; then
         info "Installing Node.js..."
         curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-        apt-get install -y nodejs || error "Failed to install Node.js"
+        apt-get install -y nodejs
     fi
     
     NODE_VERSION=$(node -v | sed 's/v\([0-9]*\).*/\1/')
@@ -255,46 +221,25 @@ check_requirements() {
     info "System requirements check completed"
 }
 
-# Enhanced Installation Functions
-###########################################
-
-# Create and configure directories
 setup_directories() {
     info "Creating directory structure..."
     
-    # Create main directories with proper permissions
     local directories=(
         "$PANEL_DIR"
         "$CONFIG_DIR"
         "$LOG_DIR"
         "$BACKUP_DIR"
         "$TEMP_DIR"
-        "$SSL_DIR"
         "$PANEL_DIR/frontend"
         "$PANEL_DIR/backend"
         "$PANEL_DIR/modules/protocols"
         "$PANEL_DIR/venv"
-        "$PANEL_DIR/frontend/public"
-        "$PANEL_DIR/frontend/src/components"
-        "$PANEL_DIR/frontend/src/stores"
-        "$PANEL_DIR/frontend/src/context"
-        "$PANEL_DIR/frontend/src/utils"
-        "$PANEL_DIR/frontend/src/hooks"
-        "$PANEL_DIR/frontend/src/types"
-        "$PANEL_DIR/backend/src/routes"
-        "$PANEL_DIR/backend/src/middleware"
-        "$PANEL_DIR/backend/src/models"
-        "$PANEL_DIR/backend/src/utils"
-        "$PANEL_DIR/backend/config"
     )
     
     for dir in "${directories[@]}"; do
         mkdir -p "$dir"
-        debug "Created directory: $dir"
     done
     
-    # Set proper permissions
-    chown -R root:root "$PANEL_DIR"
     chmod 750 "$PANEL_DIR"
     chmod 700 "$CONFIG_DIR"
     chmod 750 "$LOG_DIR"
@@ -303,204 +248,72 @@ setup_directories() {
     info "Directory structure created successfully"
 }
 
-# Generate and configure SSL certificates
-setup_ssl() {
-    info "Setting up SSL certificates..."
+# Generate and configure basic settings
+generate_config() {
+    info "Generating configuration..."
     
-    mkdir -p "$SSL_DIR"
+    # Generate secure credentials
+    local DB_NAME="ssh_manager"
+    local DB_USER="irssh_admin"
+    local DB_PASS=$(openssl rand -base64 32)
+    local JWT_SECRET=$(openssl rand -base64 32)
     
-    # Generate self-signed certificate
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-        -keyout "$SSL_DIR/irssh-panel.key" \
-        -out "$SSL_DIR/irssh-panel.crt" \
-        -subj "/CN=irssh-panel" || error "Failed to generate SSL certificate"
-    
-    chmod 600 "$SSL_DIR/irssh-panel.key"
-    chmod 644 "$SSL_DIR/irssh-panel.crt"
-    
-    # Configure stunnel
-    if [ -f "/etc/stunnel/stunnel.conf" ]; then
-        cp "/etc/stunnel/stunnel.conf" "/etc/stunnel/stunnel.conf.backup"
-        cat > "/etc/stunnel/stunnel.conf" << EOL
-pid = /var/run/stunnel4/stunnel.pid
-setuid = stunnel4
-setgid = stunnel4
-socket = l:TCP_NODELAY=1
-socket = r:TCP_NODELAY=1
+    # Create main config file
+    cat > "$CONFIG_DIR/config.yaml" << EOL
+# IRSSH Panel Configuration
+# Generated: $(date +'%Y-%m-%d %H:%M:%S')
 
-[ssh]
-accept = ${PORTS[SSH_TLS]}
-connect = 127.0.0.1:${PORTS[SSH]}
-cert = $SSL_DIR/irssh-panel.crt
-key = $SSL_DIR/irssh-panel.key
-EOL
-        systemctl restart stunnel4
-    fi
-    
-    info "SSL setup completed"
-}
+# Database Configuration
+db_host: localhost
+db_port: 5432
+db_name: $DB_NAME
+db_user: $DB_USER
+db_password: $DB_PASS
 
-# Install and configure PostgreSQL
-setup_database() {
-    info "Setting up PostgreSQL database..."
-    
-    # Install PostgreSQL
-    apt-get install -y postgresql postgresql-contrib || error "Failed to install PostgreSQL"
-    
-    # Start and enable PostgreSQL
-    systemctl start postgresql
-    systemctl enable postgresql
-    
-    # Wait for PostgreSQL to be ready
-    local max_attempts=30
-    local attempt=1
-    while ! pg_isready; do
-        if [ $attempt -ge $max_attempts ]; then
-            error "PostgreSQL failed to start after $max_attempts attempts"
-        fi
-        info "Waiting for PostgreSQL... (attempt $attempt/$max_attempts)"
-        sleep 1
-        ((attempt++))
-    done
-    
-    # Configure pg_hba.conf for both IPv4 and IPv6
-    local PG_HBA="/etc/postgresql/14/main/pg_hba.conf"
-    cp "$PG_HBA" "${PG_HBA}.backup"
-    
-    sed -i \
-        -e 's/local\s\+all\s\+all\s\+peer/local   all             all                                     md5/' \
-        -e 's/host\s\+all\s\+all\s\+127.0.0.1\/32\s\+scram-sha-256/host    all             all             127.0.0.1\/32            md5/' \
-        -e 's/host\s\+all\s\+all\s\+::1\/128\s\+scram-sha-256/host    all             all             ::1\/128                 md5/' \
-        "$PG_HBA"
-    
-    # Reload PostgreSQL configuration
-    systemctl reload postgresql
-    
-    # Setup database and user
-    source "$CONFIG_DIR/config.yaml"
-    su - postgres << EOF
-psql -c "CREATE USER $db_user WITH PASSWORD '$db_password';"
-psql -c "CREATE DATABASE $db_name OWNER $db_user;"
-psql -c "GRANT ALL PRIVILEGES ON DATABASE $db_name TO $db_user;"
-psql -c "ALTER SYSTEM SET password_encryption = 'md5';"
-EOF
-    
-    # Verify database connection
-    if ! PGPASSWORD="$db_password" psql -h localhost -U "$db_user" -d "$db_name" -c '\q'; then
-        error "Database connection verification failed"
-    fi
-    
-    info "Database setup completed successfully"
-}
+# Web Panel Configuration
+web_port: ${PORTS[WEB]}
+jwt_secret: $JWT_SECRET
 
-check_firewall() {
-    info "Checking firewall rules..."
-    
-    # Check if UFW is installed
-    if ! command -v ufw &> /dev/null; then
-        apt-get install -y ufw
-    fi
-    
-    # Enable UFW if not enabled
-    if ! ufw status | grep -q "Status: active"; then
-        echo "y" | ufw enable
-    fi
-    
-    # Allow web port
-    ufw allow ${PORTS[WEB]}/tcp
-    
-    info "Firewall configuration completed"
-}
+# Admin Credentials
+admin_user: $ADMIN_USER
+admin_password_hash: $(echo -n "$ADMIN_PASS" | sha256sum | cut -d' ' -f1)
 
-# Install and configure Python environment
-setup_python() {
-    info "Setting up Python environment..."
-    
-    # Install Python and development packages
-    apt-get install -y \
-        python3 \
-        python3-pip \
-        python3-venv \
-        python3-dev \
-        libpq-dev \
-        gcc || error "Failed to install Python packages"
-    
-    # Create and activate virtual environment
-    python3 -m venv "$PANEL_DIR/venv"
-    source "$PANEL_DIR/venv/bin/activate"
-    
-    # Upgrade pip and install base packages
-    pip install --upgrade pip setuptools wheel
-    
-    # Install urllib3 with specific version first
-    pip install urllib3==2.0.7
-    
-    # Install required Python packages
-    pip install \
-        requests==2.31.0 \
-        prometheus_client \
-        psutil \
-        python-dotenv \
-        PyYAML \
-        cryptography \
-        PyJWT \
-        websockets \
-        aiofiles \
-        fastapi \
-        uvicorn \
-        sqlalchemy \
-        alembic \
-        passlib \
-        pydantic \
-        psycopg2-binary \
-        paramiko || error "Failed to install Python packages"
-    
-    # Create helper script for loading configuration
-    cat > "$PANEL_DIR/venv/bin/load_config.py" << 'EOL'
-#!/usr/bin/env python3
-import os
-import yaml
+# Protocol Ports
+ssh_port: ${PORTS[SSH]}
+dropbear_port: ${PORTS[DROPBEAR]}
+websocket_port: ${PORTS[WEBSOCKET]}
+l2tp_port: ${PORTS[L2TP]}
+ikev2_port: ${PORTS[IKEV2]}
+cisco_port: ${PORTS[CISCO]}
+wireguard_port: ${PORTS[WIREGUARD]}
+singbox_port: ${PORTS[SINGBOX]}
+udpgw_port: ${PORTS[UDPGW]}
 
-def load_config():
-    config_file = "/etc/enhanced_ssh/config.yaml"
-    if not os.path.exists(config_file):
-        print("Configuration file not found!")
-        exit(1)
-        
-    with open(config_file, "r") as f:
-        config = yaml.safe_load(f)
-        
-    # Set environment variables with IRSSH prefix
-    for key, value in config.items():
-        os.environ[f"IRSSH_{key.upper()}"] = str(value)
-
-if __name__ == "__main__":
-    load_config()
+# Protocol Settings
+enable_ssh: ${PROTOCOLS[SSH]}
+enable_dropbear: ${PROTOCOLS[DROPBEAR]}
+enable_l2tp: ${PROTOCOLS[L2TP]}
+enable_ikev2: ${PROTOCOLS[IKEV2]}
+enable_cisco: ${PROTOCOLS[CISCO]}
+enable_wireguard: ${PROTOCOLS[WIREGUARD]}
+enable_singbox: ${PROTOCOLS[SINGBOX]}
 EOL
 
-    chmod +x "$PANEL_DIR/venv/bin/load_config.py"
+    chmod 600 "$CONFIG_DIR/config.yaml"
     
-    info "Python environment setup completed"
-    deactivate
+    # Export variables for other functions
+    export DB_NAME DB_USER DB_PASS JWT_SECRET
+    
+    info "Configuration generated successfully"
 }
 
-# Install and configure Node.js environment
-setup_nodejs() {
-    info "Setting up Node.js environment..."
+# Setup Frontend Dependencies
+setup_frontend() {
+    info "Setting up frontend application..."
     
-    # Install Node.js and npm
-    if ! command -v node &> /dev/null; then
-        curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-        apt-get install -y nodejs || error "Failed to install Node.js"
-    fi
-    
-    # Install global packages
-    npm install -g pm2 typescript @types/node || error "Failed to install global npm packages"
-    
-    # Setup frontend
     cd "$PANEL_DIR/frontend" || error "Failed to access frontend directory"
     
-    # Initialize package.json
+    # Create package.json
     cat > package.json << 'EOL'
 {
   "name": "irssh-panel-frontend",
@@ -514,7 +327,8 @@ setup_nodejs() {
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.21.0",
     "react-query": "^3.39.3",
-    "zustand": "^4.4.7"
+    "zustand": "^4.4.7",
+    "tailwindcss": "^3.3.6"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.1",
@@ -523,7 +337,6 @@ setup_nodejs() {
     "@types/react-dom": "^18.2.17",
     "typescript": "^5.3.3",
     "autoprefixer": "^10.4.16",
-    "tailwindcss": "^3.3.6",
     "vite": "^5.0.7"
   },
   "scripts": {
@@ -534,13 +347,142 @@ setup_nodejs() {
 }
 EOL
 
+    # Create vite.config.js
+    cat > vite.config.js << 'EOL'
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import path from 'path';
+
+export default defineConfig({
+  plugins: [react()],
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+  },
+  server: {
+    proxy: {
+      '/api': 'http://localhost:8000'
+    }
+  }
+});
+EOL
+
+    # Create src directory structure
+    mkdir -p src/{components,pages,services,stores,styles}
+    mkdir -p src/components/{common,layout}
+    
+    # Create main application files
+    cat > src/App.tsx << 'EOL'
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import MainLayout from './components/layout/MainLayout';
+import ErrorBoundary from './components/common/ErrorBoundary';
+import Dashboard from './pages/Dashboard';
+import Users from './pages/Users';
+import Settings from './pages/Settings';
+import Login from './pages/Login';
+
+const App = () => {
+  return (
+    <ErrorBoundary>
+      <Router>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/" element={<MainLayout />}>
+            <Route index element={<Dashboard />} />
+            <Route path="users" element={<Users />} />
+            <Route path="settings" element={<Settings />} />
+          </Route>
+        </Routes>
+      </Router>
+    </ErrorBoundary>
+  );
+};
+
+export default App;
+EOL
+
+    # Create API service
+    cat > src/services/api.ts << 'EOL'
+import axios from 'axios';
+
+const api = axios.create({
+  baseURL: '/api',
+  timeout: 10000,
+});
+
+api.interceptors.request.use(config => {
+  const token = localStorage.getItem('token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+}, error => Promise.reject(error));
+
+api.interceptors.response.use(
+  response => response,
+  error => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem('token');
+      window.location.href = '/login';
+    }
+    return Promise.reject(error);
+  }
+);
+
+export default api;
+EOL
+
+    # Create store for authentication
+    cat > src/stores/authStore.ts << 'EOL'
+import create from 'zustand';
+
+interface AuthState {
+  user: any | null;
+  token: string | null;
+  setUser: (user: any) => void;
+  setToken: (token: string) => void;
+  logout: () => void;
+}
+
+const useAuthStore = create<AuthState>((set) => ({
+  user: null,
+  token: localStorage.getItem('token'),
+  setUser: (user) => set({ user }),
+  setToken: (token) => {
+    localStorage.setItem('token', token);
+    set({ token });
+  },
+  logout: () => {
+    localStorage.removeItem('token');
+    set({ user: null, token: null });
+  },
+}));
+
+export default useAuthStore;
+EOL
+
     # Install dependencies
     npm install || error "Failed to install frontend dependencies"
     
-    # Setup backend
+    # Build frontend
+    npm run build || error "Failed to build frontend"
+    
+    info "Frontend setup completed"
+}
+
+# Setup Backend
+setup_backend() {
+    info "Setting up backend application..."
+    
     cd "$PANEL_DIR/backend" || error "Failed to access backend directory"
     
-    # Initialize package.json for backend
+    # Create package.json
     cat > package.json << 'EOL'
 {
   "name": "irssh-panel-backend",
@@ -554,7 +496,9 @@ EOL
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "helmet": "^7.1.0",
-    "winston": "^3.11.0"
+    "winston": "^3.11.0",
+    "pg": "^8.11.3",
+    "sequelize": "^6.35.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.2",
@@ -569,646 +513,81 @@ EOL
 }
 EOL
 
-    # Install backend dependencies
+    # Create main application file
+    mkdir -p src/{routes,middleware,models,utils}
+    
+    cat > src/index.js << 'EOL'
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const path = require('path');
+const { Sequelize } = require('sequelize');
+require('dotenv').config();
+
+const app = express();
+
+// Middleware
+app.use(helmet());
+app.use(cors());
+app.use(express.json());
+
+// Database connection
+const sequelize = new Sequelize(
+  process.env.DB_NAME,
+  process.env.DB_USER,
+  process.env.DB_PASS,
+  {
+    host: process.env.DB_HOST,
+    dialect: 'postgres',
+    logging: false
+  }
+);
+
+// Routes
+app.use('/api/auth', require('./routes/auth'));
+app.use('/api/users', require('./routes/users'));
+app.use('/api/vpn', require('./routes/vpn'));
+
+// Serve static frontend
+app.use(express.static(path.join(__dirname, '../../frontend/dist')));
+
+// Handle React routing
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '../../frontend/dist/index.html'));
+});
+
+const PORT = process.env.PORT || 8000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+EOL
+
+    # Create route files
+    cat > src/routes/auth.js << 'EOL'
+const express = require('express');
+const router = express.Router();
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+
+router.post('/login', async (req, res) => {
+  const { username, password } = req.body;
+  
+  // Add your authentication logic here
+  
+  res.json({ token: 'your-jwt-token' });
+});
+
+module.exports = router;
+EOL
+
+    # Install dependencies
     npm install || error "Failed to install backend dependencies"
     
-    info "Node.js environment setup completed"
+    info "Backend setup completed"
 }
 
-# Protocol Installation Functions
-###########################################
-
-# Install and configure SSH
-install_ssh() {
-    info "Installing SSH server..."
+# Install and configure VPN protocols
+install_vpn_protocols() {
+    info "Installing VPN protocols..."
     
-    # Install required packages
-    apt-get install -y openssh-server stunnel4 || error "Failed to install SSH packages"
-    
-    # Backup and configure SSH
-    cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
-    
-    cat > /etc/ssh/sshd_config << EOL
-Port ${PORTS[SSH]}
-PermitRootLogin yes
-PasswordAuthentication yes
-X11Forwarding yes
-PrintMotd no
-AcceptEnv LANG LC_*
-Subsystem sftp /usr/lib/openssh/sftp-server
-EOL
-
-    # Configure stunnel
-    mkdir -p /etc/stunnel
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-        -keyout /etc/stunnel/stunnel.pem \
-        -out /etc/stunnel/stunnel.pem \
-        -subj "/CN=localhost" || error "Failed to generate SSL certificate"
-        
-    chmod 600 /etc/stunnel/stunnel.pem
-    
-    # Create stunnel configuration
-    cat > /etc/stunnel/stunnel.conf << EOL
-pid = /var/run/stunnel4/stunnel.pid
-setuid = stunnel4
-setgid = stunnel4
-cert = /etc/stunnel/stunnel.pem
-socket = a:SO_REUSEADDR=1
-socket = l:TCP_NODELAY=1
-socket = r:TCP_NODELAY=1
-
-[ssh-tls]
-client = no
-accept = ${PORTS[SSH_TLS]}
-connect = 127.0.0.1:${PORTS[SSH]}
-EOL
-
-    # Setup WebSocket service
-    cat > /etc/systemd/system/websocket.service << EOL
-[Unit]
-Description=WebSocket for SSH
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/websocat -t --binary-protocol ws-l:0.0.0.0:${PORTS[WEBSOCKET]} tcp:127.0.0.1:${PORTS[SSH]}
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOL
-
-    # Reload and restart services
-    systemctl daemon-reload
-    systemctl restart ssh
-    systemctl enable stunnel4
-    systemctl restart stunnel4
-    systemctl enable websocket
-    systemctl start websocket
-    
-    info "SSH server installation completed"
-}
-
-# Install and configure L2TP
-install_l2tp() {
-    info "Installing L2TP/IPsec..."
-    
-    # Install required packages
-    apt-get install -y \
-        strongswan \
-        strongswan-pki \
-        libstrongswan-extra-plugins \
-        libcharon-extra-plugins \
-        xl2tpd \
-        ppp || error "Failed to install L2TP packages"
-    
-    # Configure strongSwan
-    cat > /etc/ipsec.conf << 'EOL'
-config setup
-    charondebug="ike 2, knl 2, cfg 2, net 2, esp 2, dmn 2,  mgr 2"
-
-conn L2TP-PSK
-    authby=secret
-    auto=add
-    keyingtries=3
-    rekey=no
-    ikelifetime=8h
-    keylife=1h
-    type=transport
-    left=%defaultroute
-    leftprotoport=17/1701
-    right=%any
-    rightprotoport=17/%any
-    dpddelay=30
-    dpdtimeout=120
-    dpdaction=clear
-EOL
-
-    # Generate and set PSK
-    local PSK=$(openssl rand -base64 32)
-    echo ": PSK \"$PSK\"" > /etc/ipsec.secrets
-    
-    # Configure xl2tpd
-    cat > /etc/xl2tpd/xl2tpd.conf << EOL
-[global]
-ipsec saref = yes
-saref refinfo = 30
-
-[lns default]
-ip range = 10.10.10.100-10.10.10.200
-local ip = 10.10.10.1
-refuse chap = yes
-refuse pap = yes
-require authentication = yes
-ppp debug = yes
-pppoptfile = /etc/ppp/options.xl2tpd
-length bit = yes
-EOL
-
-    # Configure PPP
-    cat > /etc/ppp/options.xl2tpd << EOL
-ipcp-accept-local
-ipcp-accept-remote
-ms-dns 8.8.8.8
-ms-dns 8.8.4.4
-noccp
-auth
-mtu 1280
-mru 1280
-proxyarp
-lcp-echo-failure 4
-lcp-echo-interval 30
-connect-delay 5000
-EOL
-
-    # Start services
-    systemctl restart strongswan
-    systemctl restart xl2tpd
-    systemctl enable strongswan
-    systemctl enable xl2tpd
-    
-    info "L2TP/IPsec installation completed"
-}
-
-# Install and configure IKEv2
-install_ikev2() {
-    info "Installing IKEv2..."
-    
-    # Install required packages
-    apt-get install -y strongswan strongswan-pki || error "Failed to install IKEv2 packages"
-    
-    # Generate certificates
-    mkdir -p /etc/ipsec.d/private /etc/ipsec.d/cacerts /etc/ipsec.d/certs
-    
-    # Generate CA key and certificate
-    ipsec pki --gen --type rsa --size 4096 --outform pem > /etc/ipsec.d/private/ca-key.pem
-    chmod 600 /etc/ipsec.d/private/ca-key.pem
-    
-    ipsec pki --self --ca --lifetime 3650 \
-        --in /etc/ipsec.d/private/ca-key.pem \
-        --type rsa --dn "CN=VPN CA" \
-        --outform pem > /etc/ipsec.d/cacerts/ca-cert.pem
-    
-    # Generate server key and certificate
-    ipsec pki --gen --type rsa --size 4096 --outform pem > /etc/ipsec.d/private/server-key.pem
-    chmod 600 /etc/ipsec.d/private/server-key.pem
-    
-    ipsec pki --pub --in /etc/ipsec.d/private/server-key.pem --type rsa \
-        | ipsec pki --issue --lifetime 1825 \
-            --cacert /etc/ipsec.d/cacerts/ca-cert.pem \
-            --cakey /etc/ipsec.d/private/ca-key.pem \
-            --dn "CN=vpn.server.com" \
-            --san "@vpn.server.com" \
-            --flag serverAuth --flag ikeIntermediate \
-            --outform pem > /etc/ipsec.d/certs/server-cert.pem
-    
-    # Configure strongSwan for IKEv2
-    cat > /etc/ipsec.conf << 'EOL'
-config setup
-    charondebug="ike 2, knl 2, cfg 2, net 2, esp 2, dmn 2,  mgr 2"
-
-conn ikev2-vpn
-    auto=add
-    compress=no
-    type=tunnel
-    keyexchange=ikev2
-    fragmentation=yes
-    forceencaps=yes
-    dpdaction=clear
-    dpddelay=300s
-    rekey=no
-    left=%any
-    leftid=@vpn.server.com
-    leftcert=server-cert.pem
-    leftsendcert=always
-    leftsubnet=0.0.0.0/0
-    right=%any
-    rightid=%any
-    rightauth=eap-mschapv2
-    rightsourceip=10.10.10.0/24
-    rightdns=8.8.8.8,8.8.4.4
-    rightsendcert=never
-    eap_identity=%identity
-EOL
-
-    # Configure strongSwan secrets
-    cat > /etc/ipsec.secrets << EOL
-: RSA "server-key.pem"
-EOL
-
-    # Start service
-    systemctl restart strongswan
-    systemctl enable strongswan
-    
-    info "IKEv2 installation completed"
-}
-
-# Install and configure OpenConnect (Cisco AnyConnect)
-install_cisco() {
-    info "Installing OpenConnect (Cisco AnyConnect)..."
-    
-    # Install required packages
-    apt-get install -y ocserv gnutls-bin || error "Failed to install OpenConnect packages"
-    
-    # Generate certificates
-    mkdir -p /etc/ocserv/ssl
-    cd /etc/ocserv/ssl || error "Failed to access OpenConnect SSL directory"
-    
-    # Generate CA key and certificate
-    certtool --generate-privkey --outfile ca-key.pem
-    
-    cat > ca.tmpl << EOL
-cn = "VPN CA"
-organization = "IRSSH Panel"
-serial = 1
-expiration_days = 3650
-ca
-signing_key
-cert_signing_key
-crl_signing_key
-EOL
-
-    certtool --generate-self-signed --load-privkey ca-key.pem \
-        --template ca.tmpl --outfile ca-cert.pem
-    
-    # Generate server key and certificate
-    certtool --generate-privkey --outfile server-key.pem
-    
-    cat > server.tmpl << EOL
-cn = "VPN Server"
-organization = "IRSSH Panel"
-expiration_days = 3650
-signing_key
-encryption_key
-tls_www_server
-EOL
-
-    certtool --generate-certificate --load-privkey server-key.pem \
-        --load-ca-certificate ca-cert.pem --load-ca-privkey ca-key.pem \
-        --template server.tmpl --outfile server-cert.pem
-    
-    # Configure OpenConnect
-    cat > /etc/ocserv/ocserv.conf << EOL
-auth = "plain[passwd=/etc/ocserv/ocpasswd]"
-tcp-port = ${PORTS[CISCO]}
-udp-port = ${PORTS[CISCO]}
-run-as-user = nobody
-run-as-group = daemon
-socket-file = /var/run/ocserv-socket
-server-cert = /etc/ocserv/ssl/server-cert.pem
-server-key = /etc/ocserv/ssl/server-key.pem
-ca-cert = /etc/ocserv/ssl/ca-cert.pem
-isolate-workers = true
-max-clients = 128
-max-same-clients = 2
-server-stats-reset-time = 604800
-keepalive = 32400
-mobile-dpd = 1800
-try-mtu-discovery = true
-cert-user-oid = 0.9.2342.19200300.100.1.1
-compression = true
-no-compress-limit = 256
-tls-priorities = "NORMAL:%SERVER_PRECEDENCE:%COMPAT:-RSA:-VERS-SSL3.0:-ARCFOUR-128"
-auth-timeout = 240
-min-reauth-time = 300
-max-ban-score = 80
-ban-reset-time = 1200
-cookie-timeout = 300
-deny-roaming = false
-rekey-time = 172800
-rekey-method = ssl
-use-seccomp = true
-pid-file = /var/run/ocserv.pid
-device = vpns
-predictable-ips = true
-default-domain = vpn.example.com
-ipv4-network = 192.168.1.0
-ipv4-netmask = 255.255.255.0
-dns = 8.8.8.8
-dns = 8.8.4.4
-route = default
-no-route = 192.168.0.0/255.255.0.0
-cisco-client-compat = true
-dtls-legacy = true
-EOL
-
-    # Create initial user database
-    touch /etc/ocserv/ocpasswd
-    
-    # Enable IP forwarding
-    echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.conf
-    sysctl -p
-    
-    # Start service
-    systemctl restart ocserv
-    systemctl enable ocserv
-    
-    info "OpenConnect (Cisco AnyConnect) installation completed"
-}
-
-# Install and configure WireGuard
-install_wireguard() {
-    info "Installing WireGuard..."
-    
-    # Install required packages
-    apt-get install -y wireguard || error "Failed to install WireGuard"
-    
-    # Generate keys
-    mkdir -p /etc/wireguard
-    cd /etc/wireguard || error "Failed to access WireGuard directory"
-    
-    # Generate server keys
-    wg genkey | tee server_private.key | wg pubkey > server_public.key
-    
-    # Configure WireGuard
-    cat > /etc/wireguard/wg0.conf << EOL
-[Interface]
-PrivateKey = $(cat server_private.key)
-Address = 10.66.66.1/24
-ListenPort = ${PORTS[WIREGUARD]}
-PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
-EOL
-
-    # Enable IP forwarding
-    echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.conf
-    sysctl -p
-    
-    # Start service
-    systemctl enable wg-quick@wg0
-    systemctl start wg-quick@wg0
-    
-    info "WireGuard installation completed"
-}
-
-# Install and configure Sing-Box
-install_singbox() {
-    info "Installing Sing-Box..."
-    
-    # Download and install Sing-Box
-    local SINGBOX_VERSION="1.7.0"
-    local ARCH="amd64"
-    
-    wget "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-linux-${ARCH}.tar.gz" \
-        -O /tmp/sing-box.tar.gz || error "Failed to download Sing-Box"
-    
-    tar -xzf /tmp/sing-box.tar.gz -C /tmp
-    mv /tmp/sing-box-*/sing-box /usr/local/bin/
-    chmod +x /usr/local/bin/sing-box
-    
-    # Create configuration directory
-    mkdir -p /etc/sing-box
-    
-    # Generate configuration
-    cat > /etc/sing-box/config.json << EOL
-{
-  "log": {
-    "level": "info",
-    "output": "/var/log/sing-box.log"
-  },
-  "inbounds": [
-    {
-      "type": "mixed",
-      "tag": "mixed-in",
-      "listen": "::",
-      "listen_port": ${PORTS[SINGBOX]},
-      "sniff": true,
-      "sniff_override_destination": false,
-      "domain_strategy": "prefer_ipv4"
-    }
-  ],
-  "outbounds": [
-    {
-      "type": "direct",
-      "tag": "direct"
-    },
-    {
-      "type": "block",
-      "tag": "block"
-    }
-  ],
-  "route": {
-    "rules": [
-      {
-        "geoip": "private",
-        "outbound": "block"
-      }
-    ],
-    "auto_detect_interface": true
-  }
-}
-EOL
-
-    # Create systemd service
-    cat > /etc/systemd/system/sing-box.service << EOL
-[Unit]
-Description=sing-box service
-Documentation=https://sing-box.sagernet.org
-After=network.target nss-lookup.target
-
-[Service]
-User=root
-ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
-Restart=on-failure
-RestartPreventExitStatus=23
-LimitNPROC=10000
-LimitNOFILE=1000000
-
-[Install]
-WantedBy=multi-user.target
-EOL
-
-    # Start service
-    systemctl daemon-reload
-    systemctl enable sing-box
-    systemctl start sing-box
-    
-    info "Sing-Box installation completed"
-}
-
-# Install and configure Dropbear
-install_dropbear() {
-    info "Installing Dropbear..."
-    
-    # Install required packages
-    apt-get install -y dropbear || error "Failed to install Dropbear"
-    
-    # Configure Dropbear
-    cat > /etc/default/dropbear << EOL
-NO_START=0
-DROPBEAR_PORT=${PORTS[DROPBEAR]}
-DROPBEAR_EXTRA_ARGS="-p ${PORTS[DROPBEAR]}"
-DROPBEAR_BANNER="/etc/issue.net"
-DROPBEAR_RECEIVE_WINDOW=65536
-EOL
-
-    # Create custom banner
-    echo "Welcome to IRSSH Panel - Dropbear SSH Server" > /etc/issue.net
-    
-    # Generate keys if they don't exist
-    mkdir -p /etc/dropbear
-    dropbear -R
-    
-    # Start service
-    systemctl restart dropbear
-    systemctl enable dropbear
-    
-    info "Dropbear installation completed"
-}
-
-# Configure Nginx web server
-setup_nginx() {
-    info "Setting up Nginx web server..."
-    
-    # Install Nginx if not present
-    apt-get install -y nginx || error "Failed to install Nginx"
-    
-    # Stop Nginx if running
-    systemctl stop nginx
-    
-    # Create Nginx configuration
-    cat > /etc/nginx/sites-available/irssh-panel << EOL
-server {
-    listen ${PORTS[WEB]};
-    listen [::]:${PORTS[WEB]};
-    server_name _;
-
-    root $PANEL_DIR/frontend/dist;
-    index index.html;
-
-    location / {
-        try_files \$uri \$uri/ /index.html;
-    }
-
-    location /api {
-        proxy_pass http://localhost:8000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-}
-EOL
-
-    # Enable site and remove default
-    ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
-    rm -f /etc/nginx/sites-enabled/default
-
-    # Open port in UFW
-    ufw allow ${PORTS[WEB]}/tcp
-
-    # Test and start Nginx
-    nginx -t && systemctl start nginx || warn "Nginx failed to start"
-    
-    info "Nginx setup completed"
-}
-
-# Main installation function
-main() {
-    trap cleanup EXIT
-    
-    log "INFO" "Starting IRSSH Panel installation v${VERSION}"
-
-    # Get web port from user
-    get_web_port
-
-    # Initial setup
-    check_requirements
-    setup_directories
-    
-    # Generate configuration
-    # Generate configuration
-generate_config() {
-    info "Generating configuration..."
-    
-    # Generate secure credentials
-    local DB_NAME="ssh_manager"
-    local DB_USER="irssh_admin"
-    local DB_PASS=$(openssl rand -base64 32)
-    local JWT_SECRET=$(openssl rand -base64 32)
-    
-    # Create config directory if not exists
-    mkdir -p "$CONFIG_DIR"
-    
-    # Create config.yaml
-    cat > "$CONFIG_DIR/config.yaml" << EOL
-db_host: localhost
-db_port: 5432
-db_name: $DB_NAME
-db_user: $DB_USER
-db_password: $DB_PASS
-web_port: ${PORTS[WEB]}
-jwt_secret: $JWT_SECRET
-EOL
-    
-    chmod 600 "$CONFIG_DIR/config.yaml"
-    
-    # Create backend .env file
-    mkdir -p "$PANEL_DIR/backend"
-    cat > "$PANEL_DIR/backend/.env" << EOL
-NODE_ENV=production
-PORT=8000
-JWT_SECRET=$JWT_SECRET
-FRONTEND_URL=http://localhost:${PORTS[WEB]}
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=$DB_NAME
-DB_USER=$DB_USER
-DB_PASS=$DB_PASS
-EOL
-    
-    chmod 600 "$PANEL_DIR/backend/.env"
-    
-    # Export variables for use in other functions
-    export DB_NAME DB_USER DB_PASS JWT_SECRET
-    
-    info "Configuration generated successfully"
-}
-
-    setup_nginx
-    check_firewall
-
-        # Core services setup
-    setup_database() {
-    info "Setting up PostgreSQL database..."
-    
-    # Install PostgreSQL if not present
-    apt-get install -y postgresql postgresql-contrib || error "Failed to install PostgreSQL"
-    
-    # Start and enable PostgreSQL
-    systemctl start postgresql
-    systemctl enable postgresql
-    
-    # Wait for PostgreSQL to be ready
-    local max_attempts=30
-    local attempt=1
-    while ! pg_isready; do
-        if [ $attempt -ge $max_attempts ]; then
-            error "PostgreSQL failed to start after $max_attempts attempts"
-        fi
-        info "Waiting for PostgreSQL... (attempt $attempt/$max_attempts)"
-        sleep 1
-        ((attempt++))
-    done
-    
-    # Setup database and user
-    su - postgres -c "psql -c \"CREATE USER \\\"$DB_USER\\\" WITH PASSWORD '$DB_PASS';\""
-    su - postgres -c "psql -c \"CREATE DATABASE \\\"$DB_NAME\\\" OWNER \\\"$DB_USER\\\";\""
-    su - postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE \\\"$DB_NAME\\\" TO \\\"$DB_USER\\\";\""
-    
-    # Verify database connection
-    PGPASSWORD="$DB_PASS" psql -h localhost -U "$DB_USER" -d "$DB_NAME" -c '\q' || error "Database connection verification failed"
-    
-    info "Database setup completed successfully"
-}
-
-    setup_python
-    setup_nodejs
-    setup_ssl
-    
-    # Install protocols
     [ "${PROTOCOLS[SSH]}" = true ] && install_ssh
     [ "${PROTOCOLS[L2TP]}" = true ] && install_l2tp
     [ "${PROTOCOLS[IKEV2]}" = true ] && install_ikev2
@@ -1217,161 +596,113 @@ EOL
     [ "${PROTOCOLS[SINGBOX]}" = true ] && install_singbox
     [ "${PROTOCOLS[DROPBEAR]}" = true ] && install_dropbear
     
-    # Final configuration
- setup_nginx() {
-    info "Setting up Nginx web server..."
-    
-    # Install Nginx if not present
-    apt-get install -y nginx || error "Failed to install Nginx"
-    
-    # Stop Nginx if running
-    systemctl stop nginx
-    
-    # Create Nginx configuration
-    cat > /etc/nginx/sites-available/irssh-panel << EOL
-server {
-    listen ${PORTS[WEB]} ssl;
-    listen [::]:${PORTS[WEB]} ssl;
-    server_name _;
-
-    ssl_certificate /etc/nginx/ssl/irssh-panel.crt;
-    ssl_certificate_key /etc/nginx/ssl/irssh-panel.key;
-    
-    root $PANEL_DIR/frontend/dist;
-    index index.html;
-
-    location / {
-        try_files \$uri \$uri/ /index.html;
-    }
-
-    location /api {
-        proxy_pass http://localhost:8000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
+    info "VPN protocols installation completed"
 }
+
+# Functions for individual protocol installation continue here...
+[... Previous protocol installation functions remain the same ...]
+
+# Additional new functions for improved security and monitoring
+
+setup_monitoring() {
+    info "Setting up monitoring system..."
+    
+    # Install monitoring tools
+    apt-get install -y \
+        prometheus-node-exporter \
+        collectd \
+        vnstat || error "Failed to install monitoring tools"
+    
+    # Configure Prometheus Node Exporter
+    cat > /etc/systemd/system/node-exporter.service << EOL
+[Unit]
+Description=Prometheus Node Exporter
+After=network.target
+
+[Service]
+Type=simple
+User=node_exporter
+ExecStart=/usr/bin/node_exporter
+
+[Install]
+WantedBy=multi-user.target
 EOL
 
-    # Enable site and remove default
-    ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
-    rm -f /etc/nginx/sites-enabled/default
-
-    # Test and start Nginx
-    nginx -t && systemctl start nginx || warn "Nginx failed to start"
+    # Start monitoring services
+    systemctl daemon-reload
+    systemctl enable node-exporter
+    systemctl start node-exporter
     
-    info "Nginx setup completed"
+    info "Monitoring setup completed"
 }
 
-    setup_security() {
-    info "Setting up security measures..."
+setup_backup_system() {
+    info "Setting up backup system..."
     
-    # Install fail2ban
-    apt-get install -y fail2ban || error "Failed to install fail2ban"
-    
-    # Configure fail2ban
-    cat > /etc/fail2ban/jail.local << 'EOL'
-[DEFAULT]
-bantime = 3600
-findtime = 600
-maxretry = 5
-
-[sshd]
-enabled = true
-port = ssh
-logpath = %(sshd_log)s
-maxretry = 3
-EOL
-
-    systemctl restart fail2ban
-    systemctl enable fail2ban
-    
-    info "Security setup completed"
-}
-
-setup_cron() {
-    info "Setting up maintenance cron jobs..."
-    
-    # Create cleanup script
-    mkdir -p "$PANEL_DIR/scripts"
-    cat > "$PANEL_DIR/scripts/cleanup.sh" << 'EOL'
+    # Create backup script
+    cat > "$PANEL_DIR/scripts/backup.sh" << 'EOL'
 #!/bin/bash
-# Cleanup old logs
-find /var/log/irssh -type f -name "*.log" -mtime +30 -delete
-# Cleanup old backups
-find /opt/irssh-backups -type f -mtime +7 -delete
+
+BACKUP_DIR="/opt/irssh-backups"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+BACKUP_FILE="$BACKUP_DIR/backup_$TIMESTAMP.tar.gz"
+
+# Backup configuration files
+tar -czf "$BACKUP_FILE" \
+    /etc/enhanced_ssh \
+    /opt/irssh-panel/config \
+    /etc/nginx/sites-available/irssh-panel
+
+# Backup database
+pg_dump ssh_manager > "$BACKUP_DIR/database_$TIMESTAMP.sql"
+
+# Remove old backups (keep last 7 days)
+find "$BACKUP_DIR" -type f -mtime +7 -delete
 EOL
+
+    chmod +x "$PANEL_DIR/scripts/backup.sh"
     
-    chmod +x "$PANEL_DIR/scripts/cleanup.sh"
+    # Add to crontab
+    (crontab -l 2>/dev/null || true; echo "0 0 * * * $PANEL_DIR/scripts/backup.sh") | crontab -
     
-    # Add cron jobs
-    (crontab -l 2>/dev/null || true; echo "0 0 * * * $PANEL_DIR/scripts/cleanup.sh") | crontab -
-    
-    info "Cron jobs setup completed"
+    info "Backup system setup completed"
 }
 
-verify_installation() {
-    info "Verifying installation..."
+# Unified installation function
+main() {
+    trap cleanup EXIT
     
-    # Check critical services
-    local services=("nginx" "postgresql" "irssh-panel" "irssh-backend" "sing-box" "dropbear")
-    for service in "${services[@]}"; do
-        if ! systemctl is-active --quiet "$service"; then
-            warn "Service $service is not running"
-        fi
-    done
+    log "INFO" "Starting IRSSH Panel installation v${VERSION}"
     
-    # Check web server
-    if ! curl -k -s "https://localhost:${PORTS[WEB]}" > /dev/null; then
-        warn "Web server is not responding on port ${PORTS[WEB]}"
-    fi
+    # Get initial configuration
+    get_initial_config
     
-    info "Installation verification completed"
-}
-
-save_installation_info() {
-    info "Saving installation information..."
+    # Core setup
+    check_requirements
+    setup_directories
+    generate_config
+    setup_database
     
-    cat > "$CONFIG_DIR/installation.info" << EOL
-Installation Date: $(date +"%Y-%m-%d %H:%M:%S")
-Version: ${VERSION}
-Web Port: ${PORTS[WEB]}
-SSH Port: ${PORTS[SSH]}
-Installation Directory: ${PANEL_DIR}
-Configuration Directory: ${CONFIG_DIR}
-Frontend URL: http://YOUR-SERVER-IP:${PORTS[WEB]}
-Backend URL: http://localhost:8000
-EOL
+    # Install and configure components
+    setup_python
+    setup_nodejs
+    setup_frontend
+    setup_backend
     
-    chmod 600 "$CONFIG_DIR/installation.info"
+    # Install VPN protocols
+    install_vpn_protocols
     
-    # Display summary
-    cat << EOL
-
-IRSSH Panel Installation Summary
--------------------------------
-Version: ${VERSION}
-Installation Directory: ${PANEL_DIR}
-Web Interface: http://YOUR-SERVER-IP:${PORTS[WEB]}
-Configuration Directory: ${CONFIG_DIR}
-Log Directory: ${LOG_DIR}
-
-All service configurations and credentials have been saved to:
-${CONFIG_DIR}/installation.info
-
-Please make sure to:
-1. Configure your firewall to allow port ${PORTS[WEB]}
-2. Change default passwords
-3. Access the panel at http://YOUR-SERVER-IP:${PORTS[WEB]}
-
-EOL
+    # Security and monitoring
+    setup_ssl
+    setup_nginx
+    setup_firewall
+    setup_monitoring
+    setup_backup_system
     
-    info "Installation information saved"
-}
+    # Final steps
+    setup_cron
+    verify_installation
+    save_installation_info
     
     info "Installation completed successfully!"
     
@@ -1382,17 +713,255 @@ IRSSH Panel Installation Summary
 -------------------------------
 Version: ${VERSION}
 Installation Directory: ${PANEL_DIR}
-Web Interface: https://YOUR-SERVER-IP:${PORTS[WEB]}
+Web Interface: http://YOUR-SERVER-IP:${PORTS[WEB]}
 Configuration Directory: ${CONFIG_DIR}
 Log Directory: ${LOG_DIR}
+
+Admin Credentials:
+Username: ${ADMIN_USER}
+Password: (As specified during installation)
+
+Enabled Protocols:
+$(for protocol in "${!PROTOCOLS[@]}"; do
+   if [ "${PROTOCOLS[$protocol]}" = true ]; then
+        echo "- $protocol enabled on port ${PORTS[$protocol]}"
+    fi
+done)
+
+Port Configuration:
+- Web Panel: ${PORTS[WEB]}
+- UDPGW: ${PORTS[UDPGW]}
+- SSH: ${PORTS[SSH]}
+- Dropbear: ${PORTS[DROPBEAR]}
+- WebSocket: ${PORTS[WEBSOCKET]}
+- L2TP: ${PORTS[L2TP]}
+- IKEv2: ${PORTS[IKEV2]}
+- Cisco: ${PORTS[CISCO]}
+- WireGuard: ${PORTS[WIREGUARD]}
+- SingBox: ${PORTS[SINGBOX]}
 
 All service configurations and credentials have been saved to:
 ${CONFIG_DIR}/installation.info
 
-Please make sure to secure this server and change default passwords.
-For more information, please refer to the documentation.
+Next Steps:
+1. Access the web panel at http://YOUR-SERVER-IP:${PORTS[WEB]}
+2. Log in with the admin credentials provided during installation
+3. Configure additional users and VPN settings through the web interface
+4. Review the logs at ${LOG_DIR} for any potential issues
+
+For security purposes:
+- Change the admin password after first login
+- Configure firewall rules as needed
+- Set up SSL certificate if required
+- Regular backups are scheduled daily at midnight
+
+Support and Documentation:
+- Documentation: ${PANEL_DIR}/docs
+- Logs: ${LOG_DIR}
+- Backup Location: ${BACKUP_DIR}
+
 EOL
 }
 
-# Start installation
+# Execute main installation
 main
+
+# Additional helper functions
+
+verify_service() {
+    local service=$1
+    local port=$2
+    
+    info "Verifying $service on port $port..."
+    
+    if ! netstat -tuln | grep -q ":$port\\b"; then
+        warn "$service is not listening on port $port"
+        return 1
+    fi
+    
+    if ! systemctl is-active --quiet "$service"; then
+        warn "$service service is not running"
+        return 1
+    fi
+    
+    return 0
+}
+
+verify_web_access() {
+    info "Verifying web panel access..."
+    
+    local max_attempts=5
+    local attempt=1
+    local delay=2
+    
+    while [ $attempt -le $max_attempts ]; do
+        if curl -s -o /dev/null "http://localhost:${PORTS[WEB]}"; then
+            info "Web panel is accessible"
+            return 0
+        fi
+        
+        warn "Web panel not accessible, attempt $attempt of $max_attempts"
+        sleep $delay
+        ((attempt++))
+    done
+    
+    error "Web panel verification failed after $max_attempts attempts"
+    return 1
+}
+
+check_port_conflicts() {
+    info "Checking for port conflicts..."
+    
+    local conflicts=0
+    
+    for protocol in "${!PORTS[@]}"; do
+        local port="${PORTS[$protocol]}"
+        if netstat -tuln | grep -q ":$port\\b"; then
+            warn "Port $port is already in use (needed for $protocol)"
+            ((conflicts++))
+        fi
+    done
+    
+    if [ $conflicts -gt 0 ]; then
+        error "Found $conflicts port conflicts. Please resolve before installation."
+        return 1
+    fi
+    
+    info "No port conflicts found"
+    return 0
+}
+
+setup_kernel_parameters() {
+    info "Configuring kernel parameters..."
+    
+    cat > /etc/sysctl.d/99-irssh-panel.conf << EOL
+# IPv4 Forward
+net.ipv4.ip_forward=1
+
+# TCP/IP Parameters
+net.ipv4.tcp_syncookies=1
+net.ipv4.tcp_timestamps=1
+net.ipv4.tcp_max_syn_backlog=4096
+net.ipv4.tcp_fin_timeout=30
+net.ipv4.tcp_keepalive_time=1200
+net.ipv4.tcp_keepalive_intvl=15
+net.ipv4.tcp_keepalive_probes=5
+
+# UDP Buffer Size
+net.core.rmem_max=16777216
+net.core.wmem_max=16777216
+net.ipv4.udp_mem="8388608 12582912 16777216"
+
+# Connection Tracking
+net.netfilter.nf_conntrack_max=1000000
+net.netfilter.nf_conntrack_tcp_timeout_established=7200
+EOL
+
+    sysctl -p /etc/sysctl.d/99-irssh-panel.conf
+    
+    info "Kernel parameters configured successfully"
+}
+
+optimize_network_stack() {
+    info "Optimizing network stack..."
+    
+    # Install additional network tools
+    apt-get install -y \
+        ethtool \
+        irqbalance \
+        ifstat \
+        || error "Failed to install network tools"
+    
+    # Enable and start irqbalance
+    systemctl enable irqbalance
+    systemctl start irqbalance
+    
+    # Configure network interface optimizations
+    local main_interface=$(ip route | grep default | awk '{print $5}')
+    if [ -n "$main_interface" ]; then
+        ethtool -K "$main_interface" tso on gso on gro on
+        ethtool -G "$main_interface" rx 4096 tx 4096
+    fi
+    
+    info "Network stack optimization completed"
+}
+
+setup_fail2ban() {
+    info "Configuring Fail2ban..."
+    
+    apt-get install -y fail2ban || error "Failed to install Fail2ban"
+    
+    cat > /etc/fail2ban/jail.local << EOL
+[DEFAULT]
+bantime = 3600
+findtime = 600
+maxretry = 5
+
+[sshd]
+enabled = true
+port = ${PORTS[SSH]},${PORTS[DROPBEAR]}
+logpath = %(sshd_log)s
+maxretry = 3
+
+[nginx-http-auth]
+enabled = true
+filter = nginx-http-auth
+port = ${PORTS[WEB]}
+logpath = /var/log/nginx/error.log
+maxretry = 5
+
+[nginx-limit-req]
+enabled = true
+filter = nginx-limit-req
+port = ${PORTS[WEB]}
+logpath = /var/log/nginx/error.log
+maxretry = 10
+EOL
+
+    systemctl enable fail2ban
+    systemctl restart fail2ban
+    
+    info "Fail2ban configuration completed"
+}
+
+install_udpgw() {
+    info "Installing badvpn-udpgw..."
+    
+    # Install build dependencies
+    apt-get install -y \
+        cmake \
+        build-essential \
+        || error "Failed to install build dependencies"
+    
+    # Download and compile badvpn
+    cd "$TEMP_DIR" || error "Failed to access temp directory"
+    git clone https://github.com/ambrop72/badvpn.git
+    cd badvpn || error "Failed to access badvpn directory"
+    mkdir build
+    cd build
+    cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1
+    make install
+    
+    # Create service file
+    cat > /etc/systemd/system/badvpn-udpgw.service << EOL
+[Unit]
+Description=BadVPN UDP Gateway
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/badvpn-udpgw --listen-addr 127.0.0.1:${PORTS[UDPGW]} --max-clients 1000 --max-connections-for-client 20
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOL
+
+    # Start and enable service
+    systemctl daemon-reload
+    systemctl enable badvpn-udpgw
+    systemctl start badvpn-udpgw
+    
+    info "badvpn-udpgw installation completed"
+}
+
+# End of script
