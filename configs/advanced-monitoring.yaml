@@ -1,0 +1,61 @@
+# /opt/irssh-panel/config/advanced-monitoring.yaml
+monitoring:
+  prometheus:
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      
+    scrape_configs:
+      - job_name: node
+        static_configs:
+          - targets: ['localhost:9100']
+      
+      - job_name: nginx
+        static_configs:
+          - targets: ['localhost:9113']
+      
+      - job_name: postgresql
+        static_configs:
+          - targets: ['localhost:9187']
+      
+      - job_name: redis
+        static_configs:
+          - targets: ['localhost:9121']
+    
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets: ['localhost:9093']
+            
+    rule_files:
+      - /etc/prometheus/rules/*.yml
+      
+  grafana:
+    security:
+      admin_password: ${ADMIN_PASS}
+      secret_key: ${JWT_SECRET}
+      
+    smtp:
+      enabled: true
+      host: smtp.gmail.com:587
+      user: admin@example.com
+      password: ${SMTP_PASS}
+      
+    auth:
+      disable_login_form: false
+      disable_signout_menu: false
+      
+    dashboards:
+      default_home_dashboard_path: /etc/grafana/dashboards/home.json
+      
+    database:
+      type: postgresql
+      host: localhost
+      name: grafana
+      user: ${DB_USER}
+      password: ${DB_PASS}
+      
+    plugins:
+      - grafana-piechart-panel
+      - grafana-clock-panel
+      - grafana-worldmap-panel
