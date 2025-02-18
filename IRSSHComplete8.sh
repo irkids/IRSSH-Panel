@@ -348,150 +348,6 @@ check_requirements() {
 
 # Directory Setup
 setup_directories() {
-    info "Creating directory structure..."
-    
-    # Create all required directories
-    local directories=(
-        "$PANEL_DIR"
-        "$CONFIG_DIR"
-        "$LOG_DIR"
-        "$BACKUP_DIR"
-        "$TEMP_DIR"
-        "$SSL_DIR"
-        "$PANEL_DIR/frontend"
-        "$PANEL_DIR/backend"
-        "$PANEL_DIR/modules/protocols"
-        "$PANEL_DIR/venv"
-        "$PANEL_DIR/scripts"
-        "$PANEL_DIR/docs"
-        "$PANEL_DIR/frontend/public"
-        "$PANEL_DIR/frontend/src/components"
-        "$PANEL_DIR/frontend/src/pages"
-        "$PANEL_DIR/frontend/src/services"
-        "$PANEL_DIR/frontend/src/stores"
-        "$PANEL_DIR/frontend/src/styles"
-        "$PANEL_DIR/backend/src/routes"
-        "$PANEL_DIR/backend/src/middleware"
-        "$PANEL_DIR/backend/src/models"
-        "$PANEL_DIR/backend/src/utils"
-    )
-    
-    for dir in "${directories[@]}"; do
-        mkdir -p "$dir"
-        debug "Created directory: $dir"
-    done
-    
-    # Set correct permissions
-    chown -R root:root "$PANEL_DIR"
-    chmod 750 "$PANEL_DIR"
-    chmod 700 "$CONFIG_DIR"
-    chmod 750 "$LOG_DIR"
-    chmod 750 "$BACKUP_DIR"
-    
-    info "Directory structure created successfully"
-}
-
-# Generate Configuration
-generate_config() {
-    info "Generating configuration..."
-    
-    # Generate secure credentials
-    local DB_NAME="ssh_manager"
-    local DB_USER="irssh_admin"
-    local DB_PASS=$(openssl rand -base64 32)
-    local JWT_SECRET=$(openssl rand -base64 32)
-    local ADMIN_PASS_HASH=$(echo -n "$ADMIN_PASS" | sha256sum | cut -d' ' -f1)
-    
-    # Create main config file
-    cat > "$CONFIG_DIR/config.yaml" << EOL
-# IRSSH Panel Configuration
-# Generated: $(date +'%Y-%m-%d %H:%M:%S')
-
-# System Configuration
-version: ${VERSION}
-install_date: $(date +'%Y-%m-%d %H:%M:%S')
-
-# Database Configuration
-db_host: localhost
-db_port: 5432
-db_name: $DB_NAME
-db_user: $DB_USER
-db_password: $DB_PASS
-
-# Web Panel Configuration
-web_port: ${PORTS[WEB]}
-jwt_secret: $JWT_SECRET
-enable_https: ${ENABLE_HTTPS}
-enable_monitoring: ${ENABLE_MONITORING}
-
-# Admin Credentials
-admin_user: $ADMIN_USER
-admin_password_hash: $ADMIN_PASS_HASH
-
-# Protocol Ports
-ssh_port: ${PORTS[SSH]}
-dropbear_port: ${PORTS[DROPBEAR]}
-websocket_port: ${PORTS[WEBSOCKET]}
-l2tp_port: ${PORTS[L2TP]}
-ikev2_port: ${PORTS[IKEV2]}
-cisco_port: ${PORTS[CISCO]}
-wireguard_port: ${PORTS[WIREGUARD]}
-singbox_port: ${PORTS[SINGBOX]}
-udpgw_port: ${PORTS[UDPGW]}
-
-# Protocol Settings
-enable_ssh: ${PROTOCOLS[SSH]}
-enable_dropbear: ${PROTOCOLS[DROPBEAR]}
-enable_l2tp: ${PROTOCOLS[L2TP]}
-enable_ikev2: ${PROTOCOLS[IKEV2]}
-enable_cisco: ${PROTOCOLS[CISCO]}
-enable_wireguard: ${PROTOCOLS[WIREGUARD]}
-enable_singbox: ${PROTOCOLS[SINGBOX]}
-
-# Performance Settings
-max_clients: 1000
-max_connections_per_client: 10
-connection_timeout: 300
-keepalive_interval: 60
-
-# Security Settings
-fail2ban_enabled: true
-fail2ban_bantime: 3600
-fail2ban_findtime: 600
-fail2ban_maxretry: 5
-
-# Monitoring Settings
-enable_prometheus: ${ENABLE_MONITORING}
-enable_node_exporter: ${ENABLE_MONITORING}
-monitoring_retention_days: 30
-EOL
-
-    chmod 600 "$CONFIG_DIR/config.yaml"
-    
-    # Create backend environment file
-    cat > "$PANEL_DIR/backend/.env" << EOL
-NODE_ENV=production
-PORT=8000
-JWT_SECRET=$JWT_SECRET
-FRONTEND_URL=http${ENABLE_HTTPS:+"s"}://localhost:${PORTS[WEB]}
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=$DB_NAME
-DB_USER=$DB_USER
-DB_PASS=$DB_PASS
-ENABLE_MONITORING=${ENABLE_MONITORING}
-EOL
-
-    chmod 600 "$PANEL_DIR/backend/.env"
-    
-    # Export variables for other functions
-    export DB_NAME DB_USER DB_PASS JWT_SECRET
-    
-    info "Configuration generated successfully"
-}
-
-# Database Setup
-setup_directories() {
     info "Creating required directories and files..."
 
     # Core directories
@@ -618,6 +474,174 @@ db_password: ${DB_PASS}"
     chown -R www-data:www-data /opt/irssh-panel/frontend/dist
 
     info "Directory and file setup completed"
+}
+
+# Generate Configuration
+generate_config() {
+    info "Generating configuration..."
+    
+    # Generate secure credentials
+    local DB_NAME="ssh_manager"
+    local DB_USER="irssh_admin"
+    local DB_PASS=$(openssl rand -base64 32)
+    local JWT_SECRET=$(openssl rand -base64 32)
+    local ADMIN_PASS_HASH=$(echo -n "$ADMIN_PASS" | sha256sum | cut -d' ' -f1)
+    
+    # Create main config file
+    cat > "$CONFIG_DIR/config.yaml" << EOL
+# IRSSH Panel Configuration
+# Generated: $(date +'%Y-%m-%d %H:%M:%S')
+
+# System Configuration
+version: ${VERSION}
+install_date: $(date +'%Y-%m-%d %H:%M:%S')
+
+# Database Configuration
+db_host: localhost
+db_port: 5432
+db_name: $DB_NAME
+db_user: $DB_USER
+db_password: $DB_PASS
+
+# Web Panel Configuration
+web_port: ${PORTS[WEB]}
+jwt_secret: $JWT_SECRET
+enable_https: ${ENABLE_HTTPS}
+enable_monitoring: ${ENABLE_MONITORING}
+
+# Admin Credentials
+admin_user: $ADMIN_USER
+admin_password_hash: $ADMIN_PASS_HASH
+
+# Protocol Ports
+ssh_port: ${PORTS[SSH]}
+dropbear_port: ${PORTS[DROPBEAR]}
+websocket_port: ${PORTS[WEBSOCKET]}
+l2tp_port: ${PORTS[L2TP]}
+ikev2_port: ${PORTS[IKEV2]}
+cisco_port: ${PORTS[CISCO]}
+wireguard_port: ${PORTS[WIREGUARD]}
+singbox_port: ${PORTS[SINGBOX]}
+udpgw_port: ${PORTS[UDPGW]}
+
+# Protocol Settings
+enable_ssh: ${PROTOCOLS[SSH]}
+enable_dropbear: ${PROTOCOLS[DROPBEAR]}
+enable_l2tp: ${PROTOCOLS[L2TP]}
+enable_ikev2: ${PROTOCOLS[IKEV2]}
+enable_cisco: ${PROTOCOLS[CISCO]}
+enable_wireguard: ${PROTOCOLS[WIREGUARD]}
+enable_singbox: ${PROTOCOLS[SINGBOX]}
+
+# Performance Settings
+max_clients: 1000
+max_connections_per_client: 10
+connection_timeout: 300
+keepalive_interval: 60
+
+# Security Settings
+fail2ban_enabled: true
+fail2ban_bantime: 3600
+fail2ban_findtime: 600
+fail2ban_maxretry: 5
+
+# Monitoring Settings
+enable_prometheus: ${ENABLE_MONITORING}
+enable_node_exporter: ${ENABLE_MONITORING}
+monitoring_retention_days: 30
+EOL
+
+    chmod 600 "$CONFIG_DIR/config.yaml"
+    
+    # Create backend environment file
+    cat > "$PANEL_DIR/backend/.env" << EOL
+NODE_ENV=production
+PORT=8000
+JWT_SECRET=$JWT_SECRET
+FRONTEND_URL=http${ENABLE_HTTPS:+"s"}://localhost:${PORTS[WEB]}
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=$DB_NAME
+DB_USER=$DB_USER
+DB_PASS=$DB_PASS
+ENABLE_MONITORING=${ENABLE_MONITORING}
+EOL
+
+    chmod 600 "$PANEL_DIR/backend/.env"
+    
+    # Export variables for other functions
+    export DB_NAME DB_USER DB_PASS JWT_SECRET
+    
+    info "Configuration generated successfully"
+}
+
+# Database Setup
+setup_database() {
+    info "Setting up PostgreSQL database..."
+    
+    # Generate database credentials
+    generate_db_credentials
+    
+    # Get PostgreSQL version
+    PG_VERSION=$(apt-cache policy postgresql | grep -A1 "^  Installed:" | grep -oP '\d+' | head -1)
+    if [ -z "$PG_VERSION" ]; then
+        PG_VERSION="12"  # Default to version 12 if not found
+    fi
+    
+    # Install PostgreSQL
+    apt-get install -y postgresql-$PG_VERSION postgresql-contrib-$PG_VERSION || error "Failed to install PostgreSQL"
+    
+    # Ensure PostgreSQL directories exist
+    mkdir -p "/etc/postgresql/$PG_VERSION/main"
+    
+    # Create initial pg_hba.conf if it doesn't exist
+    if [ ! -f "/etc/postgresql/$PG_VERSION/main/pg_hba.conf" ]; then
+        cat > "/etc/postgresql/$PG_VERSION/main/pg_hba.conf" << EOL
+# Database administrative login by Unix domain socket
+local   all             postgres                                peer
+
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+local   all             all                                     peer
+host    all             all             127.0.0.1/32            md5
+host    all             all             ::1/128                 md5
+EOL
+    fi
+    
+    # Start and wait for PostgreSQL
+    systemctl start postgresql
+    systemctl enable postgresql
+    
+    # Wait for PostgreSQL to be ready
+    local max_attempts=30
+    local attempt=1
+    while ! pg_isready; do
+        if [ $attempt -ge $max_attempts ]; then
+            error "PostgreSQL failed to start after $max_attempts attempts"
+        fi
+        info "Waiting for PostgreSQL... (attempt $attempt/$max_attempts)"
+        sleep 1
+        ((attempt++))
+    done
+    
+    # Configure authentication silently
+    sed -i 's/peer/trust/g' "/etc/postgresql/$PG_VERSION/main/pg_hba.conf"
+    systemctl restart postgresql
+    
+    # Create database and user silently
+    su - postgres -c "psql -c \"CREATE USER \\\"$DB_USER\\\" WITH PASSWORD '$DB_PASS' CREATEDB;\"" > /dev/null 2>&1
+    su - postgres -c "psql -c \"CREATE DATABASE \\\"$DB_NAME\\\" OWNER \\\"$DB_USER\\\";\"" > /dev/null 2>&1
+    su - postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE \\\"$DB_NAME\\\" TO \\\"$DB_USER\\\";\"" > /dev/null 2>&1
+    
+    # Restore secure authentication
+    sed -i 's/trust/md5/g' "/etc/postgresql/$PG_VERSION/main/pg_hba.conf"
+    systemctl restart postgresql
+    
+    # Verify connection silently
+    if ! PGPASSWORD="$DB_PASS" psql -h localhost -U "$DB_USER" -d "$DB_NAME" -c '\q' > /dev/null 2>&1; then
+        error "Database connection verification failed"
+    fi
+    
+    info "Database setup completed successfully"
 }
 
 # Python Environment Setup
@@ -2302,7 +2326,7 @@ main() {
     
     # Core setup
     check_requirements
-    setup_directories  # Add this line here
+    setup_directories
     generate_config
     setup_database
     
