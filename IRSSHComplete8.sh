@@ -491,54 +491,133 @@ EOL
 }
 
 # Database Setup
-setup_database() {
-    info "Setting up PostgreSQL database..."
-    
-    # Install PostgreSQL
-    apt-get install -y postgresql postgresql-contrib || error "Failed to install PostgreSQL"
-    
-    # Start and enable PostgreSQL
-    systemctl start postgresql
-    systemctl enable postgresql
-    
-    # Wait for PostgreSQL to be ready
-    local max_attempts=30
-    local attempt=1
-    while ! pg_isready; do
-        if [ $attempt -ge $max_attempts ]; then
-            error "PostgreSQL failed to start after $max_attempts attempts"
+setup_directories() {
+    info "Creating required directories and files..."
+
+    # Core directories
+    declare -A DIRS=(
+        ["/etc/postgresql"]=""
+        ["/etc/postgresql/12/main"]=""
+        ["/etc/postgresql/14/main"]=""
+        ["/var/lib/postgresql/12/main"]=""
+        ["/var/lib/postgresql/14/main"]=""
+        ["/var/log/postgresql"]=""
+        ["/etc/enhanced_ssh"]=""
+        ["/opt/irssh-panel"]=""
+        ["/opt/irssh-panel/backend"]=""
+        ["/opt/irssh-panel/frontend"]=""
+        ["/opt/irssh-panel/modules"]=""
+        ["/opt/irssh-panel/modules/protocols"]=""
+        ["/opt/irssh-panel/scripts"]=""
+        ["/opt/irssh-panel/config"]=""
+        ["/opt/irssh-panel/logs"]=""
+        ["/var/log/irssh"]=""
+        ["/var/log/irssh/metrics"]=""
+        ["/opt/irssh-backups"]=""
+        ["/etc/stunnel"]=""
+        ["/etc/wireguard"]=""
+        ["/etc/sing-box"]=""
+        ["/etc/sing-box/ssl"]=""
+        ["/etc/ocserv"]=""
+        ["/etc/ocserv/ssl"]=""
+        ["/etc/nginx/ssl"]=""
+    )
+
+    # Create directories
+    for dir in "${!DIRS[@]}"; do
+        if [ ! -d "$dir" ]; then
+            mkdir -p "$dir"
+            chmod 755 "$dir"
+            info "Created directory: $dir"
         fi
-        info "Waiting for PostgreSQL... (attempt $attempt/$max_attempts)"
-        sleep 1
-        ((attempt++))
     done
-    
-    # Configure pg_hba.conf for authentication
-    local PG_HBA="/etc/postgresql/14/main/pg_hba.conf"
-    cp "$PG_HBA" "${PG_HBA}.backup"
-    
-    # Update authentication methods - اضافه کردن این بخش
-    sed -i 's/peer/trust/g' "$PG_HBA"
-    sed -i 's/scram-sha-256/trust/g' "$PG_HBA"
-    
-    # Restart PostgreSQL to apply changes
-    systemctl restart postgresql
-    
-    # Setup database and user
-    su - postgres -c "psql -c \"CREATE USER \\\"$DB_USER\\\" WITH PASSWORD '$DB_PASS' CREATEDB;\""
-    su - postgres -c "psql -c \"CREATE DATABASE \\\"$DB_NAME\\\" OWNER \\\"$DB_USER\\\";\""
-    su - postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE \\\"$DB_NAME\\\" TO \\\"$DB_USER\\\";\""
-    
-    # Switch back to md5 authentication
-    sed -i 's/trust/md5/g' "$PG_HBA"
-    systemctl restart postgresql
-    
-    # Verify database connection
-    if ! PGPASSWORD="$DB_PASS" psql -h localhost -U "$DB_USER" -d "$DB_NAME" -c '\q'; then
-        error "Database connection verification failed"
+
+    # Essential configuration files
+    declare -A CONFIG_FILES=(
+        ["/etc/postgresql/12/main/pg_hba.conf"]="# Database administrative login by Unix domain socket
+local   all             postgres                                peer
+
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+local   all             all                                     peer
+host    all             all             127.0.0.1/32            md5
+host    all             all             ::1/128                 md5"
+
+        ["/etc/postgresql/12/main/postgresql.conf"]="# DB Version: 12
+listen_addresses = 'localhost'
+port = 5432
+max_connections = 100
+shared_buffers = 128MB
+dynamic_shared_memory_type = posix
+ssl = off"
+
+        ["/etc/postgresql/14/main/pg_hba.conf"]="# Database administrative login by Unix domain socket
+local   all             postgres                                peer
+
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+local   all             all                                     peer
+host    all             all             127.0.0.1/32            md5
+host    all             all             ::1/128                 md5"
+
+        ["/etc/postgresql/14/main/postgresql.conf"]="# DB Version: 14
+listen_addresses = 'localhost'
+port = 5432
+max_connections = 100
+shared_buffers = 128MB
+dynamic_shared_memory_type = posix
+ssl = off"
+
+        ["/etc/enhanced_ssh/config.yaml"]="# IRSSH Panel Configuration
+db_host: localhost
+db_port: 5432
+db_name: ${DB_NAME}
+db_user: ${DB_USER}
+db_password: ${DB_PASS}"
+
+        ["/etc/nginx/sites-available/irssh-panel"]="server {
+    listen 80;
+    server_name _;
+    root /opt/irssh-panel/frontend/dist;
+    index index.html;
+}"
+    )
+
+    # Create configuration files
+    for file in "${!CONFIG_FILES[@]}"; do
+        if [ ! -f "$file" ]; then
+            echo "${CONFIG_FILES[$file]}" > "$file"
+            chmod 644 "$file"
+            info "Created configuration file: $file"
+        fi
+    done
+
+    # Create empty log files
+    declare -a LOG_FILES=(
+        "/var/log/irssh/installation.log"
+        "/var/log/irssh/error.log"
+        "/var/log/postgresql/postgresql-12-main.log"
+        "/var/log/postgresql/postgresql-14-main.log"
+    )
+
+    for file in "${LOG_FILES[@]}"; do
+        if [ ! -f "$file" ]; then
+            touch "$file"
+            chmod 644 "$file"
+            info "Created log file: $file"
+        fi
+    done
+
+    # Create symbolic links
+    if [ ! -L "/etc/nginx/sites-enabled/irssh-panel" ]; then
+        ln -sf "/etc/nginx/sites-available/irssh-panel" "/etc/nginx/sites-enabled/irssh-panel"
+        info "Created symbolic link for Nginx configuration"
     fi
-    
-    info "Database setup completed successfully"
+
+    # Set correct permissions
+    chown -R postgres:postgres /etc/postgresql
+    chown -R postgres:postgres /var/lib/postgresql
+    chown -R www-data:www-data /opt/irssh-panel/frontend/dist
+
+    info "Directory and file setup completed"
 }
 
 # Python Environment Setup
