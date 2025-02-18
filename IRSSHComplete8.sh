@@ -8,6 +8,21 @@
 SCRIPT_PATH=$(readlink -f "${BASH_SOURCE[0]}")
 SCRIPT_DIR=$(dirname "$SCRIPT_PATH")
 
+# Global Configuration
+postgresql_version=12
+declare -A CONFIG_FILES
+
+CONFIG_FILES["/etc/nginx/sites-available/irssh-panel"]="server {
+    listen \${WEB_PORT};
+    server_name _;
+    # Rest of nginx config
+}"
+
+CONFIG_FILES["/etc/postgresql/$postgresql_version/main/pg_hba.conf"]="local all postgres peer
+local all all md5
+host all all 127.0.0.1/32 md5
+host all all ::1/128 md5"
+
 # Base directories
 PANEL_DIR="/opt/irssh-panel"
 CONFIG_DIR="/etc/enhanced_ssh"
@@ -350,6 +365,18 @@ check_requirements() {
 setup_directories() {
     info "Creating required directories and files..."
 
+        # Create base directories
+    mkdir -p /etc/nginx/{sites-available,sites-enabled}
+    mkdir -p /opt/irssh-panel/frontend/dist
+    mkdir -p "/etc/postgresql/$postgresql_version/main"
+    mkdir -p "/var/lib/postgresql/$postgresql_version/main"
+
+    # Set permissions
+    chown www-data:www-data /opt/irssh-panel/frontend/dist
+    chmod 755 /opt/irssh-panel/frontend/dist
+    chown -R postgres:postgres "/etc/postgresql/$postgresql_version"
+    chown -R postgres:postgres "/var/lib/postgresql/$postgresql_version"
+
     # Core directories
     declare -A DIRS=(
         ["/etc/postgresql"]=""
@@ -581,6 +608,12 @@ EOL
 setup_database() {
     info "Setting up PostgreSQL database..."
     
+    # Install PostgreSQL if not present
+    apt-get install -y postgresql-$postgresql_version postgresql-client-$postgresql_version
+
+    # Create cluster if not exists
+    su - postgres -c "pg_createcluster $postgresql_version main --start"
+
     # Generate database credentials
     generate_db_credentials
     
