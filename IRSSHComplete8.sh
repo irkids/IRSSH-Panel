@@ -2302,8 +2302,9 @@ main() {
     
     # Core setup
     check_requirements
-    setup_directories
+    setup_directories  # Add this line here
     generate_config
+    setup_database
     
     # Install and configure components
     setup_database
