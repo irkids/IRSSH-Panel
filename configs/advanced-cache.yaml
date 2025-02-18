@@ -1,0 +1,44 @@
+# /opt/irssh-panel/config/advanced-cache.yaml
+cache:
+  redis:
+    enabled: true
+    port: 6379
+    maxmemory: 1gb
+    maxmemory_policy: allkeys-lru
+    
+    persistence:
+      enabled: true
+      method: rdb
+      save_intervals:
+        - seconds: 900
+          changes: 1
+        - seconds: 300
+          changes: 10
+        - seconds: 60
+          changes: 10000
+    
+    cluster:
+      enabled: false
+      nodes: 3
+      replicas: 1
+    
+    security:
+      authentication: true
+      password_file: /etc/redis/auth.conf
+      protected_mode: true
+      
+    optimization:
+      tcp_backlog: 511
+      tcp_keepalive: 300
+      timeout: 0
+      databases: 16
+
+  memcached:
+    enabled: false
+    port: 11211
+    memory: 512
+    max_connections: 1024
+    
+    security:
+      sasl_enabled: true
+      username_file: /etc/memcached/users.conf
