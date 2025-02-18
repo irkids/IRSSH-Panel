@@ -355,17 +355,43 @@ check_requirements() {
         update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.8 1
     fi
     
+# Node.js Installation
+install_nodejs() {
+    info "Installing Node.js..."
+    
+    # Remove old versions
+    apt-get remove -y nodejs npm &>/dev/null
+    rm -rf /etc/apt/sources.list.d/nodesource.list &>/dev/null
+    
+    # Add NodeSource repository for Node.js 20
+    info "2025-02-18 18:00:56 - Installing pre-requisites"
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - || {
+        error "Failed to add NodeSource repository"
+        return 1
+    }
+    
     # Install Node.js
-    if ! command -v node &> /dev/null; then
-        info "Installing Node.js..."
-        curl -fsSL "https://deb.nodesource.com/setup_${NODE_VERSION}.x" | bash -
-        apt-get install -y nodejs
+    apt-get install -y nodejs || {
+        error "Failed to install Node.js"
+        return 1
+    }
+    
+    # Verify version
+    NODE_VERSION=$(node -v | sed 's/v\([0-9]*\).*/\1/')
+    if [ -z "$NODE_VERSION" ] || [ "$NODE_VERSION" -lt 16 ]; then
+        error "Node.js version must be 16 or higher"
+        return 1
     fi
     
-    NODE_VERSION=$(node -v | sed 's/v\([0-9]*\).*/\1/')
-    if [ "$NODE_VERSION" -lt "${REQUIREMENTS[MIN_NODE_VERSION]}" ]; then
-        error "Node.js version must be ${REQUIREMENTS[MIN_NODE_VERSION]} or higher"
-    fi
+    # Install global npm packages
+    npm install -g pm2 typescript @types/node || {
+        error "Failed to install global npm packages"
+        return 1
+    }
+    
+    info "Node.js installation completed successfully"
+    return 0
+}
     
     info "System requirements check completed"
 }
@@ -676,24 +702,41 @@ EOL
 }
 
 # Node.js Environment Setup
-setup_nodejs() {
-    info "Setting up Node.js environment..."
+install_nodejs() {
+    info "Installing Node.js..."
     
-    # Install Node.js if not present
-    if ! command -v node &> /dev/null; then
-        curl -fsSL "https://deb.nodesource.com/setup_${NODE_VERSION}.x" | bash -
-        apt-get install -y nodejs || error "Failed to install Node.js"
+    # Remove old versions
+    apt-get remove -y nodejs npm &>/dev/null
+    rm -rf /etc/apt/sources.list.d/nodesource.list &>/dev/null
+    
+    # Add NodeSource repository for Node.js 20
+    info "2025-02-18 18:00:56 - Installing pre-requisites"
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - || {
+        error "Failed to add NodeSource repository"
+        return 1
+    }
+    
+    # Install Node.js
+    apt-get install -y nodejs || {
+        error "Failed to install Node.js"
+        return 1
+    }
+    
+    # Verify version
+    NODE_VERSION=$(node -v | sed 's/v\([0-9]*\).*/\1/')
+    if [ -z "$NODE_VERSION" ] || [ "$NODE_VERSION" -lt 16 ]; then
+        error "Node.js version must be 16 or higher"
+        return 1
     fi
     
-    # Verify npm installation
-    if ! command -v npm &> /dev/null; then
-        error "npm installation failed"
-    fi
+    # Install global npm packages
+    npm install -g pm2 typescript @types/node || {
+        error "Failed to install global npm packages"
+        return 1
+    }
     
-    # Install global packages
-    npm install -g pm2 typescript @types/node || error "Failed to install global npm packages"
-    
-    info "Node.js environment setup completed"
+    info "Node.js installation completed successfully"
+    return 0
 }
 
 # Frontend Setup
@@ -2224,7 +2267,7 @@ main() {
     # Install and configure components
     setup_database
     setup_python
-    setup_nodejs
+    install_nodejs || exit 1
     setup_frontend
     setup_backend
     
