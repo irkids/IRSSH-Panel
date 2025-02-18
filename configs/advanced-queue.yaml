@@ -1,0 +1,59 @@
+# /opt/irssh-panel/config/advanced-queue.yaml
+queue:
+  rabbitmq:
+    enabled: true
+    port: 5672
+    management_port: 15672
+    
+    clustering:
+      enabled: false
+      nodes: 3
+      policy: all
+    
+    vhosts:
+      - name: /
+        permissions:
+          - user: admin
+            configure: ".*"
+            write: ".*"
+            read: ".*"
+    
+    exchanges:
+      - name: events
+        type: topic
+        durable: true
+      - name: tasks
+        type: direct
+        durable: true
+    
+    queues:
+      - name: user_events
+        durable: true
+        bindings:
+          - exchange: events
+            routing_key: user.#
+      - name: system_events
+        durable: true
+        bindings:
+          - exchange: events
+            routing_key: system.#
+      - name: tasks
+        durable: true
+        bindings:
+          - exchange: tasks
+            routing_key: task
+    
+    security:
+      ssl:
+        enabled: true
+        verify: verify_peer
+        fail_if_no_peer_cert: false
+      authentication:
+        mechanisms:
+          - PLAIN
+          - AMQPLAIN
+    
+    limits:
+      max_connections: 1000
+      max_channels_per_connection: 20
+      frame_max: 131072
