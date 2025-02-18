@@ -1,0 +1,95 @@
+# /opt/irssh-panel/config/advanced-system.yaml
+system:
+  performance:
+    cpu_governor: performance
+    io_scheduler: deadline
+    max_open_files: 65535
+    tcp_bbr_enabled: true
+    kernel_parameters:
+      net.core.somaxconn: 65535
+      net.ipv4.tcp_max_syn_backlog: 65535
+      net.core.netdev_max_backlog: 65535
+      net.ipv4.tcp_congestion_control: bbr
+      net.ipv4.tcp_fastopen: 3
+      vm.swappiness: 10
+      fs.file-max: 2097152
+
+  security:
+    fail2ban:
+      bantime: 3600
+      findtime: 600
+      maxretry: 5
+      ignore_ips: 
+        - 127.0.0.1
+        - 10.0.0.0/8
+    
+    firewall:
+      default_policy: DROP
+      allowed_ports:
+        - 22
+        - 80
+        - 443
+      rate_limiting:
+        enabled: true
+        connections_per_second: 10
+      
+    ssl:
+      protocols:
+        - TLSv1.2
+        - TLSv1.3
+      ciphers:
+        - ECDHE-ECDSA-AES128-GCM-SHA256
+        - ECDHE-RSA-AES128-GCM-SHA256
+        - ECDHE-ECDSA-AES256-GCM-SHA384
+      session_timeout: 1d
+      hsts_enabled: true
+
+  monitoring:
+    prometheus:
+      retention_time: 15d
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      targets:
+        - job: node
+          endpoint: localhost:9100
+        - job: nginx
+          endpoint: localhost:9113
+        - job: postgres
+          endpoint: localhost:9187
+    
+    grafana:
+      enabled: true
+      port: 3000
+      plugins:
+        - grafana-piechart-panel
+        - grafana-worldmap-panel
+    
+    alerts:
+      email:
+        enabled: true
+        smtp_server: smtp.gmail.com
+        smtp_port: 587
+        recipients:
+          - admin@example.com
+      telegram:
+        enabled: false
+        bot_token: ""
+        chat_id: ""
+
+  backup:
+    enabled: true
+    schedule: "0 0 * * *"
+    retention_days: 7
+    compression: true
+    types:
+      - database
+      - configuration
+      - certificates
+    destinations:
+      local:
+        path: /opt/irssh-backups
+      remote:
+        enabled: false
+        type: s3
+        bucket: backups
+        region: us-east-1
