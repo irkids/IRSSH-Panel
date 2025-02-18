@@ -370,21 +370,36 @@ check_requirements() {
     info "System requirements check completed"
 }
 
+# Detect PostgreSQL version
+PG_VERSION=$(pg_config --version | awk '{print $2}' | cut -d. -f1)
+if [ -z "$PG_VERSION" ]; then
+    PG_VERSION=12
+fi
+
+# Create base directories array
+declare -a DIRS=(
+    "/etc/nginx/sites-available"
+    "/etc/nginx/sites-enabled"
+    "/opt/irssh-panel/frontend/dist"
+    "/etc/postgresql/$PG_VERSION/main"
+    "/var/lib/postgresql/$PG_VERSION/main"
+)
+
 # Directory Setup
 setup_directories() {
     info "Creating required directories and files..."
+    
+    # Create base directories
+    for dir in "${DIRS[@]}"; do
+        mkdir -p "$dir"
+    done
 
-        # Create base directories
-    mkdir -p /etc/nginx/{sites-available,sites-enabled}
-    mkdir -p /opt/irssh-panel/frontend/dist
-    mkdir -p "/etc/postgresql/$postgresql_version/main"
-    mkdir -p "/var/lib/postgresql/$postgresql_version/main"
-
-    # Set permissions
+    # Set correct permissions
     chown www-data:www-data /opt/irssh-panel/frontend/dist
     chmod 755 /opt/irssh-panel/frontend/dist
-    chown -R postgres:postgres "/etc/postgresql/$postgresql_version"
-    chown -R postgres:postgres "/var/lib/postgresql/$postgresql_version"
+    chown -R postgres:postgres "/etc/postgresql/$PG_VERSION"
+    chown -R postgres:postgres "/var/lib/postgresql/$PG_VERSION"
+}
 
     # Core directories
     declare -A DIRS=(
@@ -625,96 +640,25 @@ generate_db_credentials() {
 setup_database() {
     info "Setting up PostgreSQL database..."
     
-    # Detect PostgreSQL version
-    PG_VERSION=$(apt-cache policy postgresql | grep -A1 "^  Installed:" | grep -oP '\d+' | head -1)
-    if [ -z "$PG_VERSION" ]; then
-        PG_VERSION=12
+    # Install PostgreSQL
+    apt-get install -y postgresql-$PG_VERSION postgresql-contrib-$PG_VERSION
+    
+    # Initialize database cluster for detected version
+    if ! pg_lsclusters | grep -q "^$PG_VERSION main"; then
+        pg_createcluster $PG_VERSION main --start
     fi
     
-    # Use detected version
-    apt-get install -y postgresql-$PG_VERSION postgresql-contrib-$PG_VERSION
-    systemctl enable postgresql
-    systemctl start postgresql
+    # Wait for PostgreSQL using detected version
+    until pg_isready -h localhost -p 5432; do
+        sleep 1
+    done
 
-    # Install PostgreSQL if not present
-    apt-get install -y postgresql-$postgresql_version postgresql-client-$postgresql_version
-
-    # Create cluster if not exists
-    su - postgres -c "pg_createcluster $postgresql_version main --start"
-
-    # Generate database credentials
+    # Continue with database setup
     generate_db_credentials
     
-    # Get PostgreSQL version
-    PG_VERSION=$(apt-cache policy postgresql | grep -A1 "^  Installed:" | grep -oP '\d+' | head -1)
-    if [ -z "$PG_VERSION" ]; then
-        PG_VERSION="12"  # Default to version 12 if not found
-    fi
-    
-    # First detect PostgreSQL version
-PG_VERSION=$(pg_config --version | awk '{print $2}' | cut -d. -f1)
-
-# Create required directories for detected version
-mkdir -p "/etc/postgresql/$PG_VERSION/main"
-mkdir -p "/var/lib/postgresql/$PG_VERSION/main"
-chown -R postgres:postgres "/etc/postgresql/$PG_VERSION"
-chown -R postgres:postgres "/var/lib/postgresql/$PG_VERSION"
-
-# Initialize database cluster
-su - postgres -c "initdb -D /var/lib/postgresql/$PG_VERSION/main"
-
-    # Install PostgreSQL
-    apt-get install -y postgresql-$PG_VERSION postgresql-contrib-$PG_VERSION || error "Failed to install PostgreSQL"
-    
-    # Ensure PostgreSQL directories exist
-    mkdir -p "/etc/postgresql/$PG_VERSION/main"
-    
-    # Create initial pg_hba.conf if it doesn't exist
-    if [ ! -f "/etc/postgresql/$PG_VERSION/main/pg_hba.conf" ]; then
-        cat > "/etc/postgresql/$PG_VERSION/main/pg_hba.conf" << EOL
-# Database administrative login by Unix domain socket
-local   all             postgres                                peer
-
-# TYPE  DATABASE        USER            ADDRESS                 METHOD
-local   all             all                                     peer
-host    all             all             127.0.0.1/32            md5
-host    all             all             ::1/128                 md5
-EOL
-    fi
-    
-    # Start and wait for PostgreSQL
-    systemctl start postgresql
-    systemctl enable postgresql
-    
-    # Wait for PostgreSQL to be ready
-    local max_attempts=30
-    local attempt=1
-    while ! pg_isready; do
-        if [ $attempt -ge $max_attempts ]; then
-            error "PostgreSQL failed to start after $max_attempts attempts"
-        fi
-        info "Waiting for PostgreSQL... (attempt $attempt/$max_attempts)"
-        sleep 1
-        ((attempt++))
-    done
-    
-    # Configure authentication silently
-    sed -i 's/peer/trust/g' "/etc/postgresql/$PG_VERSION/main/pg_hba.conf"
-    systemctl restart postgresql
-    
-    # Create database and user silently
-    su - postgres -c "psql -c \"CREATE USER \\\"$DB_USER\\\" WITH PASSWORD '$DB_PASS' CREATEDB;\"" > /dev/null 2>&1
-    su - postgres -c "psql -c \"CREATE DATABASE \\\"$DB_NAME\\\" OWNER \\\"$DB_USER\\\";\"" > /dev/null 2>&1
-    su - postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE \\\"$DB_NAME\\\" TO \\\"$DB_USER\\\";\"" > /dev/null 2>&1
-    
-    # Restore secure authentication
-    sed -i 's/trust/md5/g' "/etc/postgresql/$PG_VERSION/main/pg_hba.conf"
-    systemctl restart postgresql
-    
-    # Verify connection silently
-    if ! PGPASSWORD="$DB_PASS" psql -h localhost -U "$DB_USER" -d "$DB_NAME" -c '\q' > /dev/null 2>&1; then
-        error "Database connection verification failed"
-    fi
+    # Create user and database
+    su - postgres -c "psql -c \"CREATE USER \\\"$DB_USER\\\" WITH PASSWORD '$DB_PASS';\""
+    su - postgres -c "psql -c \"CREATE DATABASE \\\"$DB_NAME\\\" OWNER \\\"$DB_USER\\\";\""
     
     info "Database setup completed successfully"
 }
