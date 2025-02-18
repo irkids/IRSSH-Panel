@@ -1,0 +1,59 @@
+# /opt/irssh-panel/config/advanced-logging.yaml
+logging:
+  global:
+    level: INFO
+    format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    date_format: '%Y-%m-%d %H:%M:%S'
+    file_permissions: 0644
+    
+  handlers:
+    file:
+      enabled: true
+      path: /var/log/irssh
+      max_size: 100MB
+      backup_count: 10
+      compression: true
+      
+    syslog:
+      enabled: true
+      facility: local0
+      tag: irssh
+      
+    elasticsearch:
+      enabled: false
+      host: localhost
+      port: 9200
+      index_prefix: irssh-logs
+    
+  categories:
+    access:
+      level: INFO
+      handlers:
+        - file
+        - syslog
+      
+    error:
+      level: ERROR
+      handlers:
+        - file
+        - syslog
+        - elasticsearch
+      
+    security:
+      level: WARNING
+      handlers:
+        - file
+        - syslog
+        - elasticsearch
+      
+    performance:
+      level: INFO
+      handlers:
+        - file
+        - elasticsearch
+
+  rotation:
+    enabled: true
+    interval: daily
+    retention: 30
+    compress: true
