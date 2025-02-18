@@ -3,6 +3,15 @@
 # IRSSH Panel Complete Installation Script
 # Version: 3.5.2
 
+declare -A CONFIG_FILES
+CONFIG_FILES=(
+    ["/etc/nginx/sites-available/irssh-panel"]="server {
+        listen \${WEB_PORT};
+        server_name _;
+        # Other configurations
+    }"
+)
+
 # Global Variables and Constants
 ###########################################
 SCRIPT_PATH=$(readlink -f "${BASH_SOURCE[0]}")
@@ -604,10 +613,29 @@ EOL
     info "Configuration generated successfully"
 }
 
+generate_db_credentials() {
+    info "Generating database credentials..."
+    DB_USER="db_${ADMIN_USER}"
+    DB_PASS="${ADMIN_PASS}"
+    DB_NAME="irssh_db"
+    export DB_USER DB_PASS DB_NAME
+}
+
 # Database Setup
 setup_database() {
     info "Setting up PostgreSQL database..."
     
+    # Detect PostgreSQL version
+    PG_VERSION=$(apt-cache policy postgresql | grep -A1 "^  Installed:" | grep -oP '\d+' | head -1)
+    if [ -z "$PG_VERSION" ]; then
+        PG_VERSION=12
+    fi
+    
+    # Use detected version
+    apt-get install -y postgresql-$PG_VERSION postgresql-contrib-$PG_VERSION
+    systemctl enable postgresql
+    systemctl start postgresql
+
     # Install PostgreSQL if not present
     apt-get install -y postgresql-$postgresql_version postgresql-client-$postgresql_version
 
