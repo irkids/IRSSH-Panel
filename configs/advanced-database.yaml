@@ -1,0 +1,53 @@
+# /opt/irssh-panel/config/advanced-database.yaml
+database:
+  postgresql:
+    version: 14
+    max_connections: 200
+    shared_buffers: 1GB
+    effective_cache_size: 3GB
+    maintenance_work_mem: 256MB
+    checkpoint_completion_target: 0.9
+    wal_buffers: 16MB
+    default_statistics_target: 100
+    random_page_cost: 1.1
+    effective_io_concurrency: 200
+    work_mem: 5242kB
+    min_wal_size: 1GB
+    max_wal_size: 4GB
+    
+    replication:
+      enabled: false
+      mode: streaming
+      number_of_replicas: 1
+      synchronous_commit: on
+    
+    backup:
+      method: pg_basebackup
+      schedule: "0 1 * * *"
+      retention_count: 7
+      compression_level: 9
+    
+    monitoring:
+      log_min_duration_statement: 1000
+      log_checkpoints: on
+      log_connections: on
+      log_disconnections: on
+      log_lock_waits: on
+      log_temp_files: 0
+      track_io_timing: on
+      track_functions: all
+
+    vacuum:
+      analyze_threshold: 50
+      scale_factor: 0.1
+      cost_delay: 20
+      cost_limit: 200
+
+    pools:
+      pgbouncer:
+        enabled: true
+        max_client_conn: 1000
+        default_pool_size: 20
+        min_pool_size: 5
+        reserve_pool_size: 5
+        server_reset_query_always: 0
