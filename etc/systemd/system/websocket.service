@@ -1,0 +1,14 @@
+[Unit]
+Description=WebSocket for SSH
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/websocat -t --binary-protocol ws-l:0.0.0.0:2082 tcp:127.0.0.1:22
+Restart=always
+RestartSec=3
+StandardOutput=append:/var/log/irssh/websocket.log
+StandardError=append:/var/log/irssh/websocket-error.log
+
+[Install]
+WantedBy=multi-user.target
