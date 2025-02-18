@@ -1,0 +1,32 @@
+# /opt/irssh-panel/config/monitoring.yaml
+prometheus:
+  enabled: true
+  port: 9090
+  retention_days: 15
+  scrape_interval: 15s
+  targets:
+    - name: node-exporter
+      endpoint: localhost:9100
+    - name: nginx-exporter
+      endpoint: localhost:9113
+    - name: postgres-exporter
+      endpoint: localhost:9187
+
+alerts:
+  cpu_usage:
+    threshold: 80
+    duration: 5m
+  memory_usage:
+    threshold: 85
+    duration: 5m
+  disk_usage:
+    threshold: 90
+    duration: 5m
+  failed_logins:
+    threshold: 10
+    duration: 1h
+
+metrics:
+  collection_interval: 60
+  retention_period: 30d
+  export_format: prometheus
