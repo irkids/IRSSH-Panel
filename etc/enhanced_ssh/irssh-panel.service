@@ -1,0 +1,16 @@
+[Unit]
+Description=IRSSH Panel Service
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/irssh-panel/modules/protocols
+Environment=PYTHONPATH=/opt/irssh-panel/venv/lib/python3.8/site-packages
+ExecStart=/opt/irssh-panel/venv/bin/python3 /opt/irssh-panel/modules/protocols/ssh-script.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
