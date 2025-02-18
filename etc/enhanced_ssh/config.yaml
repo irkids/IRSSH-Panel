@@ -1,5 +1,47 @@
-db_host: localhost
+# IRSSH Panel Configuration
+version: "3.5.2"
+
+# Database Configuration
+db_host: "localhost"
 db_port: 5432
-db_name: ssh_manager
-db_user: irssh_admin
-db_password: passP@ssw0rd
+db_name: "ssh_manager"
+db_user: "irssh_admin"
+db_password: "auto_generated"
+
+# Web Panel Configuration
+web_port: 8080
+jwt_secret: "auto_generated"
+enable_https: false
+enable_monitoring: true
+
+# Protocol Settings
+protocols:
+  ssh:
+    enabled: true
+    port: 22
+  dropbear:
+    enabled: true
+    port: 22722
+  websocket:
+    enabled: true
+    port: 2082
+  l2tp:
+    enabled: true
+    port: 1701
+  ikev2:
+    enabled: true
+    port: 500
+  cisco:
+    enabled: true
+    port: 443
+  wireguard:
+    enabled: true
+    port: 51820
+  singbox:
+    enabled: true
+    port: 1080
+
+# System Settings
+backup_retention_days: 7
+log_retention_days: 30
+monitoring_retention_days: 14
