@@ -72,7 +72,7 @@ declare -A COLORS=(
 )
 
 # Advanced Configuration Options
-DB_VERSION="14"
+DB_VERSION="12"
 NODE_VERSION="20"
 WEBSOCAT_VERSION="1.11.0"
 SINGBOX_VERSION="1.7.0"
@@ -354,9 +354,9 @@ setup_directories() {
     declare -A DIRS=(
         ["/etc/postgresql"]=""
         ["/etc/postgresql/12/main"]=""
-        ["/etc/postgresql/14/main"]=""
+        ["/etc/postgresql/12/main"]=""
         ["/var/lib/postgresql/12/main"]=""
-        ["/var/lib/postgresql/14/main"]=""
+        ["/var/lib/postgresql/12/main"]=""
         ["/var/log/postgresql"]=""
         ["/etc/enhanced_ssh"]=""
         ["/opt/irssh-panel"]=""
@@ -406,7 +406,7 @@ shared_buffers = 128MB
 dynamic_shared_memory_type = posix
 ssl = off"
 
-        ["/etc/postgresql/14/main/pg_hba.conf"]="# Database administrative login by Unix domain socket
+        ["/etc/postgresql/12/main/pg_hba.conf"]="# Database administrative login by Unix domain socket
 local   all             postgres                                peer
 
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
@@ -414,7 +414,7 @@ local   all             all                                     peer
 host    all             all             127.0.0.1/32            md5
 host    all             all             ::1/128                 md5"
 
-        ["/etc/postgresql/14/main/postgresql.conf"]="# DB Version: 14
+        ["/etc/postgresql/12/main/postgresql.conf"]="# DB Version: 12
 listen_addresses = 'localhost'
 port = 5432
 max_connections = 100
@@ -428,6 +428,8 @@ db_port: 5432
 db_name: ${DB_NAME}
 db_user: ${DB_USER}
 db_password: ${DB_PASS}"
+
+     mkdir -p /opt/irssh-panel/frontend/dist
 
         ["/etc/nginx/sites-available/irssh-panel"]="server {
     listen 80;
@@ -451,7 +453,7 @@ db_password: ${DB_PASS}"
         "/var/log/irssh/installation.log"
         "/var/log/irssh/error.log"
         "/var/log/postgresql/postgresql-12-main.log"
-        "/var/log/postgresql/postgresql-14-main.log"
+        "/var/log/postgresql/postgresql-12-main.log"
     )
 
     for file in "${LOG_FILES[@]}"; do
@@ -588,6 +590,18 @@ setup_database() {
         PG_VERSION="12"  # Default to version 12 if not found
     fi
     
+    # First detect PostgreSQL version
+PG_VERSION=$(pg_config --version | awk '{print $2}' | cut -d. -f1)
+
+# Create required directories for detected version
+mkdir -p "/etc/postgresql/$PG_VERSION/main"
+mkdir -p "/var/lib/postgresql/$PG_VERSION/main"
+chown -R postgres:postgres "/etc/postgresql/$PG_VERSION"
+chown -R postgres:postgres "/var/lib/postgresql/$PG_VERSION"
+
+# Initialize database cluster
+su - postgres -c "initdb -D /var/lib/postgresql/$PG_VERSION/main"
+
     # Install PostgreSQL
     apt-get install -y postgresql-$PG_VERSION postgresql-contrib-$PG_VERSION || error "Failed to install PostgreSQL"
     
