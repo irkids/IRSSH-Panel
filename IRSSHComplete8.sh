@@ -355,45 +355,23 @@ check_requirements() {
         update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.8 1
     fi
     
-# Node.js Installation
+   # Add this new function for Node.js installation
 install_nodejs() {
     info "Installing Node.js..."
     
-    # Remove old versions
-    apt-get remove -y nodejs npm &>/dev/null
-    rm -rf /etc/apt/sources.list.d/nodesource.list &>/dev/null
-    
-    # Add NodeSource repository for Node.js 20
-    info "2025-02-18 18:00:56 - Installing pre-requisites"
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - || {
-        error "Failed to add NodeSource repository"
-        return 1
-    }
+    # Add NodeSource repository
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
     
     # Install Node.js
-    apt-get install -y nodejs || {
-        error "Failed to install Node.js"
-        return 1
-    }
+    apt-get install -y nodejs
     
-    # Verify version
+    # Verify Node.js version
     NODE_VERSION=$(node -v | sed 's/v\([0-9]*\).*/\1/')
-    if [ -z "$NODE_VERSION" ] || [ "$NODE_VERSION" -lt 16 ]; then
-        error "Node.js version must be 16 or higher"
-        return 1
+    if [ "$NODE_VERSION" -lt "$MIN_NODE_VERSION" ]; then
+        error "Node.js version must be $MIN_NODE_VERSION or higher"
     fi
     
-    # Install global npm packages
-    npm install -g pm2 typescript @types/node || {
-        error "Failed to install global npm packages"
-        return 1
-    }
-    
-    info "Node.js installation completed successfully"
-    return 0
-}
-    
-    info "System requirements check completed"
+    info "Node.js installation completed"
 }
 
 # Detect PostgreSQL version
@@ -418,6 +396,7 @@ setup_directories() {
     # Create base directories
     for dir in "${DIRS[@]}"; do
         mkdir -p "$dir"
+        info "Created directory: $dir"
     done
 
     # Set correct permissions
@@ -425,6 +404,8 @@ setup_directories() {
     chmod 755 /opt/irssh-panel/frontend/dist
     chown -R postgres:postgres "/etc/postgresql/$PG_VERSION"
     chown -R postgres:postgres "/var/lib/postgresql/$PG_VERSION"
+
+    info "Directory setup completed"
 }
 
 # Generate Configuration
@@ -538,25 +519,34 @@ generate_db_credentials() {
 setup_database() {
     info "Setting up PostgreSQL database..."
     
-    # Install PostgreSQL
+    # Install PostgreSQL if not present
     apt-get install -y postgresql-$PG_VERSION postgresql-contrib-$PG_VERSION
-    
-    # Initialize database cluster for detected version
+
+    # Initialize database cluster
     if ! pg_lsclusters | grep -q "^$PG_VERSION main"; then
         pg_createcluster $PG_VERSION main --start
     fi
     
-    # Wait for PostgreSQL using detected version
+    # Ensure PostgreSQL is running
+    systemctl start postgresql
+    systemctl enable postgresql
+    
+    # Wait for PostgreSQL to be ready
+    local max_attempts=5
+    local attempt=1
     until pg_isready -h localhost -p 5432; do
+        if [ $attempt -ge $max_attempts ]; then
+            error "PostgreSQL failed to start after $max_attempts attempts"
+        fi
+        info "Waiting for PostgreSQL... (attempt $attempt/$max_attempts)"
         sleep 1
+        ((attempt++))
     done
 
-    # Continue with database setup
-    generate_db_credentials
-    
     # Create user and database
     su - postgres -c "psql -c \"CREATE USER \\\"$DB_USER\\\" WITH PASSWORD '$DB_PASS';\""
     su - postgres -c "psql -c \"CREATE DATABASE \\\"$DB_NAME\\\" OWNER \\\"$DB_USER\\\";\""
+    su - postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE \\\"$DB_NAME\\\" TO \\\"$DB_USER\\\";\""
     
     info "Database setup completed successfully"
 }
@@ -702,41 +692,24 @@ EOL
 }
 
 # Node.js Environment Setup
-install_nodejs() {
-    info "Installing Node.js..."
+setup_nodejs() {
+    info "Setting up Node.js environment..."
     
-    # Remove old versions
-    apt-get remove -y nodejs npm &>/dev/null
-    rm -rf /etc/apt/sources.list.d/nodesource.list &>/dev/null
-    
-    # Add NodeSource repository for Node.js 20
-    info "2025-02-18 18:00:56 - Installing pre-requisites"
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - || {
-        error "Failed to add NodeSource repository"
-        return 1
-    }
-    
-    # Install Node.js
-    apt-get install -y nodejs || {
-        error "Failed to install Node.js"
-        return 1
-    }
-    
-    # Verify version
-    NODE_VERSION=$(node -v | sed 's/v\([0-9]*\).*/\1/')
-    if [ -z "$NODE_VERSION" ] || [ "$NODE_VERSION" -lt 16 ]; then
-        error "Node.js version must be 16 or higher"
-        return 1
+    # Install Node.js if not present
+    if ! command -v node &> /dev/null; then
+        curl -fsSL "https://deb.nodesource.com/setup_${NODE_VERSION}.x" | bash -
+        apt-get install -y nodejs || error "Failed to install Node.js"
     fi
     
-    # Install global npm packages
-    npm install -g pm2 typescript @types/node || {
-        error "Failed to install global npm packages"
-        return 1
-    }
+    # Verify npm installation
+    if ! command -v npm &> /dev/null; then
+        error "npm installation failed"
+    fi
     
-    info "Node.js installation completed successfully"
-    return 0
+    # Install global packages
+    npm install -g pm2 typescript @types/node || error "Failed to install global npm packages"
+    
+    info "Node.js environment setup completed"
 }
 
 # Frontend Setup
@@ -2265,9 +2238,9 @@ main() {
     setup_database
     
     # Install and configure components
+    install_nodejs
     setup_database
     setup_python
-    install_nodejs || exit 1
     setup_frontend
     setup_backend
     
