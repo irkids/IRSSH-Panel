@@ -1,0 +1,87 @@
+{
+  "app": {
+    "name": "IRSSH-Panel",
+    "env": "production",
+    "port": 443,
+    "url": "https://panel.example.com",
+    "api": {
+      "prefix": "/api/v1",
+      "timeout": 30000
+    }
+  },
+  "database": {
+    "url": "mongodb://localhost:27017/irssh_prod",
+    "options": {
+      "useNewUrlParser": true,
+      "useUnifiedTopology": true,
+      "maxPoolSize": 100,
+      "serverSelectionTimeoutMS": 5000,
+      "socketTimeoutMS": 45000
+    }
+  },
+  "redis": {
+    "host": "localhost",
+    "port": 6379,
+    "password": null,
+    "db": 0
+  },
+  "security": {
+    "secretKey": "PRODUCTION_SECRET_KEY",
+    "jwtSecret": "PRODUCTION_JWT_SECRET",
+    "bcryptRounds": 12,
+    "rateLimit": {
+      "windowMs": 900000,
+      "max": 100
+    }
+  },
+  "logging": {
+    "level": "info",
+    "format": "json",
+    "storage": {
+      "type": "file",
+      "path": "/var/log/irssh/app.log",
+      "maxSize": "10m",
+      "maxFiles": "7d"
+    }
+  },
+  "monitoring": {
+    "enabled": true,
+    "prometheus": {
+      "port": 9090,
+      "endpoint": "/metrics"
+    },
+    "grafana": {
+      "url": "http://localhost:3000"
+    }
+  },
+  "protocols": {
+    "ssh": {
+      "port": 22,
+      "maxConnections": 1000,
+      "timeout": 3600
+    },
+    "l2tp": {
+      "port": 1701,
+      "maxConnections": 500,
+      "timeout": 7200
+    },
+    "ikev2": {
+      "port": 500,
+      "maxConnections": 500,
+      "timeout": 7200
+    }
+  },
+  "email": {
+    "enabled": true,
+    "from": "noreply@example.com",
+    "smtp": {
+      "host": "smtp.example.com",
+      "port": 587,
+      "secure": true,
+      "auth": {
+        "user": "SMTP_USER",
+        "pass": "SMTP_PASSWORD"
+      }
+    }
+  }
+}
