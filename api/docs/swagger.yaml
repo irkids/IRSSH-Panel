@@ -1,0 +1,355 @@
+openapi: 3.0.0
+info:
+  title: IRSSH Panel API
+  version: 1.0.0
+  description: API documentation for IRSSH Panel
+
+servers:
+  - url: https://api.example.com/v1
+    description: Production server
+  - url: http://localhost:3000/v1
+    description: Development server
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    User:
+      type: object
+      properties:
+        _id:
+          type: string
+        username:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+          enum: [admin, user]
+        status:
+          type: string
+          enum: [active, inactive]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    Protocol:
+      type: object
+      properties:
+        _id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+          enum: [SSH, L2TP, IKEv2, CISCO, WIREGUARD, SINGBOX]
+        config:
+          type: object
+        enabled:
+          type: boolean
+        maxConnections:
+          type: integer
+        currentConnections:
+          type: integer
+        settings:
+          type: object
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+paths:
+  /auth/login:
+    post:
+      summary: User login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+      responses:
+        200:
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                  user:
+                    $ref: '#/components/schemas/User'
+
+  /protocols:
+    get:
+      summary: Get all protocols
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: List of protocols
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Protocol'
+
+    post:
+      summary: Create new protocol
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Protocol'
+      responses:
+        201:
+          description: Protocol created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Protocol'
+
+  /protocols/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    
+    get:
+      summary: Get protocol by ID
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: Protocol details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Protocol'
+    
+    put:
+      summary: Update protocol
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Protocol'
+      responses:
+        200:
+          description: Protocol updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Protocol'
+    
+    delete:
+      summary: Delete protocol
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: Protocol deleted
+
+  /protocols/{id}/metrics:
+    get:
+      summary: Get protocol metrics
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        200:
+          description: Protocol metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connections:
+                    type: array
+                    items:
+                      type: object
+                  bandwidth:
+                    type: object
+                  errors:
+                    type: array
+                    items:
+                      type: object
+
+  /users:
+    get:
+      summary: Get all users
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+
+    post:
+      summary: Create new user
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/User'
+      responses:
+        201:
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+
+  /users/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    
+    get:
+      summary: Get user by ID
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: User details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+    
+    put:
+      summary: Update user
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/User'
+      responses:
+        200:
+          description: User updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+    
+    delete:
+      summary: Delete user
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: User deleted
+
+  /settings:
+    get:
+      summary: Get system settings
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: System settings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  appName:
+                    type: string
+                  maxConnections:
+                    type: integer
+                  sessionTimeout:
+                    type: integer
+                  emailNotifications:
+                    type: boolean
+                  loggingLevel:
+                    type: string
+                  backupEnabled:
+                    type: boolean
+                  backupInterval:
+                    type: integer
+                  monitoringEnabled:
+                    type: boolean
+
+    put:
+      summary: Update system settings
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                appName:
+                  type: string
+                maxConnections:
+                  type: integer
+                sessionTimeout:
+                  type: integer
+                emailNotifications:
+                  type: boolean
+                loggingLevel:
+                  type: string
+                backupEnabled:
+                  type: boolean
+                backupInterval:
+                  type: integer
+                monitoringEnabled:
+                  type: boolean
+      responses:
+        200:
+          description: Settings updated
