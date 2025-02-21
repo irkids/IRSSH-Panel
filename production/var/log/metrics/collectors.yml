@@ -1,0 +1,64 @@
+collectors:
+  system:
+    enabled: true
+    interval: 60
+    metrics:
+      - cpu_usage
+      - memory_usage
+      - disk_usage
+      - network_io
+      - system_load
+      
+  application:
+    enabled: true
+    interval: 30
+    metrics:
+      - active_users
+      - request_count
+      - response_time
+      - error_rate
+      - api_latency
+
+  protocols:
+    enabled: true
+    interval: 60
+    metrics:
+      - active_connections
+      - bandwidth_usage
+      - connection_errors
+      - protocol_latency
+
+  database:
+    enabled: true
+    interval: 120
+    metrics:
+      - query_count
+      - slow_queries
+      - connection_pool
+      - transaction_rate
+      - cache_hit_ratio
+
+storage:
+  type: prometheus
+  retention: 30d
+  compression: true
+
+alerting:
+  rules:
+    - name: high_cpu_usage
+      metric: cpu_usage
+      threshold: 90
+      duration: 5m
+      severity: critical
+
+    - name: high_memory_usage
+      metric: memory_usage
+      threshold: 85
+      duration: 5m
+      severity: warning
+
+    - name: high_error_rate
+      metric: error_rate
+      threshold: 5
+      duration: 1m
+      severity: critical
