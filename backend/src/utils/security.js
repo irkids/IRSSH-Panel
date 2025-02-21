@@ -1,12 +1,33 @@
 const crypto = require('crypto');
+const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const config = require('../config');
 
 class SecurityService {
   constructor() {
     this.algorithm = 'aes-256-gcm';
-    this.secretKey = config.security.secretKey;
+    this.secretKey = Buffer.from(config.security.secretKey, 'hex');
     this.jwtSecret = config.security.jwtSecret;
+  }
+
+  async hashPassword(password) {
+    return bcrypt.hash(password, 12);
+  }
+
+  async verifyPassword(password, hash) {
+    return bcrypt.compare(password, hash);
+  }
+
+  generateToken(data, expiresIn = '24h') {
+    return jwt.sign(data, this.jwtSecret, { expiresIn });
+  }
+
+  verifyToken(token) {
+    try {
+      return jwt.verify(token, this.jwtSecret);
+    } catch (error) {
+      throw new Error('Invalid token');
+    }
   }
 
   encrypt(text) {
@@ -25,68 +46,63 @@ class SecurityService {
     };
   }
 
-  decrypt(encrypted, iv, authTag) {
+  decrypt(encryptedData) {
     const decipher = crypto.createDecipheriv(
       this.algorithm,
       this.secretKey,
-      Buffer.from(iv, 'hex')
+      Buffer.from(encryptedData.iv, 'hex')
     );
     
-    decipher.setAuthTag(Buffer.from(authTag, 'hex'));
+    decipher.setAuthTag(Buffer.from(encryptedData.authTag, 'hex'));
     
-    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+    let decrypted = decipher.update(encryptedData.encrypted, 'hex', 'utf8');
     decrypted += decipher.final('utf8');
     
     return decrypted;
   }
 
-  generateToken(user) {
-    return jwt.sign(
-      {
-        id: user._id,
-        username: user.username,
-        role: user.role
-      },
-      this.jwtSecret,
-      { expiresIn: '24h' }
-    );
-  }
-
-  verifyToken(token) {
-    try {
-      return jwt.verify(token, this.jwtSecret);
-    } catch (error) {
-      throw new Error('Invalid token');
-    }
-  }
-
-  hashPassword(password) {
-    const salt = crypto.randomBytes(16).toString('hex');
-    const hash = crypto.pbkdf2Sync(
-      password,
-      salt,
-      10000,
-      64,
-      'sha512'
-    ).toString('hex');
-    
-    return { hash, salt };
-  }
-
-  verifyPassword(password, hash, salt) {
-    const verifyHash = crypto.pbkdf2Sync(
-      password,
-      salt,
-      10000,
-      64,
-      'sha512'
-    ).toString('hex');
-    
-    return hash === verifyHash;
-  }
-
-  generateSecureKey(length = 32) {
+  generateRandomString(length = 32) {
     return crypto.randomBytes(length).toString('hex');
+  }
+
+  hashData(data) {
+    return crypto.createHash('sha256').update(data).digest('hex');
+  }
+
+  validatePassword(password) {
+    const minLength = 8;
+    const hasUpperCase = /[A-Z]/.test(password);
+    const hasLowerCase = /[a-z]/.test(password);
+    const hasNumbers = /\d/.test(password);
+    const hasSpecialChars = /[!@#$%^&*(),.?":{}|<>]/.test(password);
+
+    return {
+      isValid: 
+        password.length >= minLength &&
+        hasUpperCase &&
+        hasLowerCase &&
+        hasNumbers &&
+        hasSpecialChars,
+      errors: {
+        length: password.length < minLength,
+        upperCase: !hasUpperCase,
+        lowerCase: !hasLowerCase,
+        numbers: !hasNumbers,
+        specialChars: !hasSpecialChars
+      }
+    };
+  }
+
+  sanitizeInput(input) {
+    if (typeof input !== 'string') return input;
+    return input
+      .replace(/[<>]/g, '')
+      .replace(/javascript:/gi, '')
+      .trim();
+  }
+
+  generateApiKey() {
+    return `ak_${this.generateRandomString(32)}`;
   }
 }
 
