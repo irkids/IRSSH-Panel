@@ -1,43 +1,63 @@
 const rateLimit = require('express-rate-limit');
-const Log = require('../models/Log');
+const RedisStore = require('rate-limit-redis');
+const redis = require('../utils/redis');
+const logger = require('../utils/logger');
 
-const createRateLimiter = (options = {}) => {
+const createLimiter = (options) => {
   return rateLimit({
-    windowMs: options.windowMs || 15 * 60 * 1000, // Default 15 minutes
-    max: options.max || 100, // Default 100 requests per windowMs
+    store: new RedisStore({
+      client: redis,
+      prefix: 'rate-limit:',
+      ...options.redis
+    }),
+    windowMs: options.windowMs || 15 * 60 * 1000, // 15 minutes
+    max: options.max || 100,
     message: {
-      error: 'Too many requests from this IP, please try again later.'
+      error: 'Too many requests, please try again later.'
     },
     handler: async (req, res) => {
-      try {
-        await Log.create({
-          action: 'RATE_LIMIT_EXCEEDED',
-          ip: req.ip,
-          path: req.path,
-          details: `Rate limit exceeded: ${req.ip}`
-        });
-      } catch (error) {
-        console.error('Error logging rate limit:', error);
-      }
-      
+      await logger.warn('Rate limit exceeded', {
+        ip: req.ip,
+        path: req.path,
+        headers: req.headers
+      });
       res.status(429).json({
-        error: 'Too many requests from this IP, please try again later.'
+        error: 'Too many requests, please try again later.'
       });
     },
-    standardHeaders: true,
-    legacyHeaders: false
+    skip: (req) => {
+      // Skip rate limiting for certain conditions
+      return req.ip === '127.0.0.1' || req.path === '/health';
+    },
+    keyGenerator: (req) => {
+      // Use custom key for rate limiting
+      return req.user ? `${req.user.id}:${req.ip}` : req.ip;
+    }
   });
 };
 
 module.exports = {
-  createRateLimiter,
-  apiLimiter: createRateLimiter(),
-  authLimiter: createRateLimiter({
-    windowMs: 60 * 60 * 1000, // 1 hour
-    max: 5 // 5 requests per hour
+  // General API rate limiter
+  apiLimiter: createLimiter({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100 // limit each IP to 100 requests per windowMs
   }),
-  userLimiter: createRateLimiter({
-    windowMs: 30 * 60 * 1000, // 30 minutes
-    max: 50 // 50 requests per 30 minutes
+
+  // Authentication rate limiter
+  authLimiter: createLimiter({
+    windowMs: 60 * 60 * 1000, // 1 hour
+    max: 5 // limit each IP to 5 login attempts per hour
+  }),
+
+  // User actions rate limiter
+  userLimiter: createLimiter({
+    windowMs: 60 * 1000, // 1 minute
+    max: 30 // limit each user to 30 requests per minute
+  }),
+
+  // Protocol operations rate limiter
+  protocolLimiter: createLimiter({
+    windowMs: 60 * 1000, // 1 minute
+    max: 20 // limit each user to 20 protocol operations per minute
   })
 };
