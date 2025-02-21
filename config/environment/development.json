@@ -1,0 +1,33 @@
+{
+  "app": {
+    "port": 3000,
+    "url": "http://localhost:3000"
+  },
+  "database": {
+    "mongodb": {
+      "uri": "mongodb://localhost:27017/irssh_dev"
+    },
+    "redis": {
+      "host": "localhost",
+      "port": 6379
+    }
+  },
+  "security": {
+    "jwtSecret": "dev_secret_key",
+    "cors": {
+      "origin": "*"
+    },
+    "rateLimit": {
+      "windowMs": 900000,
+      "max": 1000
+    }
+  },
+  "logging": {
+    "level": "debug",
+    "format": "standard"
+  },
+  "monitoring": {
+    "enabled": true,
+    "interval": 30000
+  }
+}
