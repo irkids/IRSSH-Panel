@@ -1,0 +1,44 @@
+[Unit]
+Description=IRSSH Panel Service
+After=network.target postgresql.service redis.service
+Wants=postgresql.service redis.service
+
+[Service]
+Type=simple
+User=irssh
+Group=irssh
+WorkingDirectory=/opt/irssh-panel
+Environment=NODE_ENV=production
+Environment=PORT=3000
+EnvironmentFile=/etc/irssh-panel/env
+
+ExecStart=/usr/bin/node dist/server.js
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=10
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/irssh-panel
+CapabilityBoundingSet=
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+# Resource limits
+LimitNOFILE=65535
+LimitNPROC=4096
+LimitAS=infinity
+CPUQuota=90%
+MemoryLimit=2G
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=irssh-panel
+
+[Install]
+WantedBy=multi-user.target
