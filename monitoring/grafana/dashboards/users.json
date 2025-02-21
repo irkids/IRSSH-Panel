@@ -1,0 +1,65 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "graphTooltip": 0,
+  "id": 3,
+  "links": [],
+  "panels": [
+    {
+      "title": "Active Users",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(active_users)",
+          "legendFormat": "Active Users"
+        }
+      ]
+    },
+    {
+      "title": "User Sessions",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(user_sessions) by (type)",
+          "legendFormat": "{{type}}"
+        }
+      ]
+    },
+    {
+      "title": "Login Activity",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "rate(user_logins_total[5m])",
+          "legendFormat": "Logins"
+        },
+        {
+          "expr": "rate(user_login_failures_total[5m])",
+          "legendFormat": "Failures"
+        }
+      ]
+    },
+    {
+      "title": "User Bandwidth Usage",
+      "type": "bar",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "topk(10, sum(user_bandwidth_bytes) by (user))",
+          "legendFormat": "{{user}}"
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 30,
+  "style": "dark",
+  "title": "Users Dashboard",
+  "uid": "users",
+  "version": 1
+}
