@@ -1,0 +1,35 @@
+{
+  "app": {
+    "port": 443,
+    "url": "https://panel.example.com"
+  },
+  "database": {
+    "mongodb": {
+      "uri": "mongodb://mongodb:27017/irssh_prod",
+      "options": {
+        "maxPoolSize": 50,
+        "replicaSet": "rs0"
+      }
+    },
+    "redis": {
+      "host": "redis",
+      "port": 6379,
+      "password": "prod_redis_password"
+    }
+  },
+  "logging": {
+    "level": "info",
+    "format": "json"
+  },
+  "security": {
+    "jwtSecret": "prod_secret",
+    "rateLimit": {
+      "windowMs": 900000,
+      "max": 100
+    }
+  },
+  "monitoring": {
+    "enabled": true,
+    "interval": 60000
+  }
+}
