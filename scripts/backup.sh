@@ -1,30 +1,53 @@
-# /opt/irssh-panel/scripts/backup.sh
 #!/bin/bash
 
-BACKUP_DIR="/opt/irssh-backups"
-DATE=$(date +%Y%m%d_%H%M%S)
-BACKUP_FILE="$BACKUP_DIR/backup_$DATE.tar.gz"
-DB_BACKUP="$BACKUP_DIR/db_backup_$DATE.sql"
+set -e
+
+# Configuration
+APP_NAME="irssh-panel"
+BACKUP_DIR="/opt/backups/$APP_NAME"
+RETENTION_DAYS=30
+MONGODB_URI=${MONGODB_URI:-"mongodb://localhost:27017"}
+DATABASE_NAME=${DATABASE_NAME:-"irssh"}
+
+# Create timestamp
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+BACKUP_PATH="$BACKUP_DIR/$TIMESTAMP"
+
+# Create backup directory
+mkdir -p $BACKUP_PATH
+
+# Backup MongoDB
+echo "Backing up MongoDB..."
+mongodump --uri=$MONGODB_URI --db=$DATABASE_NAME --out=$BACKUP_PATH/mongodb
+
+# Backup Redis
+echo "Backing up Redis..."
+redis-cli SAVE
+cp /var/lib/redis/dump.rdb $BACKUP_PATH/redis-dump.rdb
 
 # Backup configuration files
-tar -czf "$BACKUP_FILE" \
-    /etc/enhanced_ssh \
-    /opt/irssh-panel/config \
-    /etc/nginx/sites-available/irssh-panel \
-    /etc/wireguard \
-    /etc/sing-box
+echo "Backing up configuration..."
+cp -r /opt/$APP_NAME/config $BACKUP_PATH/
+cp /opt/$APP_NAME/.env $BACKUP_PATH/
 
-# Backup database
-source /etc/enhanced_ssh/config.yaml
-PGPASSWORD="${DB_PASS}" pg_dump -U "${DB_USER}" "${DB_NAME}" > "$DB_BACKUP"
+# Backup uploads
+echo "Backing up uploads..."
+cp -r /opt/$APP_NAME/uploads $BACKUP_PATH/
 
-# Remove old backups (keep last 7 days)
-find "$BACKUP_DIR" -type f -mtime +7 -delete
+# Create archive
+echo "Creating archive..."
+cd $BACKUP_DIR
+tar -czf $TIMESTAMP.tar.gz $TIMESTAMP
+rm -rf $TIMESTAMP
 
-# Check backup integrity
-if [ -f "$BACKUP_FILE" ] && [ -f "$DB_BACKUP" ]; then
-    echo "Backup completed successfully: $DATE"
-else
-    echo "Backup failed!"
-    exit 1
+# Upload to S3
+if [ ! -z "$AWS_BUCKET" ]; then
+    echo "Uploading to S3..."
+    aws s3 cp $TIMESTAMP.tar.gz s3://$AWS_BUCKET/backups/
 fi
+
+# Cleanup old backups
+echo "Cleaning up old backups..."
+find $BACKUP_DIR -type f -name "*.tar.gz" -mtime +$RETENTION_DAYS -delete
+
+echo "Backup completed successfully!"
