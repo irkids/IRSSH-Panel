@@ -1,0 +1,48 @@
+# Default policies
+DEFAULT_INPUT_POLICY="DROP"
+DEFAULT_OUTPUT_POLICY="ACCEPT"
+DEFAULT_FORWARD_POLICY="DROP"
+
+# SSH
+[SSH]
+title=Secure Shell
+description=Secure Shell Service
+ports=22/tcp
+
+# Web Server
+[WWW]
+title=Web Server
+description=Web Server (HTTP,HTTPS)
+ports=80,443/tcp
+
+# VPN Services
+[VPN]
+title=VPN Services
+description=VPN Protocols
+ports=500,4500/udp
+
+# Monitoring
+[Monitoring]
+title=Monitoring Services
+description=Prometheus and Grafana
+ports=9090,3000/tcp
+
+# Database
+[PostgreSQL]
+title=PostgreSQL Database
+description=PostgreSQL Database Server
+ports=5432/tcp
+
+# Redis
+[Redis]
+title=Redis Cache
+description=Redis Cache Server
+ports=6379/tcp
+
+# Rate Limiting Rules
+[LIMIT]
+title=Rate Limiting
+description=Rate limiting rules for services
+http=25/minute
+https=25/minute
+ssh=3/minute
