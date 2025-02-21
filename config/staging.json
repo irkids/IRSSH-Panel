@@ -1,0 +1,34 @@
+{
+  "app": {
+    "port": 3000,
+    "url": "https://staging.panel.example.com"
+  },
+  "database": {
+    "mongodb": {
+      "uri": "mongodb://mongodb:27017/irssh_staging",
+      "options": {
+        "maxPoolSize": 20
+      }
+    },
+    "redis": {
+      "host": "redis",
+      "port": 6379,
+      "password": "staging_redis_password"
+    }
+  },
+  "logging": {
+    "level": "info",
+    "format": "json"
+  },
+  "security": {
+    "jwtSecret": "staging_secret",
+    "rateLimit": {
+      "windowMs": 900000,
+      "max": 500
+    }
+  },
+  "monitoring": {
+    "enabled": true,
+    "interval": 60000
+  }
+}
