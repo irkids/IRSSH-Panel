@@ -1,0 +1,53 @@
+certificates:
+  ssl:
+    key_size: 4096
+    days_valid: 365
+    country: US
+    state: California
+    locality: San Francisco
+    organization: IRSSH Panel
+    organizational_unit: Security
+    common_name: panel.example.com
+    alt_names:
+      - api.example.com
+      - monitor.example.com
+    key_usage:
+      - digitalSignature
+      - keyEncipherment
+    extended_key_usage:
+      - serverAuth
+      - clientAuth
+
+  ssh:
+    key_type: ed25519
+    key_size: 4096
+    comment: IRSSH Panel SSH Key
+
+  ipsec:
+    ca:
+      key_size: 4096
+      days_valid: 3650
+      common_name: IRSSH Panel IPSec CA
+    server:
+      key_size: 4096
+      days_valid: 365
+      common_name: panel.example.com
+
+  wireguard:
+    private_key_file: /etc/wireguard/private.key
+    public_key_file: /etc/wireguard/public.key
+
+encryption:
+  algorithm: aes-256-gcm
+  key_size: 32
+  iv_size: 12
+  tag_length: 16
+  kdf:
+    algorithm: pbkdf2
+    iterations: 100000
+    hash: sha512
+
+storage:
+  certificates: /etc/ssl/irssh
+  keys: /etc/irssh/keys
+  temp: /tmp/irssh
