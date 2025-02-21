@@ -1,0 +1,71 @@
+{
+  "log": {
+    "level": "info",
+    "output": "/var/log/sing-box/sing-box.log",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "tag": "google",
+        "address": "8.8.8.8",
+        "strategy": "ipv4_only"
+      },
+      {
+        "tag": "local",
+        "address": "223.5.5.5",
+        "strategy": "ipv4_only",
+        "detour": "direct"
+      }
+    ],
+    "strategy": "prefer_ipv4",
+    "disable_cache": false,
+    "disable_expire": false
+  },
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "::",
+      "listen_port": 443,
+      "sniff": true,
+      "sniff_override_destination": false,
+      "domain_strategy": "prefer_ipv4",
+      "proxy_protocol": false,
+      "set_system_proxy": false,
+      "users": [
+        {
+          "username": "user1",
+          "password": "pass1"
+        }
+      ]
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "block"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "protocol": "dns",
+        "outbound": "dns-out"
+      },
+      {
+        "geoip": [
+          "private"
+        ],
+        "outbound": "direct"
+      }
+    ],
+    "auto_detect_interface": true,
+    "override_android_vpn": true,
+    "default_interface": "eth0"
+  }
+}
