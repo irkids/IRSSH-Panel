@@ -44,4 +44,28 @@ source .env
 
 # Initialize application
 echo "Initializing application..."
-npm
+npm install
+npm run build
+
+# Setup systemd services
+echo "Setting up systemd services..."
+cp systemd/* /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable mongodb redis irssh-panel
+systemctl start mongodb redis irssh-panel
+
+# Setup Nginx
+echo "Setting up Nginx..."
+apt-get install -y nginx certbot python3-certbot-nginx
+cp nginx/irssh-panel.conf /etc/nginx/sites-available/
+ln -s /etc/nginx/sites-available/irssh-panel.conf /etc/nginx/sites-enabled/
+nginx -t && systemctl restart nginx
+
+# Setup firewall
+echo "Setting up firewall..."
+ufw allow ssh
+ufw allow http
+ufw allow https
+ufw --force enable
+
+echo "Environment setup completed successfully!"
