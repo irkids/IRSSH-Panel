@@ -3,99 +3,58 @@ kind: Deployment
 metadata:
   name: irssh-panel
   namespace: production
-  labels:
-    app: irssh-panel
-    version: v1
 spec:
   replicas: 3
   selector:
     matchLabels:
       app: irssh-panel
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
   template:
     metadata:
       labels:
         app: irssh-panel
-        version: v1
-      annotations:
-        prometheus.io/scrape: "true"
-        prometheus.io/port: "8080"
     spec:
-      serviceAccountName: irssh-panel-sa
       containers:
       - name: irssh-panel
         image: registry.example.com/irssh-panel:latest
-        imagePullPolicy: Always
         ports:
-        - containerPort: 8080
-          name: http
+        - containerPort: 3000
         env:
         - name: NODE_ENV
-          valueFrom:
-            configMapKeyRef:
-              name: irssh-panel-config
-              key: NODE_ENV
-        - name: DB_PASSWORD
+          value: production
+        - name: DATABASE_URL
           valueFrom:
             secretKeyRef:
-              name: irssh-panel-secrets
-              key: db-password
+              name: database-credentials
+              key: url
         resources:
           requests:
-            cpu: "200m"
             memory: "256Mi"
+            cpu: "200m"
           limits:
-            cpu: "500m"
             memory: "512Mi"
-        readinessProbe:
-          httpGet:
-            path: /health
-            port: 8080
-          initialDelaySeconds: 5
-          periodSeconds: 10
+            cpu: "500m"
         livenessProbe:
           httpGet:
             path: /health
-            port: 8080
-          initialDelaySeconds: 15
-          periodSeconds: 20
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
         volumeMounts:
         - name: config-volume
           mountPath: /app/config
-        - name: logs-volume
-          mountPath: /app/logs
-        securityContext:
-          runAsNonRoot: true
-          runAsUser: 1000
-          capabilities:
-            drop:
-            - ALL
-            add:
-            - NET_BIND_SERVICE
+        - name: secrets-volume
+          mountPath: /app/secrets
+          readOnly: true
       volumes:
       - name: config-volume
         configMap:
           name: irssh-panel-config
-      - name: logs-volume
-        persistentVolumeClaim:
-          claimName: irssh-panel-logs-pvc
-      affinity:
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            podAffinityTerm:
-              labelSelector:
-                matchExpressions:
-                - key: app
-                  operator: In
-                  values:
-                  - irssh-panel
-              topologyKey: kubernetes.io/hostname
-      tolerations:
-      - key: "node-role.kubernetes.io/master"
-        operator: "Exists"
-        effect: "NoSchedule"
+      - name: secrets-volume
+        secret:
+          secretName: irssh-panel-secrets
