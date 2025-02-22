@@ -1,0 +1,54 @@
+---
+- name: Install SSL dependencies
+  apt:
+    name:
+      - certbot
+      - python3-certbot-nginx
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Create SSL directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: 0700
+  with_items:
+    - "{{ ssl_cert_path }}"
+    - "{{ ssl_key_path }}"
+
+- name: Generate SSL private key
+  openssl_privatekey:
+    path: "{{ ssl_key_path }}/{{ domain }}.key"
+    type: RSA
+    size: 4096
+
+- name: Generate SSL CSR
+  openssl_csr:
+    path: "{{ ssl_cert_path }}/{{ domain }}.csr"
+    privatekey_path: "{{ ssl_key_path }}/{{ domain }}.key"
+    common_name: "{{ domain }}"
+    organization_name: "{{ org_name }}"
+    organization_unit_name: "{{ org_unit }}"
+    country_name: "{{ country }}"
+    state_or_province_name: "{{ state }}"
+    locality_name: "{{ locality }}"
+    email_address: "{{ ssl_email }}"
+
+- name: Generate SSL certificate
+  command: >
+    certbot certonly --standalone
+    -d {{ domain }}
+    --email {{ ssl_email }}
+    --agree-tos
+    --non-interactive
+    --cert-name {{ domain }}
+  when: use_letsencrypt | bool
+
+- name: Configure SSL certificate renewal
+  cron:
+    name: "Renew SSL certificates"
+    job: "certbot renew --quiet --post-hook 'systemctl reload nginx'"
+    minute: "0"
+    hour: "3"
+    weekday: "1"
