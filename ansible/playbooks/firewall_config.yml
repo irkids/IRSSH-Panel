@@ -1,0 +1,58 @@
+---
+- name: Configure Firewall Rules
+  hosts: all
+  become: yes
+  vars_files:
+    - vars/firewall.yml
+
+  tasks:
+    - name: Install firewall packages
+      apt:
+        name: "{{ firewall_packages }}"
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Configure UFW defaults
+      ufw:
+        state: enabled
+        policy: deny
+        direction: "{{ item }}"
+      with_items:
+        - incoming
+        - outgoing
+        - routed
+
+    - name: Allow SSH access
+      ufw:
+        rule: allow
+        port: "{{ ssh_port }}"
+        proto: tcp
+
+    - name: Configure application ports
+      ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: "{{ item.proto }}"
+      with_items: "{{ app_ports }}"
+
+    - name: Set up rate limiting
+      template:
+        src: templates/ufw/user.rules.j2
+        dest: /etc/ufw/user.rules
+      notify: reload ufw
+
+    - name: Configure fail2ban
+      template:
+        src: templates/fail2ban/jail.local.j2
+        dest: /etc/fail2ban/jail.local
+      notify: restart fail2ban
+
+  handlers:
+    - name: reload ufw
+      ufw:
+        state: reloaded
+
+    - name: restart fail2ban
+      service:
+        name: fail2ban
+        state: restarted
