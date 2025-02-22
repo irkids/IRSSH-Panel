@@ -1,0 +1,32 @@
+http.host: "0.0.0.0"
+xpack.monitoring.enabled: true
+xpack.monitoring.elasticsearch.hosts: ["https://elasticsearch:9200"]
+xpack.monitoring.elasticsearch.username: logstash_system
+xpack.monitoring.elasticsearch.password: ${LOGSTASH_PASSWORD}
+xpack.monitoring.elasticsearch.ssl.certificate_authority: /etc/logstash/certs/ca.crt
+
+path.config: /usr/share/logstash/pipeline
+path.logs: /var/log/logstash
+
+pipeline.workers: 4
+pipeline.batch.size: 2000
+pipeline.batch.delay: 50
+
+queue.type: persisted
+queue.max_bytes: 1gb
+
+log.level: info
+
+# Performance tuning
+path.queue: /var/lib/logstash/queue
+queue.page_capacity: 256mb
+queue.max_events: 0
+queue.checkpoint.writes: 1024
+
+# Dead letter queue
+dead_letter_queue.enable: true
+dead_letter_queue.max_bytes: 1gb
+
+# Monitoring settings
+xpack.monitoring.collection.interval: 10s
+xpack.monitoring.collection.pipeline.details.enabled: true
