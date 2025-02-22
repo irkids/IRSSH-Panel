@@ -7,6 +7,15 @@ os.environ.setdefault("SSH_DB_USER", "ssh_user")
 os.environ.setdefault("SSH_DB_PASSWORD", "SCRAM-SHA-256$4096:/ReBlqoM6ktVBRWRL9AA+g==$7zRf07anW9X6anq9mu+tZmzqgdre7AI6tO2YAWRsqy0=:MYxeFEe4xR/zmTeMa9yory8tLBiBKLv+YEcnAKZDMhg=")
 
 import sys
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    import pip
+    pip.main(['install', 'python-dotenv'])
+    from dotenv import load_dotenv
+
+load_dotenv()
+
 import asyncio
 import logging
 import logging.handlers
