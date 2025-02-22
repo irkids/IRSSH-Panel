@@ -1604,12 +1604,153 @@ verify_backup() {
 verify_backup "daily"
 EOL
 
+
+
     chmod +x "${DIRS[SCRIPTS_DIR]}/backup.sh"
     
     # Add to cron
     (crontab -l 2>/dev/null || true; echo "0 2 * * * ${DIRS[SCRIPTS_DIR]}/backup.sh") | crontab -
     
     info "Backup system setup completed"
+}
+
+# System Requirements Check
+check_requirements() {
+    info "Checking system requirements..."
+    
+    # Check root privileges
+    if [ "$EUID" -ne 0 ]; then
+        error "Please run as root"
+    fi
+    
+    # Check OS compatibility
+    if [ ! -f /etc/os-release ]; then
+        error "Unsupported operating system"
+    fi
+    source /etc/os-release
+    if [[ "$ID" != "ubuntu" && "$ID" != "debian" ]]; then
+        error "This script requires Ubuntu or Debian"
+    fi
+    
+    # Install basic requirements
+    apt-get update
+    apt-get install -y \
+        curl \
+        wget \
+        git \
+        postgresql \
+        postgresql-contrib \
+        build-essential \
+        || error "Failed to install basic requirements"
+
+    # Check system resources
+    local MEM_TOTAL=$(free -m | awk '/^Mem:/{print $2}')
+    local CPU_CORES=$(nproc)
+    local DISK_SPACE=$(df -m / | awk 'NR==2 {print $4}')
+    
+    if [ "$MEM_TOTAL" -lt "${REQUIREMENTS[MIN_MEMORY]}" ]; then
+        warn "System has less than ${REQUIREMENTS[MIN_MEMORY]}MB RAM"
+    fi
+    
+    if [ "$CPU_CORES" -lt "${REQUIREMENTS[MIN_CPU_CORES]}" ]; then
+        warn "System has less than ${REQUIREMENTS[MIN_CPU_CORES]} CPU cores"
+    fi
+    
+    if [ "$DISK_SPACE" -lt "${REQUIREMENTS[MIN_DISK]}" ]; then
+        error "Insufficient disk space. At least ${REQUIREMENTS[MIN_DISK]}MB required"
+    fi
+}
+
+# Get initial configuration from user
+get_initial_config() {
+    info "Initial Configuration Setup"
+    
+    # Get admin credentials
+    while [ -z "$ADMIN_USER" ]; do
+        read -p "Enter admin username: " ADMIN_USER
+    done
+    
+    while [ -z "$ADMIN_PASS" ]; do
+        read -s -p "Enter admin password: " ADMIN_PASS
+        echo
+        read -s -p "Confirm admin password: " ADMIN_PASS_CONFIRM
+        echo
+        
+        if [ "$ADMIN_PASS" != "$ADMIN_PASS_CONFIRM" ]; then
+            error "Passwords do not match" "no-exit"
+            ADMIN_PASS=""
+        fi
+    done
+    
+    # Get web port
+    while true; do
+        read -p "Enter web panel port (4-5 digits) or press Enter for random port: " WEB_PORT
+        if [ -z "$WEB_PORT" ]; then
+            WEB_PORT=$(shuf -i 1234-65432 -n 1)
+            info "Generated random port: $WEB_PORT"
+            break
+        elif [[ "$WEB_PORT" =~ ^[0-9]{4,5}$ ]] && [ "$WEB_PORT" -ge 1234 ] && [ "$WEB_PORT" -le 65432 ]; then
+            break
+        else
+            error "Invalid port number. Must be between 1234 and 65432" "no-exit"
+        fi
+    done
+    PORTS["WEB"]=$WEB_PORT
+    
+    # Ask for HTTPS
+    read -p "Enable HTTPS? (y/N): " ENABLE_HTTPS
+    ENABLE_HTTPS=${ENABLE_HTTPS,,}
+    
+    # Ask for monitoring
+    read -p "Enable system monitoring? (y/N): " ENABLE_MONITORING
+    ENABLE_MONITORING=${ENABLE_MONITORING,,}
+}
+
+# Cleanup function
+cleanup() {
+    info "Performing cleanup..."
+    
+    # Stop services
+    for service in nginx postgresql irssh-panel irssh-backend; do
+        if systemctl is-active --quiet "$service"; then
+            systemctl stop "$service"
+        fi
+    done
+    
+    # Remove temporary files
+    if [ -d "/tmp/irssh-install" ]; then
+        rm -rf "/tmp/irssh-install"
+    fi
+    
+    # Additional cleanup tasks
+    apt-get clean
+    
+    info "Cleanup completed"
+}
+
+# Installation verification
+verify_installation() {
+    info "Verifying installation..."
+    
+    # Check core services
+    local services=("nginx" "postgresql" "irssh-panel" "irssh-backend")
+    for service in "${services[@]}"; do
+        if ! systemctl is-active --quiet "$service"; then
+            error "Service $service is not running" "no-exit"
+        fi
+    done
+    
+    # Check web server
+    if ! curl -s "http://localhost:${PORTS[WEB]}" >/dev/null; then
+        error "Web panel is not accessible" "no-exit"
+    fi
+    
+    # Check database
+    if ! psql -U "$db_user" -d "$db_name" -c '\q' >/dev/null 2>&1; then
+        error "Database connection failed" "no-exit"
+    fi
+    
+    info "Installation verification completed"
 }
 
 ###########################################
