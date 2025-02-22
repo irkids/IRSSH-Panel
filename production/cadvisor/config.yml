@@ -1,0 +1,50 @@
+storage_driver: "elasticsearch"
+storage_driver_es:
+  host: "https://elasticsearch:9200"
+  user: "${CADVISOR_ES_USER}"
+  password: "${CADVISOR_ES_PASSWORD}"
+  ssl:
+    ca: "/etc/cadvisor/certs/ca.crt"
+  index: "cadvisor"
+
+housekeeping_interval: "10s"
+max_housekeeping_interval: "15s"
+
+global:
+  metrics_enabled: true
+  metrics_options:
+    container_labels_as_attributes: true
+    container_env_metadata_whitelist:
+      - "APP_VERSION"
+      - "ENVIRONMENT"
+
+container_hints:
+  enabled: true
+  include:
+    - "docker"
+    - "containerd"
+
+docker:
+  endpoint: "unix:///var/run/docker.sock"
+
+kubernetes:
+  enable_metrics: true
+
+perf:
+  enabled: true
+  events:
+    - "cpu"
+    - "memory"
+
+resctrl:
+  enabled: true
+
+custom_metrics:
+  enabled: true
+  metrics_config:
+    - name: "container_memory_working_set_bytes"
+      type: "gauge"
+      help: "Current working set in bytes"
+    - name: "container_cpu_usage_seconds_total"
+      type: "counter"
+      help: "Cumulative cpu time consumed"
