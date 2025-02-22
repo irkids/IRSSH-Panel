@@ -1,0 +1,76 @@
+backups:
+  database:
+    schedule:
+      - type: full
+        frequency: daily
+        time: "01:00"
+        retention: 7
+      - type: incremental
+        frequency: hourly
+        retention: 24
+    destinations:
+      - type: local
+        path: /var/backups/database
+      - type: s3
+        bucket: irssh-backups
+        prefix: database
+        region: eu-central-1
+
+  files:
+    schedule:
+      - type: full
+        frequency: daily
+        time: "02:00"
+        retention: 14
+    destinations:
+      - type: local
+        path: /var/backups/files
+      - type: s3
+        bucket: irssh-backups
+        prefix: files
+        region: eu-central-1
+
+  logs:
+    schedule:
+      - type: incremental
+        frequency: hourly
+        retention: 168
+    destinations:
+      - type: local
+        path: /var/backups/logs
+      - type: s3
+        bucket: irssh-backups
+        prefix: logs
+        region: eu-central-1
+
+monitoring:
+  alerts:
+    - type: backup_failure
+      notification:
+        - channel: email
+          recipients:
+            - admin@example.com
+        - channel: slack
+          webhook: https://hooks.slack.com/services/xxx/yyy/zzz
+
+  metrics:
+    - backup_size
+    - backup_duration
+    - backup_success_rate
+    - storage_usage
+
+validation:
+  frequency: daily
+  types:
+    - checksum_verification
+    - sample_restore
+    - integrity_check
+
+encryption:
+  algorithm: AES-256-GCM
+  key_rotation: 90  # days
+  key_storage: vault
+
+compression:
+  algorithm: zstd
+  level: 3
