@@ -1,0 +1,38 @@
+[Unit]
+Description=IRSSH Panel Worker Service
+After=network.target redis.service
+Requires=redis.service
+
+[Service]
+Type=simple
+User=irssh
+Group=irssh
+WorkingDirectory=/opt/irssh-panel
+Environment=NODE_ENV=production
+EnvironmentFile=/etc/irssh-panel/env
+ExecStart=/usr/bin/node dist/worker.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=irssh-worker
+LimitNOFILE=65536
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target
