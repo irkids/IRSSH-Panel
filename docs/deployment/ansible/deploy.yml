@@ -1,0 +1,49 @@
+---
+- name: Deploy IRSSH Panel
+  hosts: production
+  become: yes
+  vars_files:
+    - vars/main.yml
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Install required packages
+      apt:
+        name: "{{ packages }}"
+        state: present
+      vars:
+        packages:
+          - nginx
+          - docker.io
+          - docker-compose
+          - python3-pip
+          - certbot
+          - python3-certbot-nginx
+
+    - name: Pull Docker images
+      docker_image:
+        name: "{{ item }}"
+        source: pull
+      with_items:
+        - "{{ docker_images }}"
+
+    - name: Copy configuration files
+      copy:
+        src: "files/{{ item.src }}"
+        dest: "{{ item.dest }}"
+      with_items:
+        - { src: "nginx.conf", dest: "/etc/nginx/nginx.conf" }
+        - { src: "docker-compose.yml", dest: "/opt/irssh-panel/" }
+
+    - name: Start Docker services
+      docker_compose:
+        project_src: /opt/irssh-panel
+        state: present
+
+    - name: Configure SSL with Certbot
+      command: certbot --nginx -d {{ domain }} --non-interactive --agree-tos -m {{ admin_email }}
+      when: use_ssl | bool
