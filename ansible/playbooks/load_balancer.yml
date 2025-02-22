@@ -1,0 +1,61 @@
+---
+- name: Configure Load Balancer
+  hosts: load_balancers
+  become: yes
+  vars_files:
+    - vars/load_balancer.yml
+
+  roles:
+    - { role: nginx, tags: ['nginx'] }
+    - { role: haproxy, tags: ['haproxy'] }
+
+  tasks:
+    - name: Install keepalived for HA
+      apt:
+        name: keepalived
+        state: present
+      when: enable_ha | bool
+
+    - name: Configure Nginx load balancer
+      template:
+        src: templates/nginx/lb.conf.j2
+        dest: "{{ nginx_conf_path }}/conf.d/lb.conf"
+      notify: reload nginx
+      when: use_nginx_lb | bool
+
+    - name: Configure HAProxy
+      template:
+        src: templates/haproxy/haproxy.cfg.j2
+        dest: "{{ haproxy_config_path }}/haproxy.cfg"
+      notify: reload haproxy
+      when: use_haproxy | bool
+
+    - name: Set up keepalived
+      template:
+        src: templates/keepalived/keepalived.conf.j2
+        dest: /etc/keepalived/keepalived.conf
+      notify: restart keepalived
+      when: enable_ha | bool
+
+    - name: Configure SSL certificates
+      include_tasks: tasks/ssl_setup.yml
+      when: enable_ssl | bool
+
+  handlers:
+    - name: reload nginx
+      systemd:
+        name: nginx
+        state: reloaded
+      when: use_nginx_lb | bool
+
+    - name: reload haproxy
+      systemd:
+        name: haproxy
+        state: reloaded
+      when: use_haproxy | bool
+
+    - name: restart keepalived
+      systemd:
+        name: keepalived
+        state: restarted
+      when: enable_ha | bool
