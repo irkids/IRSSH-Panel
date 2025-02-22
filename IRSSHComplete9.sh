@@ -3,13 +3,11 @@
 # IRSSH Panel Complete Installation Script
 # Version: 3.5.2
 
-# Base paths and repositories
-GITHUB_REPO="https://raw.githubusercontent.com/irkids/IRSSH-Panel/main"
-MODULES_SOURCE="$GITHUB_REPO/modules"
-SCRIPTS_SOURCE="$GITHUB_REPO/scripts/modules"
-
-# Base directory structure
+# Base paths and version
+VERSION="3.5.2"
 REPO_BASE="/opt/irssh-panel"
+
+# Base and production directories
 declare -A DIRS=(
     ["BACKEND_DIR"]="$REPO_BASE/backend"
     ["FRONTEND_DIR"]="$REPO_BASE/frontend"
@@ -26,7 +24,6 @@ declare -A DIRS=(
     ["PROTOCOLS_DIR"]="$REPO_BASE/modules/protocols"
 )
 
-# Production directories
 declare -A PROD_DIRS=(
     ["PROD_CONFIG"]="/etc/enhanced_ssh"
     ["PROD_LOG"]="/var/log/irssh"
@@ -35,7 +32,25 @@ declare -A PROD_DIRS=(
     ["PROD_METRICS"]="/var/log/irssh/metrics"
 )
 
-# Protocol modes
+# Base module URLs
+declare -A BASE_MODULES=(
+    ["vpnserver"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/vpnserver-script.py"
+    ["webport"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/webport-script.sh"
+    ["port"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/port-script.py"
+    ["dropbear"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/dropbear-script.sh"
+)
+
+# Protocol module URLs
+declare -A PROTOCOL_MODULES=(
+    ["ssh"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/ssh-script.py"
+    ["l2tp"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/l2tpv3-script.sh"
+    ["ikev2"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/ikev2-script.py"
+    ["cisco"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/cisco-script.sh"
+    ["wireguard"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/wire-script.sh"
+    ["singbox"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/singbox-script.sh"
+)
+
+# Protocol configurations
 declare -A PROTOCOLS=(
     ["SSH"]=true
     ["L2TP"]=true
@@ -87,16 +102,12 @@ log() {
     echo "[$timestamp] [$level] $message" >> "${PROD_DIRS[PROD_LOG]}/install.log"
 }
 
-error() {
-    log "ERROR" "$1"
-    [ "${2:-}" != "no-exit" ] && cleanup && exit 1
-}
-
+error() { log "ERROR" "$1"; [ "${2:-}" != "no-exit" ] && cleanup && exit 1; }
 info() { log "INFO" "$1"; }
 warn() { log "WARN" "$1"; }
 debug() { [ "${DEBUG:-false}" = "true" ] && log "DEBUG" "$1"; }
 
-# Cleanup function
+# System cleanup
 cleanup() {
     info "Performing cleanup..."
     for service in nginx postgresql irssh-panel; do
@@ -106,7 +117,7 @@ cleanup() {
     apt-get clean
 }
 
-# System checks
+# System requirements check
 check_requirements() {
     info "Checking system requirements..."
     [ "$EUID" -ne 0 ] && error "Please run as root"
@@ -115,6 +126,9 @@ check_requirements() {
     source /etc/os-release
     [[ "$ID" != "ubuntu" && "$ID" != "debian" ]] && error "Requires Ubuntu or Debian"
 
+    apt-get update
+    apt-get install -y curl wget git build-essential python3 python3-pip || error "Failed to install basic requirements"
+
     local MEM_TOTAL=$(free -m | awk '/^Mem:/{print $2}')
     local CPU_CORES=$(nproc)
     local DISK_SPACE=$(df -m / | awk 'NR==2 {print $4}')
@@ -122,12 +136,9 @@ check_requirements() {
     [ "$MEM_TOTAL" -lt "${REQUIREMENTS[MIN_MEMORY]}" ] && warn "Low memory"
     [ "$CPU_CORES" -lt "${REQUIREMENTS[MIN_CPU_CORES]}" ] && warn "Low CPU cores"
     [ "$DISK_SPACE" -lt "${REQUIREMENTS[MIN_DISK]}" ] && error "Insufficient disk space"
-
-    apt-get update
-    apt-get install -y curl wget git build-essential
 }
 
-# Initial configuration
+# Get initial configuration
 get_initial_config() {
     info "Getting initial configuration..."
 
@@ -163,7 +174,7 @@ get_initial_config() {
     ENABLE_MONITORING=${ENABLE_MONITORING,,}
 }
 
-# Directory setup
+# Initialize directories
 init_directories() {
     info "Initializing directories..."
     for dir in "${DIRS[@]}"; do
@@ -176,46 +187,56 @@ init_directories() {
     done
 }
 
-# Module installation
+# Module installation function
 install_module() {
     local module_name=$1
+    local script_url=$2
     local target_dir="${DIRS[MODULES_DIR]}/$module_name"
+    local script_ext="${script_url##*.}"
     
     info "Installing module: $module_name"
     mkdir -p "$target_dir"
     cd "$target_dir" || error "Failed to access module directory"
     
-    wget -q "$MODULES_SOURCE/$module_name/install.sh" -O install.sh || error "Failed to download installer"
-    [ -f "install.sh" ] && chmod +x install.sh && ./install.sh
+    local script_name="install.$script_ext"
+    wget -q "$script_url" -O "$script_name" || error "Failed to download $module_name script"
+    chmod +x "$script_name"
+    
+    case "$script_ext" in
+        "py")
+            python3 "$script_name"
+            ;;
+        "sh")
+            bash "$script_name"
+            ;;
+        *)
+            error "Unsupported script type: $script_ext"
+            ;;
+    esac
 }
 
-# Protocol installation
+# Install base modules
+install_base_modules() {
+    info "Installing base modules..."
+    for module in "${!BASE_MODULES[@]}"; do
+        install_module "$module" "${BASE_MODULES[$module]}"
+    done
+}
+
+# Install protocol modules
 install_protocols() {
-    info "Installing protocols..."
+    info "Installing VPN protocols..."
     for protocol in "${!PROTOCOLS[@]}"; do
         if [ "${PROTOCOLS[$protocol]}" = true ]; then
-            install_module "${protocol,,}"
+            local protocol_lower="${protocol,,}"
+            if [ -n "${PROTOCOL_MODULES[$protocol_lower]}" ]; then
+                install_module "$protocol_lower" "${PROTOCOL_MODULES[$protocol_lower]}"
+            fi
         fi
     done
 }
 
-# Database setup
-setup_database() {
-    info "Setting up database..."
-    
-    apt-get install -y postgresql postgresql-contrib || error "Failed to install PostgreSQL"
-    systemctl start postgresql
-    systemctl enable postgresql
-
-    local db_name="irssh_db"
-    local db_user="irssh_user"
-    local db_pass=$(openssl rand -base64 32)
-
-    su - postgres -c "psql -c \"CREATE USER $db_user WITH PASSWORD '$db_pass';\""
-    su - postgres -c "psql -c \"CREATE DATABASE $db_name OWNER $db_user;\""
-}
-
-# Web server setup
+# Setup web server
 setup_nginx() {
     info "Setting up web server..."
     
@@ -257,7 +278,7 @@ EOL
     systemctl enable nginx
 }
 
-# Security setup
+# Setup security
 setup_security() {
     info "Setting up security measures..."
     
@@ -273,24 +294,57 @@ setup_security() {
     echo "y" | ufw enable
 }
 
-# Main installation
+# Main installation function
 main() {
     trap cleanup EXIT
     
-    info "Starting IRSSH Panel installation v3.5.2"
+    info "Starting IRSSH Panel installation v$VERSION"
     
     check_requirements
     get_initial_config
     init_directories
     
+    # Install modules in correct order
+    install_base_modules
     install_protocols
-    setup_database
+    
+    # Complete setup
     setup_nginx
     setup_security
     
     [ "$ENABLE_MONITORING" = "y" ] && setup_monitoring
     
     info "Installation completed successfully!"
+
+    # Display installation summary
+    cat << EOL
+
+IRSSH Panel Installation Summary
+------------------------------
+Version: $VERSION
+Web Panel URL: http${ENABLE_HTTPS:+s}://YOUR-SERVER-IP:${PORTS[WEB]}
+Admin Username: $ADMIN_USER
+
+Installation Locations:
+- Configuration: ${PROD_DIRS[PROD_CONFIG]}
+- Logs: ${PROD_DIRS[PROD_LOG]}
+- Backups: ${PROD_DIRS[PROD_BACKUP]}
+
+Enabled Features:
+- HTTPS: ${ENABLE_HTTPS:-n}
+- Monitoring: ${ENABLE_MONITORING:-n}
+
+Active Ports:
+$(for name in "${!PORTS[@]}"; do echo "- $name: ${PORTS[$name]}"; done)
+
+Next Steps:
+1. Access the web panel using the URL above
+2. Log in with your admin credentials
+3. Configure additional users and settings
+4. Check the logs at ${PROD_DIRS[PROD_LOG]}
+
+EOL
 }
 
+# Start installation
 main
