@@ -1,10 +1,9 @@
 #!/bin/bash
 
 # IRSSH Panel Complete Installation Script
-# Version: 3.5.2
-
-# Base paths and version
 VERSION="3.5.2"
+
+# Base paths
 REPO_BASE="/opt/irssh-panel"
 
 # Base and production directories
@@ -110,7 +109,7 @@ debug() { [ "${DEBUG:-false}" = "true" ] && log "DEBUG" "$1"; }
 # System cleanup
 cleanup() {
     info "Performing cleanup..."
-    for service in nginx postgresql irssh-panel; do
+    for service in nginx prometheus grafana irssh-panel; do
         systemctl is-active --quiet "$service" && systemctl stop "$service"
     done
     [ -d "/tmp/irssh-install" ] && rm -rf "/tmp/irssh-install"
@@ -204,10 +203,10 @@ install_module() {
     
     case "$script_ext" in
         "py")
-            python3 "$script_name"
+            python3 "$script_name" || error "Failed to execute Python script: $module_name"
             ;;
         "sh")
-            bash "$script_name"
+            bash "$script_name" || error "Failed to execute shell script: $module_name"
             ;;
         *)
             error "Unsupported script type: $script_ext"
@@ -268,6 +267,12 @@ server {
         proxy_set_header Connection 'upgrade';
         proxy_set_header Host \$host;
     }
+
+    location /metrics {
+        auth_basic "Metrics";
+        auth_basic_user_file /etc/nginx/.metrics_htpasswd;
+        proxy_pass http://localhost:9090;
+    }
 }
 EOL
 
@@ -276,6 +281,81 @@ EOL
     
     systemctl restart nginx
     systemctl enable nginx
+}
+
+# Setup monitoring
+setup_monitoring() {
+    info "Setting up monitoring system..."
+    
+    if [ "$ENABLE_MONITORING" != "y" ]; then
+        info "Monitoring system disabled, skipping..."
+        return 0
+    fi
+    
+    # Install monitoring tools
+    apt-get install -y prometheus prometheus-node-exporter grafana || error "Failed to install monitoring tools"
+
+    # Configure Prometheus
+    cat > /etc/prometheus/prometheus.yml << EOL
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'node'
+    static_configs:
+      - targets: ['localhost:9100']
+
+  - job_name: 'irssh-panel'
+    static_configs:
+      - targets: ['localhost:8000']
+
+  - job_name: 'vpn-metrics'
+    file_sd_configs:
+      - files:
+        - '${PROD_DIRS[PROD_METRICS]}/*.prom'
+EOL
+
+    # Configure Grafana
+    cat > /etc/grafana/provisioning/datasources/prometheus.yml << EOL
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://localhost:9090
+    isDefault: true
+EOL
+
+    # Setup metrics collection
+    cat > "${DIRS[MONITORING_DIR]}/collect-metrics.sh" << 'EOL'
+#!/bin/bash
+METRICS_DIR="${PROD_DIRS[PROD_METRICS]}"
+mkdir -p "$METRICS_DIR"
+
+# System metrics
+CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}')
+MEM_USAGE=$(free | grep Mem | awk '{print $3/$2 * 100.0}')
+DISK_USAGE=$(df / | tail -1 | awk '{print $5}' | sed 's/%//')
+
+echo "system_cpu_usage $CPU_USAGE" > "$METRICS_DIR/system.prom"
+echo "system_memory_usage $MEM_USAGE" > "$METRICS_DIR/memory.prom"
+echo "system_disk_usage $DISK_USAGE" > "$METRICS_DIR/disk.prom"
+EOL
+
+    chmod +x "${DIRS[MONITORING_DIR]}/collect-metrics.sh"
+    
+    # Add to cron
+    (crontab -l 2>/dev/null || true; echo "* * * * * ${DIRS[MONITORING_DIR]}/collect-metrics.sh") | crontab -
+
+    # Start services
+    systemctl restart prometheus
+    systemctl enable prometheus
+    systemctl restart grafana-server
+    systemctl enable grafana-server
+    
+    info "Monitoring system setup completed"
 }
 
 # Setup security
