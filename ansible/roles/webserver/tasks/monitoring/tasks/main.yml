@@ -1,0 +1,49 @@
+---
+- name: Install monitoring packages
+  apt:
+    name: "{{ monitoring_packages }}"
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Configure Prometheus
+  include_tasks: prometheus.yml
+
+- name: Configure Grafana
+  include_tasks: grafana.yml
+
+- name: Configure Node Exporter
+  include_tasks: node_exporter.yml
+
+- name: Configure AlertManager
+  include_tasks: alertmanager.yml
+
+- name: Set up monitoring dashboards
+  template:
+    src: "dashboards/{{ item }}.json.j2"
+    dest: "/etc/grafana/provisioning/dashboards/{{ item }}.json"
+  with_items: "{{ monitoring_dashboards }}"
+  notify: reload grafana
+
+- name: Configure monitoring alerts
+  template:
+    src: alerts.yml.j2
+    dest: "{{ prometheus_config_dir }}/alerts/alerts.yml"
+  notify: reload prometheus
+
+- name: Set up monitoring authentication
+  template:
+    src: auth.conf.j2
+    dest: "/etc/nginx/conf.d/monitoring_auth.conf"
+  notify: reload nginx
+
+- name: Ensure monitoring services are running
+  service:
+    name: "{{ item }}"
+    state: started
+    enabled: yes
+  with_items:
+    - prometheus
+    - grafana-server
+    - node_exporter
+    - alertmanager
