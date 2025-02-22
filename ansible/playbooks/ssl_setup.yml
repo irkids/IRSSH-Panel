@@ -1,0 +1,64 @@
+---
+- name: Configure SSL/TLS
+  hosts: production
+  become: yes
+  vars_files:
+    - vars/ssl.yml
+
+  tasks:
+    - name: Install SSL dependencies
+      apt:
+        name: "{{ ssl_packages }}"
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Create SSL directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 0700
+      with_items:
+        - "{{ ssl_cert_path }}"
+        - "{{ ssl_private_path }}"
+        - "{{ ssl_dhparam_path }}"
+
+    - name: Generate SSL private key
+      openssl_privatekey:
+        path: "{{ ssl_private_path }}/{{ domain }}.key"
+        size: 4096
+        type: RSA
+        backup: yes
+
+    - name: Generate SSL CSR
+      openssl_csr:
+        path: "{{ ssl_cert_path }}/{{ domain }}.csr"
+        privatekey_path: "{{ ssl_private_path }}/{{ domain }}.key"
+        common_name: "{{ domain }}"
+        organization_name: "{{ org_name }}"
+        email_address: "{{ ssl_email }}"
+        subject_alt_name: "{{ ssl_sans }}"
+
+    - name: Generate DH parameters
+      command:
+        cmd: openssl dhparam -out {{ ssl_dhparam_path }}/dhparam.pem 4096
+        creates: "{{ ssl_dhparam_path }}/dhparam.pem"
+
+    - name: Configure SSL in Nginx
+      template:
+        src: templates/nginx/ssl.conf.j2
+        dest: "{{ nginx_config_path }}/ssl.conf"
+      notify: reload nginx
+
+    - name: Set up SSL renewal
+      cron:
+        name: "SSL certificate renewal"
+        job: "certbot renew --quiet --post-hook 'systemctl reload nginx'"
+        special_time: daily
+
+  handlers:
+    - name: reload nginx
+      systemd:
+        name: nginx
+        state: reloaded
