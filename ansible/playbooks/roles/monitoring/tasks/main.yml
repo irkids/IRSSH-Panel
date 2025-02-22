@@ -1,0 +1,56 @@
+---
+- name: Install monitoring dependencies
+  apt:
+    name:
+      - prometheus
+      - prometheus-node-exporter
+      - grafana
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Configure Prometheus
+  template:
+    src: prometheus.yml.j2
+    dest: /etc/prometheus/prometheus.yml
+  notify: restart prometheus
+
+- name: Configure Prometheus rules
+  template:
+    src: rules.yml.j2
+    dest: /etc/prometheus/rules/rules.yml
+  notify: restart prometheus
+
+- name: Configure Grafana
+  template:
+    src: grafana.ini.j2
+    dest: /etc/grafana/grafana.ini
+  notify: restart grafana
+
+- name: Configure Grafana datasources
+  template:
+    src: datasources.yml.j2
+    dest: /etc/grafana/provisioning/datasources/datasources.yml
+  notify: restart grafana
+
+- name: Configure Grafana dashboards
+  template:
+    src: dashboards.yml.j2
+    dest: /etc/grafana/provisioning/dashboards/dashboards.yml
+  notify: restart grafana
+
+- name: Copy Grafana dashboards
+  copy:
+    src: dashboards/
+    dest: /var/lib/grafana/dashboards/
+  notify: restart grafana
+
+- name: Start and enable monitoring services
+  service:
+    name: "{{ item }}"
+    state: started
+    enabled: yes
+  with_items:
+    - prometheus
+    - prometheus-node-exporter
+    - grafana-server
