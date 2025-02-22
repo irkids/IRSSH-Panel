@@ -1,0 +1,65 @@
+---
+domain: panel.example.com
+admin_email: admin@example.com
+use_ssl: true
+
+docker_images:
+  - registry.example.com/irssh-panel:latest
+  - postgres:14-alpine
+  - redis:6-alpine
+  - nginx:alpine
+  - prometheus:latest
+  - grafana/grafana:latest
+
+packages:
+  - nginx
+  - docker.io
+  - docker-compose
+  - python3-pip
+  - certbot
+  - python3-certbot-nginx
+
+  app_settings:
+  name: "IRSSH Panel"
+  version: "1.0.0"
+  port: 3000
+  environment: production
+
+database:
+  host: postgres
+  port: 5432
+  name: irssh
+  user: irssh_user
+  max_connections: 100
+  
+redis:
+  host: redis
+  port: 6379
+  max_memory: 1gb
+
+monitoring:
+  prometheus_port: 9090
+  grafana_port: 3000
+  retention_days: 30
+
+backup:
+  enabled: true
+  schedule: "0 2 * * *"
+  retention_days: 7
+  paths:
+    - /var/lib/postgresql/data
+    - /etc/irssh-panel/config
+    - /var/log/irssh-panel
+
+ssl:
+  provider: letsencrypt
+  email: "{{ admin_email }}"
+  domains:
+    - "{{ domain }}"
+  auto_renew: true
+
+nginx:
+  worker_processes: auto
+  worker_connections: 1024
+  client_max_body_size: 10M
+  ssl_protocols: "TLSv1.2 TLSv1.3"
