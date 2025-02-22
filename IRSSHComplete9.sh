@@ -39,25 +39,6 @@ declare -A BASE_MODULES=(
     ["dropbear"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/dropbear-script.sh"
 )
 
-setup_python_env() {
-    info "Setting up Python environment..."
-    
-    # Create virtual environment
-    python3 -m venv "${DIRS[MODULES_DIR]}/.venv"
-    source "${DIRS[MODULES_DIR]}/.venv/bin/activate"
-    
-    # Install required packages
-    pip install --no-cache-dir \
-        python-dotenv \
-        requests \
-        psutil \
-        pymongo \
-        pyyaml \
-        || error "Failed to install Python packages"
-        
-    deactivate
-}
-
 # Protocol module URLs
 declare -A PROTOCOL_MODULES=(
     ["ssh"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/ssh-script.py"
@@ -221,6 +202,25 @@ init_directories() {
         mkdir -p "$dir"
         info "Created production directory: $dir"
     done
+}
+
+setup_python_env() {
+    info "Setting up Python environment..."
+    
+    # Create virtual environment
+    python3 -m venv "${DIRS[MODULES_DIR]}/.venv"
+    source "${DIRS[MODULES_DIR]}/.venv/bin/activate"
+    
+    # Install required packages
+    pip install --no-cache-dir \
+        python-dotenv \
+        requests \
+        psutil \
+        pymongo \
+        pyyaml \
+        || error "Failed to install Python packages"
+        
+    deactivate
 }
 
 # Module installation function
@@ -422,7 +422,8 @@ main() {
     check_requirements
     get_initial_config
     init_directories
-    
+    setup_python_env
+
     # Install modules in correct order
     install_base_modules
     install_protocols
