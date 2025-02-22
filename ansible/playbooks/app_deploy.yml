@@ -1,0 +1,86 @@
+---
+- name: Deploy Application
+  hosts: app_servers
+  become: yes
+  vars_files:
+    - vars/app.yml
+    - vars/secrets.yml
+
+  roles:
+    - { role: nodejs, tags: ['runtime'] }
+    - { role: pm2, tags: ['process-manager'] }
+
+  tasks:
+    - name: Ensure deployment directory exists
+      file:
+        path: "{{ app_deploy_path }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: 0755
+
+    - name: Clone application repository
+      git:
+        repo: "{{ git_repo }}"
+        dest: "{{ app_deploy_path }}"
+        version: "{{ git_branch }}"
+        force: yes
+      register: git_clone
+
+    - name: Install Node.js dependencies
+      npm:
+        path: "{{ app_deploy_path }}"
+        state: present
+        production: yes
+      when: git_clone.changed
+
+    - name: Build application
+      command:
+        cmd: npm run build
+        chdir: "{{ app_deploy_path }}"
+      environment:
+        NODE_ENV: production
+      when: git_clone.changed
+
+    - name: Configure application environment
+      template:
+        src: templates/app/env.j2
+        dest: "{{ app_deploy_path }}/.env"
+      notify: restart application
+
+    - name: Set up PM2 process file
+      template:
+        src: templates/app/ecosystem.config.js.j2
+        dest: "{{ app_deploy_path }}/ecosystem.config.js"
+      notify: reload pm2
+
+    - name: Ensure PM2 startup script is configured
+      command: pm2 startup systemd -u {{ app_user }} --hp {{ app_user_home }}
+      args:
+        creates: /etc/systemd/system/pm2-{{ app_user }}.service
+
+    - name: Start application with PM2
+      command: pm2 start ecosystem.config.js
+      args:
+        chdir: "{{ app_deploy_path }}"
+      become: yes
+      become_user: "{{ app_user }}"
+      when: git_clone.changed
+
+    - name: Save PM2 process list
+      command: pm2 save
+      become: yes
+      become_user: "{{ app_user }}"
+
+  handlers:
+    - name: restart application
+      command: pm2 restart ecosystem.config.js
+      args:
+        chdir: "{{ app_deploy_path }}"
+      become: yes
+      become_user: "{{ app_user }}"
+
+    - name: reload pm2
+      command: pm2 reload all
+      become: yes
+      become_user: "{{ app_user }}"
