@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+import sys
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    import pip
+    pip.main(['install', 'python-dotenv'])
+    from dotenv import load_dotenv
+
+load_dotenv()
 
 def install_prerequisites():
     import subprocess
