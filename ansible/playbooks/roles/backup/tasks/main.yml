@@ -1,0 +1,49 @@
+---
+- name: Install backup tools
+  apt:
+    name:
+      - restic
+      - duplicity
+      - borgbackup
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Create backup directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: 0700
+    owner: root
+    group: root
+  with_items:
+    - "{{ backup_root }}"
+    - "{{ backup_root }}/daily"
+    - "{{ backup_root }}/weekly"
+    - "{{ backup_root }}/monthly"
+
+- name: Configure backup scripts
+  template:
+    src: "{{ item }}.sh.j2"
+    dest: "{{ scripts_path }}/{{ item }}.sh"
+    mode: 0700
+  with_items:
+    - backup_database
+    - backup_files
+    - backup_cleanup
+
+- name: Configure backup cronjobs
+  cron:
+    name: "{{ item.name }}"
+    job: "{{ item.job }}"
+    minute: "{{ item.minute | default('0') }}"
+    hour: "{{ item.hour | default('2') }}"
+    day: "{{ item.day | default('*') }}"
+    month: "{{ item.month | default('*') }}"
+    weekday: "{{ item.weekday | default('*') }}"
+  with_items: "{{ backup_jobs }}"
+
+- name: Configure backup retention
+  template:
+    src: retention.conf.j2
+    dest: "{{ backup_root }}/retention.conf"
