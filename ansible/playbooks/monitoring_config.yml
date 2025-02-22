@@ -1,0 +1,58 @@
+---
+- name: Configure Monitoring Tools
+  hosts: monitoring_servers
+  become: yes
+  vars_files:
+    - vars/monitoring.yml
+
+  tasks:
+    - name: Install monitoring packages
+      apt:
+        name: "{{ monitoring_packages }}"
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Configure Prometheus
+      template:
+        src: templates/prometheus/prometheus.yml.j2
+        dest: "{{ prometheus_config_path }}/prometheus.yml"
+      notify: reload prometheus
+
+    - name: Set up Grafana dashboards
+      copy:
+        src: files/grafana/dashboards/
+        dest: "{{ grafana_dashboards_path }}/"
+      notify: restart grafana
+
+    - name: Configure Alertmanager
+      template:
+        src: templates/alertmanager/config.yml.j2
+        dest: "{{ alertmanager_config_path }}/config.yml"
+      notify: reload alertmanager
+
+    - name: Set up Node Exporter
+      template:
+        src: templates/node_exporter/config.yml.j2
+        dest: "{{ node_exporter_config_path }}/config.yml"
+      notify: restart node_exporter
+
+  handlers:
+    - name: reload prometheus
+      systemd:
+        name: prometheus
+        state: reloaded
+
+    - name: restart grafana
+      systemd:
+        name: grafana-server
+        state: restarted
+
+    - name: reload alertmanager
+      systemd:
+        name: alertmanager
+        state: reloaded
+
+    - name: restart node_exporter
+      systemd:
+        name: node_exporter
+        state: restarted
