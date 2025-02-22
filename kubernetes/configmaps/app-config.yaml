@@ -4,16 +4,20 @@ metadata:
   name: irssh-panel-config
   namespace: production
 data:
-  NODE_ENV: "production"
-  API_VERSION: "v1"
-  REDIS_HOST: "redis-master.production.svc.cluster.local"
-  MONGO_HOST: "mongodb-primary.production.svc.cluster.local"
-  LOG_LEVEL: "info"
-  METRICS_PORT: "9090"
-  app.config.json: |
-    {
-      "appName": "IRSSH Panel",
-      "maxConnections": 1000,
-      "timeout": 30000,
-      "retryAttempts": 3
-    }
+  config.yaml: |
+    app:
+      name: IRSSH Panel
+      version: 1.0.0
+    server:
+      port: 3000
+      host: 0.0.0.0
+    logging:
+      level: info
+      format: json
+    metrics:
+      enabled: true
+      port: 9090
+    features:
+      authentication: true
+      authorization: true
+      monitoring: true
