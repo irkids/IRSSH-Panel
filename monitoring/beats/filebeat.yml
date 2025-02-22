@@ -1,0 +1,39 @@
+filebeat.inputs:
+- type: log
+  enabled: true
+  paths:
+    - /var/log/irssh/*.log
+  fields:
+    app: irssh-panel
+  fields_under_root: true
+  json.keys_under_root: true
+  json.add_error_key: true
+
+- type: log
+  enabled: true
+  paths:
+    - /var/log/nginx/access.log
+    - /var/log/nginx/error.log
+  fields:
+    type: nginx
+  fields_under_root: true
+
+processors:
+- add_host_metadata:
+    when.not.contains.tags: forwarded
+- add_cloud_metadata: ~
+- add_docker_metadata: ~
+- add_kubernetes_metadata: ~
+
+output.elasticsearch:
+  hosts: ["elasticsearch:9200"]
+  protocol: "https"
+  username: "elastic"
+  password: "your_password"
+  ssl.certificate_authorities: ["certs/ca.crt"]
+  index: "filebeat-%{[agent.version]}-%{+yyyy.MM.dd}"
+
+setup.kibana:
+  host: "kibana:5601"
+  protocol: "https"
+  ssl.certificate_authorities: ["certs/ca.crt"]
