@@ -1,0 +1,64 @@
+---
+- name: Configure Backup System
+  hosts: production
+  become: yes
+  vars_files:
+    - vars/backup.yml
+
+  tasks:
+    - name: Install backup utilities
+      apt:
+        name: "{{ backup_packages }}"
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Create backup directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: 0700
+      with_items:
+        - "{{ backup_root }}"
+        - "{{ backup_root }}/database"
+        - "{{ backup_root }}/files"
+        - "{{ backup_root }}/logs"
+
+    - name: Configure backup scripts
+      template:
+        src: templates/backup/{{ item }}.sh.j2
+        dest: "{{ scripts_path }}/{{ item }}.sh"
+        mode: 0700
+      with_items:
+        - database_backup
+        - files_backup
+        - cleanup_old_backups
+
+    - name: Set up backup cronjobs
+      cron:
+        name: "{{ item.name }}"
+        job: "{{ item.job }}"
+        minute: "{{ item.minute | default('0') }}"
+        hour: "{{ item.hour | default('1') }}"
+        day: "{{ item.day | default('*') }}"
+        month: "{{ item.month | default('*') }}"
+        weekday: "{{ item.weekday | default('*') }}"
+      with_items: "{{ backup_cron_jobs }}"
+
+    - name: Configure backup retention
+      template:
+        src: templates/backup/retention.conf.j2
+        dest: "{{ backup_root }}/retention.conf"
+
+    - name: Configure backup monitoring
+      template:
+        src: templates/backup/monitoring.yml.j2
+        dest: "{{ monitoring_config_path }}/backup.yml"
+      notify: reload prometheus
+
+  handlers:
+    - name: reload prometheus
+      systemd:
+        name: prometheus
+        state: reloaded
