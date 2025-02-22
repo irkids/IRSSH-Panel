@@ -1,0 +1,96 @@
+---
+- name: Deploy IRSSH Panel
+  hosts: production
+  become: yes
+  vars_files:
+    - vars/main.yml
+    - vars/secrets.yml
+
+  pre_tasks:
+    - name: Check system requirements
+      include_tasks: tasks/check_requirements.yml
+
+  roles:
+    - { role: common, tags: ['common'] }
+    - { role: nginx, tags: ['webserver'] }
+    - { role: nodejs, tags: ['runtime'] }
+    - { role: postgresql, tags: ['database'] }
+    - { role: redis, tags: ['cache'] }
+    - { role: monitoring, tags: ['monitoring'] }
+
+  tasks:
+    - name: Create application directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: 0755
+      with_items:
+        - "{{ app_root }}"
+        - "{{ app_logs }}"
+        - "{{ app_data }}"
+
+    - name: Clone application repository
+      git:
+        repo: "{{ git_repo }}"
+        dest: "{{ app_root }}"
+        version: "{{ git_branch }}"
+        accept_hostkey: yes
+        force: yes
+      notify: reload application
+
+    - name: Install application dependencies
+      npm:
+        path: "{{ app_root }}"
+        state: present
+        production: yes
+
+    - name: Build application
+      command:
+        cmd: npm run build
+        chdir: "{{ app_root }}"
+      environment:
+        NODE_ENV: production
+
+    - name: Configure application
+      template:
+        src: templates/config.json.j2
+        dest: "{{ app_root }}/config/production.json"
+      notify: restart application
+
+    - name: Set up systemd services
+      template:
+        src: "templates/{{ item }}.service.j2"
+        dest: "/etc/systemd/system/{{ item }}.service"
+      with_items:
+        - irssh-panel
+        - irssh-worker
+      notify: restart services
+
+    - name: Configure logrotate
+      template:
+        src: templates/logrotate.j2
+        dest: /etc/logrotate.d/irssh-panel
+
+  handlers:
+    - name: reload application
+      systemd:
+        name: irssh-panel
+        state: reloaded
+        daemon_reload: yes
+
+    - name: restart application
+      systemd:
+        name: irssh-panel
+        state: restarted
+        daemon_reload: yes
+
+    - name: restart services
+      systemd:
+        name: "{{ item }}"
+        state: restarted
+        daemon_reload: yes
+      with_items:
+        - irssh-panel
+        - irssh-worker
