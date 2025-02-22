@@ -130,19 +130,22 @@ setup_python_env() {
     
     cd "${DIRS[MODULES_DIR]}" || error "Failed to access modules directory"
     
-    # Create and activate virtual environment
+    # Create virtual environment
     python3.8 -m venv .venv
     source .venv/bin/activate
     
     # Upgrade pip and install setuptools first
     pip install --no-cache-dir --upgrade pip setuptools wheel
 
-    # First uninstall tensorflow and typing-extensions if they exist
-    pip uninstall -y tensorflow typing-extensions
+    # Remove all potentially conflicting packages
+    pip uninstall -y typing-extensions sqlalchemy fastapi pydantic pydantic-core tensorflow
 
-    # Install dependencies in the correct order
+    # Install packages in correct order with compatible versions
     pip install --no-cache-dir \
-        typing-extensions==4.5.0 \
+        typing-extensions>=4.12.2 \
+        pydantic>=2.10.6 \
+        fastapi>=0.115.8 \
+        sqlalchemy>=2.0.38 \
         python-dotenv==1.0.0 \
         requests==2.31.0 \
         psutil==5.9.0 \
@@ -152,10 +155,8 @@ setup_python_env() {
         pyyaml==6.0.1 \
         pandas==2.0.3 \
         networkx==3.1 \
-        || error "Failed to install Python packages"
-        
-    # tensorflow is optional, only install if needed
-    # pip install tensorflow==2.13.1
+        uvloop==0.21.0 \
+        || error "Failed to install main Python packages"
     
     deactivate
     
