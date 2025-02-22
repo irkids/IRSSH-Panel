@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: irssh-panel
+  namespace: production
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: irssh-panel
+  template:
+    metadata:
+      labels:
+        app: irssh-panel
+    spec:
+      containers:
+      - name: irssh-panel
+        image: registry.example.com/irssh-panel:latest
+        ports:
+        - containerPort: 3000
+        env:
+        - name: NODE_ENV
+          value: production
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: irssh-config
+              key: db_host
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: irssh-secrets
+              key: db_password
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+        - name: certs
+          mountPath: /app/certs
+          readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          name: irssh-config
+      - name: certs
+        secret:
+          secretName: irssh-certs
