@@ -1,0 +1,59 @@
+---
+- name: Install Redis
+  apt:
+    name: redis-server
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Configure Redis
+  template:
+    src: redis.conf.j2
+    dest: /etc/redis/redis.conf
+  notify: restart redis
+
+- name: Set Redis overcommit memory
+  sysctl:
+    name: vm.overcommit_memory
+    value: 1
+    state: present
+    sysctl_set: yes
+    reload: yes
+
+- name: Disable Redis Transparent Huge Pages
+  copy:
+    content: |
+      #!/bin/bash
+      echo never > /sys/kernel/mm/transparent_hugepage/enabled
+      echo never > /sys/kernel/mm/transparent_hugepage/defrag
+    dest: /etc/init.d/disable-transparent-hugepages
+    mode: 0755
+  notify: restart redis
+
+- name: Configure Redis service
+  template:
+    src: redis.service.j2
+    dest: /etc/systemd/system/redis.service
+  notify:
+    - reload systemd
+    - restart redis
+
+- name: Start and enable Redis
+  service:
+    name: redis
+    state: started
+    enabled: yes
+
+- name: Set Redis password
+  lineinfile:
+    path: /etc/redis/redis.conf
+    regexp: '^# requirepass'
+    line: 'requirepass {{ redis_password }}'
+  notify: restart redis
+
+- name: Configure Redis maxmemory
+  lineinfile:
+    path: /etc/redis/redis.conf
+    regexp: '^# maxmemory'
+    line: 'maxmemory {{ redis_maxmemory }}'
+  notify: restart redis
