@@ -1,4 +1,13 @@
 #!/bin/bash
+import sys
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    import pip
+    pip.main(['install', 'python-dotenv'])
+    from dotenv import load_dotenv
+
+load_dotenv()
 
 # Enhanced Cisco AnyConnect VPN Configuration Script
 # This script sets up and optimizes a server for use with Cisco AnyConnect VPN
