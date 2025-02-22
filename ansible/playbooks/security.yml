@@ -1,0 +1,77 @@
+---
+- name: Apply security configurations
+  hosts: all
+  become: yes
+  tags: security
+  
+  vars_files:
+    - vars/security.yml
+    
+  tasks:
+    - name: Update system packages
+      apt:
+        update_cache: yes
+        upgrade: yes
+      when: ansible_os_family == "Debian"
+      
+    - name: Install security packages
+      apt:
+        name: "{{ security_packages }}"
+        state: present
+      when: ansible_os_family == "Debian"
+      
+    - name: Configure UFW
+      ufw:
+        state: enabled
+        policy: deny
+        
+    - name: Allow SSH
+      ufw:
+        rule: allow
+        port: "{{ ssh_port }}"
+        proto: tcp
+        
+    - name: Configure SSH hardening
+      template:
+        src: templates/sshd_config.j2
+        dest: /etc/ssh/sshd_config
+      notify: restart ssh
+      
+    - name: Set up fail2ban
+      template:
+        src: templates/jail.local.j2
+        dest: /etc/fail2ban/jail.local
+      notify: restart fail2ban
+      
+    - name: Configure system limits
+      template:
+        src: templates/limits.conf.j2
+        dest: /etc/security/limits.conf
+        
+    - name: Set up auditd rules
+      template:
+        src: templates/audit.rules.j2
+        dest: /etc/audit/rules.d/audit.rules
+      notify: restart auditd
+      
+    - name: Configure SELinux
+      selinux:
+        policy: targeted
+        state: enforcing
+      when: ansible_os_family == "RedHat"
+      
+  handlers:
+    - name: restart ssh
+      service:
+        name: ssh
+        state: restarted
+        
+    - name: restart fail2ban
+      service:
+        name: fail2ban
+        state: restarted
+        
+    - name: restart auditd
+      service:
+        name: auditd
+        state: restarted
