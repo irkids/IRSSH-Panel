@@ -56,3 +56,23 @@ openssl verify -CAfile "${CERT_DIR}/ca.crt" "${CERT_DIR}/server.crt"
 
 # Create certificate chain
 cat "${CERT_DIR}/server.crt" "${CERT_DIR}/ca.crt" > "${CERT_DIR}/chain.crt"
+
+# Output summary
+echo "Certificate generation completed:"
+echo "CA Certificate: ${CERT_DIR}/ca.crt"
+echo "Server Certificate: ${CERT_DIR}/server.crt"
+echo "Certificate Chain: ${CERT_DIR}/chain.crt"
+echo "Private Keys are stored in: ${CERT_DIR}/private/"
+
+# Set proper permissions
+chown -R root:root "${CERT_DIR}"
+chmod -R 600 "${CERT_DIR}/private/"
+chmod 644 "${CERT_DIR}/ca.crt"
+chmod 644 "${CERT_DIR}/server.crt"
+chmod 644 "${CERT_DIR}/chain.crt"
+
+# Cleanup
+rm -f "${CERT_DIR}/server.csr"
+rm -f "${CERT_DIR}/ca.srl"
+
+echo "Certificate generation and setup completed successfully!"
