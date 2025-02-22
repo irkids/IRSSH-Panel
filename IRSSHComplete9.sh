@@ -218,6 +218,11 @@ setup_python_env() {
         psutil \
         pymongo \
         pyyaml \
+        pydantic \
+        redis \
+        asyncio \
+        aiohttp \
+        mysql-connector-python \
         || error "Failed to install Python packages"
         
     deactivate
