@@ -39,6 +39,25 @@ declare -A BASE_MODULES=(
     ["dropbear"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/dropbear-script.sh"
 )
 
+setup_python_env() {
+    info "Setting up Python environment..."
+    
+    # Create virtual environment
+    python3 -m venv "${DIRS[MODULES_DIR]}/.venv"
+    source "${DIRS[MODULES_DIR]}/.venv/bin/activate"
+    
+    # Install required packages
+    pip install --no-cache-dir \
+        python-dotenv \
+        requests \
+        psutil \
+        pymongo \
+        pyyaml \
+        || error "Failed to install Python packages"
+        
+    deactivate
+}
+
 # Protocol module URLs
 declare -A PROTOCOL_MODULES=(
     ["ssh"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/ssh-script.py"
@@ -125,9 +144,27 @@ check_requirements() {
     source /etc/os-release
     [[ "$ID" != "ubuntu" && "$ID" != "debian" ]] && error "Requires Ubuntu or Debian"
 
+    # Install basic requirements
     apt-get update
-    apt-get install -y curl wget git build-essential python3 python3-pip || error "Failed to install basic requirements"
+    apt-get install -y \
+        curl \
+        wget \
+        git \
+        build-essential \
+        python3 \
+        python3-pip \
+        python3-venv \
+        || error "Failed to install basic requirements"
 
+    # Install Python requirements
+    pip3 install --upgrade pip
+    pip3 install \
+        python-dotenv \
+        requests \
+        psutil \
+        || error "Failed to install Python packages"
+
+    # Check system resources
     local MEM_TOTAL=$(free -m | awk '/^Mem:/{print $2}')
     local CPU_CORES=$(nproc)
     local DISK_SPACE=$(df -m / | awk 'NR==2 {print $4}')
@@ -203,7 +240,9 @@ install_module() {
     
     case "$script_ext" in
         "py")
+            source "${DIRS[MODULES_DIR]}/.venv/bin/activate"
             python3 "$script_name" || error "Failed to execute Python script: $module_name"
+            deactivate
             ;;
         "sh")
             bash "$script_name" || error "Failed to execute shell script: $module_name"
