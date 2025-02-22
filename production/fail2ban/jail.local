@@ -1,0 +1,51 @@
+[DEFAULT]
+bantime  = 1h
+findtime  = 10m
+maxretry = 5
+
+[sshd]
+enabled = true
+port    = ssh
+logpath = %(sshd_log)s
+backend = %(sshd_backend)s
+maxretry = 3
+bantime = 24h
+
+[nginx-http-auth]
+enabled = true
+filter  = nginx-http-auth
+port    = http,https
+logpath = /var/log/nginx/error.log
+maxretry = 3
+
+[nginx-limit-req]
+enabled = true
+filter  = nginx-limit-req
+port    = http,https
+logpath = /var/log/nginx/error.log
+maxretry = 3
+findtime = 600
+bantime = 7200
+
+[nginx-botsearch]
+enabled  = true
+filter   = nginx-botsearch
+port     = http,https
+logpath  = /var/log/nginx/access.log
+maxretry = 2
+
+[nginx-badbots]
+enabled  = true
+filter   = nginx-badbots
+port     = http,https
+logpath  = /var/log/nginx/access.log
+maxretry = 2
+
+[nginx-noscript]
+enabled  = true
+port     = http,https
+filter   = nginx-noscript
+logpath  = /var/log/nginx/access.log
+maxretry = 3
+findtime = 600
+bantime  = 7200
