@@ -4,16 +4,14 @@ metadata:
   name: irssh-panel-ingress
   namespace: production
   annotations:
-    kubernetes.io/ingress.class: "nginx"
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
-    nginx.ingress.kubernetes.io/proxy-buffer-size: "128k"
 spec:
   tls:
   - hosts:
     - panel.example.com
-    secretName: irssh-panel-tls
+    secretName: tls-secret
   rules:
   - host: panel.example.com
     http:
@@ -22,6 +20,6 @@ spec:
         pathType: Prefix
         backend:
           service:
-            name: irssh-panel-service
+            name: irssh-panel
             port:
               number: 80
