@@ -81,6 +81,16 @@ prepare_system() {
     
     export DEBIAN_FRONTEND=noninteractive
     
+    # Fix apt_pkg error
+    apt-get install -y -qq \
+        python3-apt \
+        python3-distutils \
+        python3-pkg-resources \
+        || error "Failed to install Python apt packages"
+
+    # Remove problematic Python packages
+    rm -rf /usr/lib/python3/dist-packages/command_not_found
+    
     # Update package lists
     apt-get update -qq
     
@@ -93,18 +103,17 @@ prepare_system() {
         wget \
         git \
         build-essential \
-        python3 \
-        python3-pip \
-        python3-venv \
-        python3-dev \
-        python3-apt \
-        nginx \
-        fail2ban \
-        ufw \
+        python3.8 \
+        python3.8-dev \
+        python3.8-venv \
+        python3.8-distutils \
         || error "Failed to install essential packages"
 
-    # Fix common issues
-    apt-get install -f
+    # Create symbolic links
+    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.8 1
+
+    # Fix pip issues
+    curl -sS https://bootstrap.pypa.io/get-pip.py | python3.8
     
     info "System preparation completed"
 }
@@ -116,27 +125,34 @@ setup_python_env() {
     cd "${DIRS[MODULES_DIR]}" || error "Failed to access modules directory"
     
     # Create and activate virtual environment
-    python3 -m venv .venv
+    python3.8 -m venv .venv
     source .venv/bin/activate
     
     # Upgrade pip
-    python3 -m pip install --upgrade pip
+    pip install --upgrade pip setuptools wheel
     
-    # Install required packages
+    # Install core dependencies first
+    pip install --no-cache-dir \
+        typing-extensions>=4.12.2 \
+        pydantic~=2.10.0 \
+        fastapi~=0.115.0 \
+        sqlalchemy~=2.0.0 \
+        || error "Failed to install core dependencies"
+    
+    # Install other required packages
     pip install --no-cache-dir \
         python-dotenv \
-        pydantic \
-        fastapi \
-        uvicorn \
         requests \
         psutil \
         pymongo \
         redis \
         aiohttp \
-        sqlalchemy \
         python-jose[cryptography] \
         passlib[bcrypt] \
         pyyaml \
+        pandas \
+        networkx \
+        logging \
         || error "Failed to install Python packages"
     
     deactivate
