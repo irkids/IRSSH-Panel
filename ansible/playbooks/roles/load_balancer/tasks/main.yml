@@ -1,0 +1,70 @@
+---
+- name: Install HAProxy
+  apt:
+    name: haproxy
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Configure HAProxy
+  template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+  notify: restart haproxy
+
+- name: Enable HAProxy logging
+  lineinfile:
+    path: /etc/rsyslog.conf
+    line: "local0.* /var/log/haproxy.log"
+    state: present
+  notify: restart rsyslog
+
+- name: Create HAProxy SSL directory
+  file:
+    path: /etc/haproxy/ssl
+    state: directory
+    mode: 0700
+
+- name: Install SSL certificates
+  copy:
+    src: "files/ssl/{{ item }}"
+    dest: "/etc/haproxy/ssl/"
+    mode: 0600
+  with_items:
+    - certificate.pem
+    - private.key
+  notify: restart haproxy
+
+- name: Configure keepalived for HA
+  template:
+    src: keepalived.conf.j2
+    dest: /etc/keepalived/keepalived.conf
+  notify: restart keepalived
+  when: ha_enabled | bool
+
+- name: Start and enable services
+  service:
+    name: "{{ item }}"
+    state: started
+    enabled: yes
+  with_items:
+    - haproxy
+    - keepalived
+  when: item != 'keepalived' or ha_enabled | bool
+
+handlers:
+  - name: restart haproxy
+    service:
+      name: haproxy
+      state: restarted
+
+  - name: restart keepalived
+    service:
+      name: keepalived
+      state: restarted
+    when: ha_enabled | bool
+
+  - name: restart rsyslog
+    service:
+      name: rsyslog
+      state: restarted
