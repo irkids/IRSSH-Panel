@@ -1,12 +1,10 @@
 #!/bin/bash
 
-# IRSSH Panel Complete Installation Script
+# IRSSH Panel Installation Script - Version 3.5.2
 VERSION="3.5.2"
-
-# Base paths
 REPO_BASE="/opt/irssh-panel"
 
-# Base and production directories
+# Directory structure
 declare -A DIRS=(
     ["BACKEND_DIR"]="$REPO_BASE/backend"
     ["FRONTEND_DIR"]="$REPO_BASE/frontend"
@@ -31,53 +29,18 @@ declare -A PROD_DIRS=(
     ["PROD_METRICS"]="/var/log/irssh/metrics"
 )
 
-# Base module URLs
-declare -A BASE_MODULES=(
+# Module URLs
+declare -A MODULE_URLS=(
     ["vpnserver"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/vpnserver-script.py"
     ["webport"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/webport-script.sh"
-    ["port"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/port-script.py"
     ["dropbear"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/dropbear-script.sh"
-)
-
-# Protocol module URLs
-declare -A PROTOCOL_MODULES=(
+    ["port"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/port-script.py"
     ["ssh"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/ssh-script.py"
     ["l2tp"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/l2tpv3-script.sh"
     ["ikev2"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/ikev2-script.py"
     ["cisco"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/cisco-script.sh"
     ["wireguard"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/wire-script.sh"
     ["singbox"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/singbox-script.sh"
-)
-
-# Protocol configurations
-declare -A PROTOCOLS=(
-    ["SSH"]=true
-    ["L2TP"]=true
-    ["IKEV2"]=true
-    ["CISCO"]=true
-    ["WIREGUARD"]=true
-    ["SINGBOX"]=true
-)
-
-# Default ports
-declare -A PORTS=(
-    ["SSH"]=22
-    ["WEBSOCKET"]=2082
-    ["L2TP"]=1701
-    ["IKEV2"]=500
-    ["CISCO"]=443
-    ["WIREGUARD"]=51820
-    ["SINGBOX"]=1080
-    ["WEB"]=8080
-)
-
-# System requirements
-declare -A REQUIREMENTS=(
-    ["MIN_MEMORY"]=1024
-    ["MIN_DISK"]=5120
-    ["MIN_CPU_CORES"]=2
-    ["MIN_NODE_VERSION"]=16
-    ["MIN_PYTHON_VERSION"]="3.8"
 )
 
 # Colors for output
@@ -104,30 +67,28 @@ log() {
 error() { log "ERROR" "$1"; [ "${2:-}" != "no-exit" ] && cleanup && exit 1; }
 info() { log "INFO" "$1"; }
 warn() { log "WARN" "$1"; }
-debug() { [ "${DEBUG:-false}" = "true" ] && log "DEBUG" "$1"; }
 
 # System cleanup
 cleanup() {
     info "Performing cleanup..."
-    for service in nginx prometheus grafana irssh-panel; do
-        systemctl is-active --quiet "$service" && systemctl stop "$service"
-    done
-    [ -d "/tmp/irssh-install" ] && rm -rf "/tmp/irssh-install"
+    rm -rf /tmp/irssh-install
     apt-get clean
 }
 
-# System requirements check
-check_requirements() {
-    info "Checking system requirements..."
-    [ "$EUID" -ne 0 ] && error "Please run as root"
-    [ ! -f /etc/os-release ] && error "Unsupported operating system"
+# Pre-installation checks and setup
+prepare_system() {
+    info "Preparing system for installation..."
     
-    source /etc/os-release
-    [[ "$ID" != "ubuntu" && "$ID" != "debian" ]] && error "Requires Ubuntu or Debian"
-
-    # Install basic requirements
-    apt-get update
-    apt-get install -y \
+    export DEBIAN_FRONTEND=noninteractive
+    
+    # Update package lists
+    apt-get update -qq
+    
+    # Install essential packages
+    apt-get install -y -qq \
+        software-properties-common \
+        apt-transport-https \
+        ca-certificates \
         curl \
         wget \
         git \
@@ -135,110 +96,70 @@ check_requirements() {
         python3 \
         python3-pip \
         python3-venv \
-        || error "Failed to install basic requirements"
+        python3-dev \
+        python3-apt \
+        nginx \
+        fail2ban \
+        ufw \
+        || error "Failed to install essential packages"
 
-    # Install Python requirements
-    pip3 install --upgrade pip
-    pip3 install \
-        python-dotenv \
-        requests \
-        psutil \
-        || error "Failed to install Python packages"
-
-    # Check system resources
-    local MEM_TOTAL=$(free -m | awk '/^Mem:/{print $2}')
-    local CPU_CORES=$(nproc)
-    local DISK_SPACE=$(df -m / | awk 'NR==2 {print $4}')
+    # Fix common issues
+    apt-get install -f
     
-    [ "$MEM_TOTAL" -lt "${REQUIREMENTS[MIN_MEMORY]}" ] && warn "Low memory"
-    [ "$CPU_CORES" -lt "${REQUIREMENTS[MIN_CPU_CORES]}" ] && warn "Low CPU cores"
-    [ "$DISK_SPACE" -lt "${REQUIREMENTS[MIN_DISK]}" ] && error "Insufficient disk space"
+    info "System preparation completed"
 }
 
-# Get initial configuration
-get_initial_config() {
-    info "Getting initial configuration..."
-
-    while [ -z "$ADMIN_USER" ]; do
-        read -p "Enter admin username: " ADMIN_USER
-    done
-    
-    while [ -z "$ADMIN_PASS" ]; do
-        read -s -p "Enter admin password: " ADMIN_PASS
-        echo
-        read -s -p "Confirm password: " ADMIN_PASS_CONFIRM
-        echo
-        [ "$ADMIN_PASS" = "$ADMIN_PASS_CONFIRM" ] || { error "Passwords don't match" "no-exit"; ADMIN_PASS=""; }
-    done
-
-    while true; do
-        read -p "Enter web panel port (4-5 digits, Enter for random): " WEB_PORT
-        if [ -z "$WEB_PORT" ]; then
-            WEB_PORT=$(shuf -i 1234-65432 -n 1)
-            info "Generated port: $WEB_PORT"
-            break
-        elif [[ "$WEB_PORT" =~ ^[0-9]{4,5}$ ]] && [ "$WEB_PORT" -ge 1234 ] && [ "$WEB_PORT" -le 65432 ]; then
-            break
-        fi
-        error "Invalid port number" "no-exit"
-    done
-    PORTS["WEB"]=$WEB_PORT
-
-    read -p "Enable HTTPS? (y/N): " ENABLE_HTTPS
-    ENABLE_HTTPS=${ENABLE_HTTPS,,}
-    
-    read -p "Enable monitoring? (y/N): " ENABLE_MONITORING
-    ENABLE_MONITORING=${ENABLE_MONITORING,,}
-}
-
-# Initialize directories
-init_directories() {
-    info "Initializing directories..."
-    for dir in "${DIRS[@]}"; do
-        mkdir -p "$dir"
-        info "Created directory: $dir"
-    done
-    for dir in "${PROD_DIRS[@]}"; do
-        mkdir -p "$dir"
-        info "Created production directory: $dir"
-    done
-}
-
+# Python environment setup
 setup_python_env() {
     info "Setting up Python environment..."
     
-    # Create virtual environment
-    python3 -m venv "${DIRS[MODULES_DIR]}/.venv"
-    source "${DIRS[MODULES_DIR]}/.venv/bin/activate"
+    cd "${DIRS[MODULES_DIR]}" || error "Failed to access modules directory"
+    
+    # Create and activate virtual environment
+    python3 -m venv .venv
+    source .venv/bin/activate
+    
+    # Upgrade pip
+    python3 -m pip install --upgrade pip
     
     # Install required packages
     pip install --no-cache-dir \
         python-dotenv \
+        pydantic \
+        fastapi \
+        uvicorn \
         requests \
         psutil \
         pymongo \
-        pyyaml \
-        pydantic \
         redis \
-        asyncio \
         aiohttp \
-        mysql-connector-python \
+        sqlalchemy \
+        python-jose[cryptography] \
+        passlib[bcrypt] \
+        pyyaml \
         || error "Failed to install Python packages"
-        
+    
     deactivate
+    
+    info "Python environment setup completed"
 }
 
-# Module installation function
+# Install module function
 install_module() {
     local module_name=$1
-    local script_url=$2
+    local script_url="${MODULE_URLS[$module_name]}"
     local target_dir="${DIRS[MODULES_DIR]}/$module_name"
-    local script_ext="${script_url##*.}"
+    
+    if [ -z "$script_url" ]; then
+        error "Module URL not found: $module_name" "no-exit"
+        return 1
+    fi
     
     info "Installing module: $module_name"
     mkdir -p "$target_dir"
     cd "$target_dir" || error "Failed to access module directory"
     
+    local script_ext="${script_url##*.}"
     local script_name="install.$script_ext"
     wget -q "$script_url" -O "$script_name" || error "Failed to download $module_name script"
     chmod +x "$script_name"
@@ -246,8 +167,10 @@ install_module() {
     case "$script_ext" in
         "py")
             source "${DIRS[MODULES_DIR]}/.venv/bin/activate"
-            python3 "$script_name" || error "Failed to execute Python script: $module_name"
+            python3 "$script_name"
+            local result=$?
             deactivate
+            [ $result -ne 0 ] && error "Failed to execute Python script: $module_name"
             ;;
         "sh")
             bash "$script_name" || error "Failed to execute shell script: $module_name"
@@ -258,196 +181,109 @@ install_module() {
     esac
 }
 
-# Install base modules
-install_base_modules() {
-    info "Installing base modules..."
-    for module in "${!BASE_MODULES[@]}"; do
-        install_module "$module" "${BASE_MODULES[$module]}"
+# Get user configuration
+get_config() {
+    info "Getting configuration details..."
+    
+    while [ -z "$ADMIN_USER" ]; do
+        read -p "Enter admin username: " ADMIN_USER
     done
-}
-
-# Install protocol modules
-install_protocols() {
-    info "Installing VPN protocols..."
-    for protocol in "${!PROTOCOLS[@]}"; do
-        if [ "${PROTOCOLS[$protocol]}" = true ]; then
-            local protocol_lower="${protocol,,}"
-            if [ -n "${PROTOCOL_MODULES[$protocol_lower]}" ]; then
-                install_module "$protocol_lower" "${PROTOCOL_MODULES[$protocol_lower]}"
-            fi
+    
+    while [ -z "$ADMIN_PASS" ]; do
+        read -s -p "Enter admin password: " ADMIN_PASS
+        echo
+        read -s -p "Confirm password: " ADMIN_PASS_CONFIRM
+        echo
+        [ "$ADMIN_PASS" = "$ADMIN_PASS_CONFIRM" ] || { 
+            error "Passwords don't match" "no-exit"
+            ADMIN_PASS=""
+        }
+    done
+    
+    while true; do
+        read -p "Enter web panel port (4-5 digits, Enter for random): " WEB_PORT
+        if [ -z "$WEB_PORT" ]; then
+            WEB_PORT=$(shuf -i 1234-65432 -n 1)
+            info "Generated random port: $WEB_PORT"
+            break
+        elif [[ "$WEB_PORT" =~ ^[0-9]{4,5}$ ]] && [ "$WEB_PORT" -ge 1234 ] && [ "$WEB_PORT" -le 65432 ]; then
+            break
         fi
+        error "Invalid port number" "no-exit"
+    done
+    
+    read -p "Enable HTTPS? (y/N): " ENABLE_HTTPS
+    ENABLE_HTTPS=${ENABLE_HTTPS,,}
+    
+    read -p "Enable monitoring? (y/N): " ENABLE_MONITORING
+    ENABLE_MONITORING=${ENABLE_MONITORING,,}
+}
+
+# Initialize directories
+init_directories() {
+    info "Creating directories..."
+    
+    for dir in "${DIRS[@]}"; do
+        mkdir -p "$dir"
+        chmod 755 "$dir"
+    done
+    
+    for dir in "${PROD_DIRS[@]}"; do
+        mkdir -p "$dir"
+        chmod 700 "$dir"
     done
 }
 
-# Setup web server
-setup_nginx() {
-    info "Setting up web server..."
+# Save installation info
+save_install_info() {
+    local info_file="${PROD_DIRS[PROD_CONFIG]}/install_info.yml"
     
-    apt-get install -y nginx || error "Failed to install Nginx"
-    
-    if [ "$ENABLE_HTTPS" = "y" ]; then
-        mkdir -p "${PROD_DIRS[PROD_SSL]}/nginx"
-        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-            -keyout "${PROD_DIRS[PROD_SSL]}/nginx/server.key" \
-            -out "${PROD_DIRS[PROD_SSL]}/nginx/server.crt" \
-            -subj "/CN=irssh-panel"
-    fi
-
-    cat > /etc/nginx/sites-available/irssh-panel << EOL
-server {
-    listen ${PORTS[WEB]};
-    server_name _;
-    root ${DIRS[FRONTEND_DIR]}/dist;
-    index index.html;
-
-    location / {
-        try_files \$uri \$uri/ /index.html;
-    }
-
-    location /api {
-        proxy_pass http://localhost:8000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host \$host;
-    }
-
-    location /metrics {
-        auth_basic "Metrics";
-        auth_basic_user_file /etc/nginx/.metrics_htpasswd;
-        proxy_pass http://localhost:9090;
-    }
-}
+    cat > "$info_file" << EOL
+version: $VERSION
+install_date: $(date +'%Y-%m-%d %H:%M:%S')
+admin_user: $ADMIN_USER
+web_port: $WEB_PORT
+https_enabled: ${ENABLE_HTTPS:-n}
+monitoring_enabled: ${ENABLE_MONITORING:-n}
 EOL
 
-    ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
-    rm -f /etc/nginx/sites-enabled/default
-    
-    systemctl restart nginx
-    systemctl enable nginx
+    chmod 600 "$info_file"
 }
 
-# Setup monitoring
-setup_monitoring() {
-    info "Setting up monitoring system..."
-    
-    if [ "$ENABLE_MONITORING" != "y" ]; then
-        info "Monitoring system disabled, skipping..."
-        return 0
-    fi
-    
-    # Install monitoring tools
-    apt-get install -y prometheus prometheus-node-exporter grafana || error "Failed to install monitoring tools"
-
-    # Configure Prometheus
-    cat > /etc/prometheus/prometheus.yml << EOL
-global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
-
-scrape_configs:
-  - job_name: 'node'
-    static_configs:
-      - targets: ['localhost:9100']
-
-  - job_name: 'irssh-panel'
-    static_configs:
-      - targets: ['localhost:8000']
-
-  - job_name: 'vpn-metrics'
-    file_sd_configs:
-      - files:
-        - '${PROD_DIRS[PROD_METRICS]}/*.prom'
-EOL
-
-    # Configure Grafana
-    cat > /etc/grafana/provisioning/datasources/prometheus.yml << EOL
-apiVersion: 1
-
-datasources:
-  - name: Prometheus
-    type: prometheus
-    access: proxy
-    url: http://localhost:9090
-    isDefault: true
-EOL
-
-    # Setup metrics collection
-    cat > "${DIRS[MONITORING_DIR]}/collect-metrics.sh" << 'EOL'
-#!/bin/bash
-METRICS_DIR="${PROD_DIRS[PROD_METRICS]}"
-mkdir -p "$METRICS_DIR"
-
-# System metrics
-CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}')
-MEM_USAGE=$(free | grep Mem | awk '{print $3/$2 * 100.0}')
-DISK_USAGE=$(df / | tail -1 | awk '{print $5}' | sed 's/%//')
-
-echo "system_cpu_usage $CPU_USAGE" > "$METRICS_DIR/system.prom"
-echo "system_memory_usage $MEM_USAGE" > "$METRICS_DIR/memory.prom"
-echo "system_disk_usage $DISK_USAGE" > "$METRICS_DIR/disk.prom"
-EOL
-
-    chmod +x "${DIRS[MONITORING_DIR]}/collect-metrics.sh"
-    
-    # Add to cron
-    (crontab -l 2>/dev/null || true; echo "* * * * * ${DIRS[MONITORING_DIR]}/collect-metrics.sh") | crontab -
-
-    # Start services
-    systemctl restart prometheus
-    systemctl enable prometheus
-    systemctl restart grafana-server
-    systemctl enable grafana-server
-    
-    info "Monitoring system setup completed"
-}
-
-# Setup security
-setup_security() {
-    info "Setting up security measures..."
-    
-    apt-get install -y fail2ban ufw || error "Failed to install security packages"
-    
-    ufw default deny incoming
-    ufw default allow outgoing
-    
-    for port in "${PORTS[@]}"; do
-        ufw allow "$port"
-    done
-    
-    echo "y" | ufw enable
-}
-
-# Main installation function
+# Main installation
 main() {
     trap cleanup EXIT
     
     info "Starting IRSSH Panel installation v$VERSION"
     
-    check_requirements
-    get_initial_config
+    # Initial setup
+    prepare_system
+    get_config
     init_directories
     setup_python_env
-
-    # Install modules in correct order
-    install_base_modules
-    install_protocols
     
-    # Complete setup
-    setup_nginx
-    setup_security
+    # Install base modules
+    for module in "vpnserver" "webport" "port" "dropbear"; do
+        install_module "$module"
+    done
     
-    [ "$ENABLE_MONITORING" = "y" ] && setup_monitoring
+    # Install VPN protocols
+    for module in "ssh" "l2tp" "ikev2" "cisco" "wireguard" "singbox"; do
+        install_module "$module"
+    done
+    
+    # Save installation info
+    save_install_info
     
     info "Installation completed successfully!"
-
+    
     # Display installation summary
     cat << EOL
 
 IRSSH Panel Installation Summary
 ------------------------------
 Version: $VERSION
-Web Panel URL: http${ENABLE_HTTPS:+s}://YOUR-SERVER-IP:${PORTS[WEB]}
+Web Panel URL: http${ENABLE_HTTPS:+s}://YOUR-SERVER-IP:$WEB_PORT
 Admin Username: $ADMIN_USER
 
 Installation Locations:
@@ -458,9 +294,6 @@ Installation Locations:
 Enabled Features:
 - HTTPS: ${ENABLE_HTTPS:-n}
 - Monitoring: ${ENABLE_MONITORING:-n}
-
-Active Ports:
-$(for name in "${!PORTS[@]}"; do echo "- $name: ${PORTS[$name]}"; done)
 
 Next Steps:
 1. Access the web panel using the URL above
