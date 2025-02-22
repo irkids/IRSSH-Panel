@@ -1,0 +1,116 @@
+---
+- name: Update system packages
+  apt:
+    update_cache: yes
+    upgrade: yes
+  when: ansible_os_family == "Debian"
+
+- name: Install common packages
+  apt:
+    name:
+      - git
+      - curl
+      - wget
+      - vim
+      - htop
+      - net-tools
+      - unzip
+      - rsync
+      - logrotate
+    state: present
+  when: ansible_os_family == "Debian"
+
+- name: Configure timezone
+  timezone:
+    name: "{{ timezone }}"
+
+- name: Configure system locale
+  locale_gen:
+    name: "{{ locale }}"
+    state: present
+
+- name: Configure logrotate
+  template:
+    src: logrotate.conf.j2
+    dest: /etc/logrotate.d/irssh-panel
+
+- name: Create application directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: 0755
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+  with_items:
+    - "{{ app_root }}"
+    - "{{ app_log_path }}"
+    - "{{ app_data_path }}"
+
+    - name: Create application user
+  user:
+    name: "{{ app_user }}"
+    group: "{{ app_group }}"
+    shell: /bin/bash
+    home: "{{ app_user_home }}"
+    system: yes
+
+- name: Configure SSH authorized keys
+  authorized_key:
+    user: "{{ app_user }}"
+    state: present
+    key: "{{ lookup('file', 'files/ssh/{{ item }}') }}"
+  with_items: "{{ ssh_authorized_keys }}"
+
+- name: Configure system limits
+  template:
+    src: limits.conf.j2
+    dest: /etc/security/limits.d/99-app-limits.conf
+
+- name: Configure kernel parameters
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_set: yes
+  with_items:
+    - { key: "vm.swappiness", value: "10" }
+    - { key: "net.core.somaxconn", value: "65535" }
+    - { key: "net.ipv4.tcp_max_syn_backlog", value: "4096" }
+    - { key: "net.core.netdev_max_backlog", value: "4096" }
+
+- name: Set up system monitoring
+  include_tasks: monitoring.yml
+
+- name: Configure system backup
+  include_tasks: backup.yml
+
+- name: Configure system security
+  include_tasks: security.yml
+
+- name: Set up cron jobs
+  cron:
+    name: "{{ item.name }}"
+    minute: "{{ item.minute }}"
+    hour: "{{ item.hour }}"
+    job: "{{ item.job }}"
+    user: "{{ item.user | default(app_user) }}"
+  with_items: "{{ cron_jobs }}"
+
+- name: Configure log rotation
+  template:
+    src: logrotate.conf.j2
+    dest: /etc/logrotate.d/{{ app_name }}
+
+handlers:
+  - name: restart ssh
+    service:
+      name: ssh
+      state: restarted
+
+  - name: reload sysctl
+    command: sysctl -p
+
+  - name: restart logrotate
+    service:
+      name: logrotate
+      state: restarted
