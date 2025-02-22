@@ -1,0 +1,56 @@
+---
+- name: Configure Backup System
+  hosts: backup_servers
+  become: yes
+  vars_files:
+    - vars/backup.yml
+
+  tasks:
+    - name: Install backup tools
+      apt:
+        name: "{{ backup_packages }}"
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Create backup directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: 0700
+        owner: root
+        group: root
+      with_items:
+        - "{{ backup_root }}"
+        - "{{ backup_root }}/daily"
+        - "{{ backup_root }}/weekly"
+        - "{{ backup_root }}/monthly"
+
+    - name: Configure backup scripts
+      template:
+        src: templates/backup/{{ item }}.sh.j2
+        dest: "{{ scripts_path }}/{{ item }}.sh"
+        mode: 0700
+      with_items:
+        - backup_databases
+        - backup_files
+        - cleanup_old_backups
+
+    - name: Set up backup cronjobs
+      cron:
+        name: "{{ item.name }}"
+        job: "{{ item.job }}"
+        hour: "{{ item.hour }}"
+        minute: "{{ item.minute }}"
+        state: present
+      with_items: "{{ backup_cron_jobs }}"
+
+    - name: Configure backup retention
+      template:
+        src: templates/backup/retention.conf.j2
+        dest: "{{ backup_config_path }}/retention.conf"
+
+  handlers:
+    - name: restart cron
+      service:
+        name: cron
+        state: restarted
