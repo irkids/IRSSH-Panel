@@ -79,6 +79,12 @@ cleanup() {
 prepare_system() {
     info "Preparing system for installation..."
     
+    # Fix apt_pkg error first
+    rm -f /usr/lib/python3/dist-packages/apt_pkg.cpython*
+    rm -f /usr/lib/python3/dist-packages/command_not_found
+    apt-get remove -y python3-apt
+    apt-get install -y python3-apt --reinstall
+    
     export DEBIAN_FRONTEND=noninteractive
     
     # Fix apt_pkg error
@@ -128,32 +134,28 @@ setup_python_env() {
     python3.8 -m venv .venv
     source .venv/bin/activate
     
-    # Upgrade pip
-    pip install --upgrade pip setuptools wheel
-    
-    # Install core dependencies first
+    # Upgrade pip and install setuptools first
+    pip install --no-cache-dir --upgrade pip setuptools wheel
+
+    # First uninstall tensorflow and typing-extensions if they exist
+    pip uninstall -y tensorflow typing-extensions
+
+    # Install dependencies in the correct order
     pip install --no-cache-dir \
-        typing-extensions>=4.12.2 \
-        pydantic~=2.10.0 \
-        fastapi~=0.115.0 \
-        sqlalchemy~=2.0.0 \
-        || error "Failed to install core dependencies"
-    
-    # Install other required packages
-    pip install --no-cache-dir \
-        python-dotenv \
-        requests \
-        psutil \
-        pymongo \
-        redis \
-        aiohttp \
-        python-jose[cryptography] \
-        passlib[bcrypt] \
-        pyyaml \
-        pandas \
-        networkx \
-        logging \
+        typing-extensions==4.5.0 \
+        python-dotenv==1.0.0 \
+        requests==2.31.0 \
+        psutil==5.9.0 \
+        pymongo==4.3.3 \
+        redis==4.5.1 \
+        aiohttp==3.8.4 \
+        pyyaml==6.0.1 \
+        pandas==2.0.3 \
+        networkx==3.1 \
         || error "Failed to install Python packages"
+        
+    # tensorflow is optional, only install if needed
+    # pip install tensorflow==2.13.1
     
     deactivate
     
