@@ -1,0 +1,49 @@
+---
+- name: Install NGINX
+  apt:
+    name: nginx
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Create NGINX configuration directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: 0755
+  with_items:
+    - /etc/nginx/conf.d
+    - /etc/nginx/sites-available
+    - /etc/nginx/sites-enabled
+    - /var/log/nginx
+
+- name: Configure NGINX
+  template:
+    src: nginx.conf.j2
+    dest: /etc/nginx/nginx.conf
+  notify: restart nginx
+
+- name: Configure SSL
+  include_tasks: ssl.yml
+  when: enable_ssl | bool
+
+- name: Configure virtual hosts
+  template:
+    src: vhost.conf.j2
+    dest: "/etc/nginx/sites-available/{{ item.name }}"
+  with_items: "{{ nginx_vhosts }}"
+  notify: reload nginx
+
+- name: Enable virtual hosts
+  file:
+    src: "/etc/nginx/sites-available/{{ item.name }}"
+    dest: "/etc/nginx/sites-enabled/{{ item.name }}"
+    state: link
+  with_items: "{{ nginx_vhosts }}"
+  notify: reload nginx
+
+- name: Start and enable NGINX
+  service:
+    name: nginx
+    state: started
+    enabled: yes
