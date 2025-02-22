@@ -1,0 +1,68 @@
+---
+- name: Add PostgreSQL repository
+  apt_repository:
+    repo: deb http://apt.postgresql.org/pub/repos/apt {{ ansible_distribution_release }}-pgdg main
+    state: present
+  when: ansible_os_family == "Debian"
+
+- name: Install PostgreSQL
+  apt:
+    name: 
+      - postgresql-14
+      - postgresql-contrib
+      - python3-psycopg2
+    state: present
+    update_cache: yes
+  when: ansible_os_family == "Debian"
+
+- name: Initialize PostgreSQL database
+  command: postgresql-setup initdb
+  args:
+    creates: /var/lib/pgsql/data/postgresql.conf
+  when: ansible_os_family == "RedHat"
+
+- name: Configure PostgreSQL
+  template:
+    src: postgresql.conf.j2
+    dest: "{{ postgresql_config_path }}/postgresql.conf"
+  notify: restart postgresql
+
+- name: Configure pg_hba.conf
+  template:
+    src: pg_hba.conf.j2
+    dest: "{{ postgresql_config_path }}/pg_hba.conf"
+  notify: restart postgresql
+
+- name: Create PostgreSQL database
+  postgresql_db:
+    name: "{{ postgresql_db_name }}"
+    state: present
+  become: yes
+  become_user: postgres
+
+- name: Create PostgreSQL user
+  postgresql_user:
+    name: "{{ postgresql_user }}"
+    password: "{{ postgresql_password }}"
+    db: "{{ postgresql_db_name }}"
+    priv: ALL
+    state: present
+  become: yes
+  become_user: postgres
+
+- name: Grant privileges to PostgreSQL user
+  postgresql_privs:
+    db: "{{ postgresql_db_name }}"
+    role: "{{ postgresql_user }}"
+    objs: ALL_IN_SCHEMA
+    privs: ALL
+    type: schema
+    schema: public
+  become: yes
+  become_user: postgres
+
+- name: Start and enable PostgreSQL
+  service:
+    name: postgresql
+    state: started
+    enabled: yes
