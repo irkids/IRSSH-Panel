@@ -81,43 +81,35 @@ prepare_system() {
     
     export DEBIAN_FRONTEND=noninteractive
 
-    # Add default repository
-    cat > /etc/apt/sources.list << EOL
-deb http://archive.ubuntu.com/ubuntu/ jammy main restricted universe multiverse
-deb http://archive.ubuntu.com/ubuntu/ jammy-updates main restricted universe multiverse
-deb http://archive.ubuntu.com/ubuntu/ jammy-backports main restricted universe multiverse
-deb http://security.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse
-EOL
-
     # Update package information
-    apt-get clean
     apt-get update -qq
-    
-    # Install essential packages
+
+    # Install basic requirements first
     apt-get install -y --no-remove \
         software-properties-common \
         apt-transport-https \
         ca-certificates \
-        ubuntu-keyring \
-        || error "Failed to install essential packages"
-
-    add-apt-repository -y universe
-    apt-get update -qq
-
-    # Now install Python and other required packages
-    apt-get install -y --no-remove \
         curl \
         wget \
         git \
         build-essential \
+        || error "Failed to install basic packages"
+
+    # Add deadsnakes PPA for Python 3.8
+    add-apt-repository -y ppa:deadsnakes/ppa
+    apt-get update -qq
+
+    # Install Python packages
+    apt-get install -y --no-remove \
         python3.8 \
         python3.8-dev \
         python3.8-venv \
         python3.8-distutils \
+        python3-pip \
         python3-apt \
         || error "Failed to install Python packages"
 
-    # Fix pip
+    # Update pip
     curl -sS https://bootstrap.pypa.io/get-pip.py | python3.8
     
     info "System preparation completed"
