@@ -3,10 +3,6 @@
 # IRSSH Panel Installation Script
 # Version: 3.5.2
 
-# Base directory structure
-SCRIPT_PATH=$(readlink -f "${BASH_SOURCE[0]}")
-SCRIPT_DIR=$(dirname "$SCRIPT_PATH")
-
 # Core directories
 PANEL_DIR="/opt/irssh-panel"
 CONFIG_DIR="/etc/enhanced_ssh"
@@ -52,7 +48,6 @@ info() {
 error() {
     log "ERROR" "$1"
     if [[ "${2:-}" != "no-exit" ]]; then
-        cleanup
         exit 1
     fi
 }
@@ -65,7 +60,7 @@ install_module() {
     if [[ ! -f "$module_script" ]]; then
         error "Module installation script not found: $module_script"
         return 1
-    }
+    fi
     
     info "Installing module: $module_name"
     bash "$module_script"
