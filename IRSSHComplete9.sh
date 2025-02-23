@@ -38,9 +38,10 @@ declare -A PORTS=(
 ADMIN_USER=""
 ADMIN_PASS=""
 ENABLE_MONITORING="n"
-SERVER_IP=""
+SERVER_IPv4=""
+SERVER_IPv6=""
 
-# Logging functions
+# System functions
 log() {
     local level=$1
     local message=$2
@@ -67,15 +68,13 @@ cleanup() {
 }
 
 get_server_ip() {
-    # Get IPv4
     SERVER_IPv4=$(curl -s4 ifconfig.me)
     if [ -z "$SERVER_IPv4" ]; then
         SERVER_IPv4=$(ip -4 route get 8.8.8.8 | awk '{print $7; exit}')
     fi
 
-    # Get IPv6 (optional)
     SERVER_IPv6=$(curl -s6 ifconfig.me)
-    
+
     if [ -z "$SERVER_IPv4" ] && [ -z "$SERVER_IPv6" ]; then
         error "Could not determine server IP address"
     fi
@@ -112,6 +111,64 @@ get_config() {
     
     read -p "Enable monitoring? (y/N): " ENABLE_MONITORING
     ENABLE_MONITORING=${ENABLE_MONITORING,,}
+}
+
+setup_web_server() {
+    info "Setting up web server..."
+    
+    apt-get install -y nginx || error "Failed to install nginx"
+    
+    mkdir -p "$PANEL_DIR/frontend/dist"
+    cat > "$PANEL_DIR/frontend/dist/index.html" << EOL
+<!DOCTYPE html>
+<html>
+<head>
+    <title>IRSSH Panel</title>
+</head>
+<body>
+    <h1>IRSSH Panel</h1>
+    <p>Installation successful. Please complete the panel setup.</p>
+</body>
+</html>
+EOL
+
+    cat > /etc/nginx/sites-available/irssh-panel << EOL
+server {
+    listen ${PORTS[WEB]};
+    listen [::]:${PORTS[WEB]};
+    
+    server_name _;
+    
+    root $PANEL_DIR/frontend/dist;
+    index index.html;
+    
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+    
+    location /api {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_cache_bypass \$http_upgrade;
+    }
+}
+EOL
+
+    ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
+    rm -f /etc/nginx/sites-enabled/default
+    
+    chown -R www-data:www-data "$PANEL_DIR/frontend"
+    chmod -R 755 "$PANEL_DIR/frontend"
+    
+    nginx -t || error "Nginx configuration test failed"
+    
+    systemctl restart nginx
+    systemctl enable nginx
+    
+    info "Web server setup completed"
 }
 
 install_ssh() {
@@ -388,37 +445,31 @@ Table = off
 PreUp = sysctl -w net.ipv4.ip_forward=1
 EOL
 
-    systemctl enable wg-quick@wg0
-    systemctl start wg-quick@wg0
-    
-    info "WireGuard installation completed"
+   systemctl enable wg-quick@wg0
+   systemctl start wg-quick@wg0
+   
+   info "WireGuard installation completed"
 }
 
 install_singbox() {
-    info "Installing Sing-Box..."
-    
-    local ARCH="amd64"
-    local VERSION="1.7.0"
-    local URL="https://github.com/SagerNet/sing-box/releases/download/v${VERSION}/sing-box-${VERSION}-linux-${ARCH}.tar.gz"
-    
-    wget "$URL" -O /tmp/sing-box.tar.gz || error "Failed to download Sing-Box"
-    
-    # Create temp directory for extraction
-    mkdir -p /tmp/sing-box
-    tar -xzf /tmp/sing-box.tar.gz -C /tmp/sing-box
-    
-    # Find and copy the binary
-    find /tmp/sing-box -name "sing-box" -type f -exec cp {} /usr/local/bin/ \;
-    chmod +x /usr/local/bin/sing-box || error "Failed to set permissions for sing-box"
-    
-    # Verify installation
-    if ! [ -x "$(command -v sing-box)" ]; then
-        error "Sing-Box installation failed"
-    fi
-    
-    cat > /etc/sing-box/config.json << EOL
+   info "Installing Sing-Box..."
+   
+   local ARCH="amd64"
+   local VERSION="1.7.0"
+   local URL="https://github.com/SagerNet/sing-box/releases/download/v${VERSION}/sing-box-${VERSION}-linux-${ARCH}.tar.gz"
+   
+   mkdir -p /tmp/sing-box
+   wget "$URL" -O /tmp/sing-box.tar.gz || error "Failed to download Sing-Box"
+   tar -xzf /tmp/sing-box.tar.gz -C /tmp/sing-box --strip-components=1
+   
+   cp /tmp/sing-box/sing-box /usr/local/bin/
+   chmod +x /usr/local/bin/sing-box || error "Failed to set permissions for sing-box"
+   
+   mkdir -p /etc/sing-box
+   
+   cat > /etc/sing-box/config.json << EOL
 {
-    "log": {
+   "log": {
        "level": "info",
        "output": "/var/log/sing-box.log"
    },
@@ -530,6 +581,8 @@ main() {
    apt-get update || error "Failed to update package lists"
    apt-get install -y nginx nodejs npm postgresql || error "Failed to install base requirements"
    
+   setup_web_server
+   
    for protocol in "${!PROTOCOLS[@]}"; do
        if [ "${PROTOCOLS[$protocol]}" = true ]; then
            info "Installing ${protocol}..."
@@ -547,7 +600,7 @@ main() {
 IRSSH Panel Installation Summary
 -------------------------------
 Panel Version: 3.5.2
-Web Interface: 
+Web Interface:
 $([ ! -z "$SERVER_IPv4" ] && echo "IPv4: http://${SERVER_IPv4}:${PORTS[WEB]}")
 $([ ! -z "$SERVER_IPv6" ] && echo "IPv6: http://${SERVER_IPv6}:${PORTS[WEB]}")
 
