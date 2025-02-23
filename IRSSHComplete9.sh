@@ -1,14 +1,15 @@
 #!/bin/bash
 
-# IRSSH Panel Installation Script
+# IRSSH Panel Complete Installation Script
 # Version: 3.5.2
 
-# Core directories
+# Base directories
 PANEL_DIR="/opt/irssh-panel"
 CONFIG_DIR="/etc/enhanced_ssh"
 LOG_DIR="/var/log/irssh"
 BACKUP_DIR="/opt/irssh-backups"
 TEMP_DIR="/tmp/irssh-install"
+SSL_DIR="/etc/nginx/ssl"
 
 # Protocol configuration
 declare -A PROTOCOLS=(
@@ -24,13 +25,21 @@ declare -A PROTOCOLS=(
 declare -A PORTS=(
     ["SSH"]=22
     ["SSH_TLS"]=443
+    ["WEBSOCKET"]=2082
     ["L2TP"]=1701
     ["IKEV2"]=500
     ["CISCO"]=443
     ["WIREGUARD"]=51820
     ["SINGBOX"]=1080
     ["WEB"]=8080
+    ["UDPGW"]=7300
 )
+
+# User Configuration
+ADMIN_USER=""
+ADMIN_PASS=""
+ENABLE_MONITORING="n"
+ENABLE_HTTPS="n"
 
 # Logging functions
 log() {
@@ -48,42 +57,47 @@ info() {
 error() {
     log "ERROR" "$1"
     if [[ "${2:-}" != "no-exit" ]]; then
+        cleanup
         exit 1
     fi
 }
 
-# Installation module function
-install_module() {
-    local module_name=$1
-    local module_script="$SCRIPT_DIR/modules/$module_name/install.sh"
+cleanup() {
+    info "Performing cleanup..."
+    rm -rf "$TEMP_DIR"
+}
+
+# Get initial configuration
+get_config() {
+    info "Getting initial configuration..."
     
-    if [[ ! -f "$module_script" ]]; then
-        error "Module installation script not found: $module_script"
-        return 1
-    fi
+    read -p "Enter admin username: " ADMIN_USER
+    while [ -z "$ADMIN_USER" ]; do
+        read -p "Username cannot be empty. Enter admin username: " ADMIN_USER
+    done
     
-    info "Installing module: $module_name"
-    bash "$module_script"
-    local result=$?
+    read -s -p "Enter admin password: " ADMIN_PASS
+    echo
+    while [ -z "$ADMIN_PASS" ]; do
+        read -s -p "Password cannot be empty. Enter admin password: " ADMIN_PASS
+        echo
+    done
     
-    if [[ $result -ne 0 ]]; then
-        error "Failed to install module: $module_name"
-        return 1
-    fi
+    read -p "Enable HTTPS? (y/N): " ENABLE_HTTPS
+    ENABLE_HTTPS=${ENABLE_HTTPS,,}
     
-    info "Successfully installed module: $module_name"
-    return 0
+    read -p "Enable monitoring? (y/N): " ENABLE_MONITORING
+    ENABLE_MONITORING=${ENABLE_MONITORING,,}
 }
 
 # Protocol installation functions
 install_ssh() {
     info "Installing SSH protocol..."
     
-    # Install SSH packages
     apt-get install -y openssh-server stunnel4 || error "Failed to install SSH packages"
     
-    # Configure SSH
     cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
+    
     cat > /etc/ssh/sshd_config << EOL
 Port ${PORTS[SSH]}
 PermitRootLogin yes
@@ -101,7 +115,6 @@ SyslogFacility AUTH
 LogLevel INFO
 EOL
 
-    # Configure stunnel for SSL
     mkdir -p /etc/stunnel
     openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
         -keyout /etc/stunnel/stunnel.pem \
@@ -125,9 +138,29 @@ accept = ${PORTS[SSH_TLS]}
 connect = 127.0.0.1:${PORTS[SSH]}
 EOL
 
+    # Configure WebSocket
+    cat > /etc/systemd/system/websocket.service << EOL
+[Unit]
+Description=WebSocket for SSH
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/websocat -t --binary-protocol ws-l:0.0.0.0:${PORTS[WEBSOCKET]} tcp:127.0.0.1:${PORTS[SSH]}
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOL
+
+    systemctl daemon-reload
     systemctl restart ssh
     systemctl enable stunnel4
     systemctl restart stunnel4
+    systemctl enable websocket
+    systemctl start websocket
+    
+    info "SSH installation completed"
 }
 
 install_l2tp() {
@@ -138,7 +171,6 @@ install_l2tp() {
     # Generate PSK
     PSK=$(openssl rand -base64 32)
     
-    # Configure strongSwan
     cat > /etc/ipsec.conf << EOL
 config setup
     charondebug="ike 2, knl 2"
@@ -156,13 +188,159 @@ conn L2TP-PSK
     leftprotoport=17/1701
     right=%any
     rightprotoport=17/%any
+    dpddelay=30
+    dpdtimeout=120
+    dpdaction=clear
 EOL
 
     echo ": PSK \"$PSK\"" > /etc/ipsec.secrets
     chmod 600 /etc/ipsec.secrets
     
+    cat > /etc/xl2tpd/xl2tpd.conf << EOL
+[global]
+ipsec saref = yes
+port = ${PORTS[L2TP]}
+
+[lns default]
+ip range = 10.10.10.100-10.10.10.200
+local ip = 10.10.10.1
+require chap = yes
+refuse pap = yes
+require authentication = yes
+name = L2TP-VPN
+ppp debug = yes
+length bit = yes
+EOL
+
     systemctl restart strongswan
     systemctl enable strongswan
+    systemctl restart xl2tpd
+    systemctl enable xl2tpd
+    
+    info "L2TP installation completed"
+}
+
+install_ikev2() {
+    info "Installing IKEv2..."
+    
+    apt-get install -y strongswan strongswan-pki || error "Failed to install IKEv2 packages"
+    
+    mkdir -p /etc/ipsec.d/{private,cacerts,certs}
+    
+    ipsec pki --gen --type rsa --size 4096 --outform pem > /etc/ipsec.d/private/ca-key.pem
+    chmod 600 /etc/ipsec.d/private/ca-key.pem
+    
+    ipsec pki --self --ca --lifetime 3650 \
+        --in /etc/ipsec.d/private/ca-key.pem \
+        --type rsa --dn "CN=VPN CA" \
+        --outform pem > /etc/ipsec.d/cacerts/ca-cert.pem
+    
+    ipsec pki --gen --type rsa --size 4096 --outform pem > /etc/ipsec.d/private/server-key.pem
+    chmod 600 /etc/ipsec.d/private/server-key.pem
+    
+    ipsec pki --pub --in /etc/ipsec.d/private/server-key.pem --type rsa \
+        | ipsec pki --issue --lifetime 1825 \
+            --cacert /etc/ipsec.d/cacerts/ca-cert.pem \
+            --cakey /etc/ipsec.d/private/ca-key.pem \
+            --dn "CN=vpn.server.com" \
+            --san "vpn.server.com" \
+            --flag serverAuth --flag ikeIntermediate \
+            --outform pem > /etc/ipsec.d/certs/server-cert.pem
+    
+    cat > /etc/ipsec.conf << EOL
+config setup
+    charondebug="ike 2, knl 2, cfg 2, net 2, esp 2"
+
+conn ikev2-vpn
+    auto=add
+    compress=no
+    type=tunnel
+    keyexchange=ikev2
+    fragmentation=yes
+    forceencaps=yes
+    dpdaction=clear
+    dpddelay=300s
+    rekey=no
+    left=%any
+    leftid=@vpn.server.com
+    leftcert=server-cert.pem
+    leftsendcert=always
+    leftsubnet=0.0.0.0/0
+    right=%any
+    rightauth=eap-mschapv2
+    rightsourceip=10.20.20.0/24
+    rightdns=8.8.8.8,8.8.4.4
+EOL
+
+    systemctl restart strongswan
+    systemctl enable strongswan
+    
+    info "IKEv2 installation completed"
+}
+
+install_cisco() {
+    info "Installing OpenConnect (Cisco AnyConnect)..."
+    
+    apt-get install -y ocserv gnutls-bin || error "Failed to install OpenConnect packages"
+    
+    mkdir -p /etc/ocserv/ssl
+    cd /etc/ocserv/ssl || error "Failed to access OpenConnect SSL directory"
+    
+    certtool --generate-privkey --outfile ca-key.pem
+    
+    cat > ca.tmpl << EOL
+cn = "VPN CA"
+organization = "IRSSH Panel"
+serial = 1
+expiration_days = 3650
+ca
+signing_key
+cert_signing_key
+crl_signing_key
+EOL
+
+    certtool --generate-self-signed --load-privkey ca-key.pem \
+        --template ca.tmpl --outfile ca-cert.pem
+    
+    certtool --generate-privkey --outfile server-key.pem
+    
+    cat > server.tmpl << EOL
+cn = "VPN Server"
+organization = "IRSSH Panel"
+expiration_days = 3650
+signing_key
+encryption_key
+tls_www_server
+EOL
+
+    certtool --generate-certificate --load-privkey server-key.pem \
+        --load-ca-certificate ca-cert.pem --load-ca-privkey ca-key.pem \
+        --template server.tmpl --outfile server-cert.pem
+    
+    cat > /etc/ocserv/ocserv.conf << EOL
+auth = "plain[passwd=/etc/ocserv/ocpasswd]"
+tcp-port = ${PORTS[CISCO]}
+udp-port = ${PORTS[CISCO]}
+run-as-user = nobody
+run-as-group = daemon
+server-cert = /etc/ocserv/ssl/server-cert.pem
+server-key = /etc/ocserv/ssl/server-key.pem
+ca-cert = /etc/ocserv/ssl/ca-cert.pem
+socket-file = /var/run/ocserv-socket
+isolate-workers = true
+max-clients = 128
+max-same-clients = 2
+keepalive = 32400
+dpd = 90
+mobile-dpd = 1800
+try-mtu-discovery = true
+server-stats-reset-time = 604800
+EOL
+
+    systemctl restart ocserv
+    systemctl enable ocserv
+    
+    info "OpenConnect installation completed"
 }
 
 install_wireguard() {
@@ -170,22 +348,29 @@ install_wireguard() {
     
     apt-get install -y wireguard || error "Failed to install WireGuard"
     
-    # Generate keys
-    wg genkey | tee /etc/wireguard/server_private.key | wg pubkey > /etc/wireguard/server_public.key
-    chmod 600 /etc/wireguard/server_private.key
+    mkdir -p /etc/wireguard
+    cd /etc/wireguard || error "Failed to access WireGuard directory"
     
-    # Configure WireGuard
+    wg genkey | tee server_private.key | wg pubkey > server_public.key
+    chmod 600 server_private.key
+    
     cat > /etc/wireguard/wg0.conf << EOL
 [Interface]
-PrivateKey = $(cat /etc/wireguard/server_private.key)
+PrivateKey = $(cat server_private.key)
 Address = 10.66.66.1/24
 ListenPort = ${PORTS[WIREGUARD]}
 PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
 PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+
+MTU = 1420
+Table = off
+PreUp = sysctl -w net.ipv4.ip_forward=1
 EOL
 
     systemctl enable wg-quick@wg0
     systemctl start wg-quick@wg0
+    
+    info "WireGuard installation completed"
 }
 
 install_singbox() {
@@ -199,8 +384,8 @@ install_singbox() {
     tar -xzf /tmp/sing-box.tar.gz -C /usr/local/bin/
     chmod +x /usr/local/bin/sing-box
     
-    # Configure Sing-Box
     mkdir -p /etc/sing-box
+    
     cat > /etc/sing-box/config.json << EOL
 {
     "log": {
@@ -211,28 +396,55 @@ install_singbox() {
         {
             "type": "mixed",
             "listen": "::",
-            "listen_port": ${PORTS[SINGBOX]}
+            "listen_port": ${PORTS[SINGBOX]},
+            "sniff": true,
+            "sniff_override_destination": false
+        }
+    ],
+    "outbounds": [
+        {
+            "type": "direct",
+            "tag": "direct"
         }
     ]
 }
 EOL
 
+    cat > /etc/systemd/system/sing-box.service << EOL
+[Unit]
+Description=Sing-Box Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOL
+
+    systemctl daemon-reload
     systemctl enable sing-box
     systemctl start sing-box
+    
+    info "Sing-Box installation completed"
 }
 
-# Setup monitoring
 setup_monitoring() {
-    if [ "$ENABLE_MONITORING" != "y" ]; then
-        return 0
-    fi
-    
-    apt-get install -y prometheus-node-exporter collectd || error "Failed to install monitoring tools"
-    
-    mkdir -p /var/log/irssh/metrics
-    
-    # Configure node exporter
-    cat > /etc/systemd/system/node-exporter.service << EOL
+   if [ "$ENABLE_MONITORING" != "y" ]; then
+       info "Monitoring system disabled, skipping..."
+       return 0
+   fi
+   
+   info "Setting up monitoring system..."
+   
+   apt-get install -y prometheus-node-exporter collectd vnstat || error "Failed to install monitoring tools"
+   
+   mkdir -p /var/log/irssh/metrics
+   
+   cat > /etc/systemd/system/node-exporter.service << EOL
 [Unit]
 Description=Prometheus Node Exporter
 After=network.target
@@ -247,72 +459,94 @@ Restart=always
 WantedBy=multi-user.target
 EOL
 
-    systemctl enable node-exporter
-    systemctl start node-exporter
-}
+   cat > /etc/collectd/collectd.conf << EOL
+LoadPlugin cpu
+LoadPlugin memory
+LoadPlugin network
+LoadPlugin interface
+LoadPlugin load
+LoadPlugin disk
 
-# Main setup function
-setup_panel() {
-    info "Setting up IRSSH Panel..."
-    
-    # Create directories
-    mkdir -p "$PANEL_DIR"/{frontend,backend,config}
-    
-    # Setup backend
-    cd "$PANEL_DIR/backend" || error "Failed to access backend directory"
-    npm install
-    
-    # Setup frontend
-    cd "$PANEL_DIR/frontend" || error "Failed to access frontend directory"
-    npm install
-    npm run build
-    
-    # Configure nginx
-    cat > /etc/nginx/sites-available/irssh-panel << EOL
-server {
-    listen ${PORTS[WEB]};
-    server_name _;
-    
-    root $PANEL_DIR/frontend/dist;
-    index index.html;
-    
-    location /api {
-        proxy_pass http://localhost:3000;
-    }
-}
+<Plugin interface>
+   Interface "eth0"
+   IgnoreSelected false
+</Plugin>
+
+<Plugin network>
+   Server "localhost" "25826"
+</Plugin>
 EOL
 
-    ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
-    systemctl restart nginx
+   systemctl daemon-reload
+   systemctl enable node-exporter
+   systemctl start node-exporter
+   systemctl enable collectd
+   systemctl start collectd
+   
+   info "Monitoring setup completed"
 }
 
 # Main installation function
 main() {
-    info "Starting IRSSH Panel installation..."
-    
-    # Initial setup
-    mkdir -p "$LOG_DIR"
-    mkdir -p "$CONFIG_DIR"
-    
-    # Install base requirements
-    apt-get update
-    apt-get install -y nginx nodejs npm postgresql || error "Failed to install base requirements"
-    
-    # Install protocols
-    for protocol in "${!PROTOCOLS[@]}"; do
-        if [ "${PROTOCOLS[$protocol]}" = true ]; then
-            "install_${protocol,,}" || error "Failed to install $protocol"
-        fi
-    done
-    
-    # Setup panel
-    setup_panel
-    
-    # Setup monitoring if enabled
-    setup_monitoring
-    
-    info "Installation completed successfully!"
+   info "Starting IRSSH Panel installation..."
+   
+   # Create required directories
+   mkdir -p "$LOG_DIR"
+   mkdir -p "$CONFIG_DIR"
+   mkdir -p "$PANEL_DIR"
+   mkdir -p "$TEMP_DIR"
+   
+   # Get initial configuration
+   get_config
+   
+   # Install base requirements
+   apt-get update || error "Failed to update package lists"
+   apt-get install -y nginx nodejs npm postgresql || error "Failed to install base requirements"
+   
+   # Install enabled protocols
+   for protocol in "${!PROTOCOLS[@]}"; do
+       if [ "${PROTOCOLS[$protocol]}" = true ]; then
+           info "Installing ${protocol}..."
+           install_${protocol,,} || error "Failed to install $protocol"
+       fi
+   done
+   
+   # Setup monitoring if enabled
+   setup_monitoring
+   
+   # Cleanup
+   cleanup
+   
+   info "Installation completed successfully!"
+   
+   # Display installation summary
+   cat << EOL
+
+IRSSH Panel Installation Summary
+-------------------------------
+Panel Version: 3.5.2
+Web Interface: http${ENABLE_HTTPS:+"s"}://YOUR-SERVER-IP:${PORTS[WEB]}
+
+Admin Credentials:
+Username: ${ADMIN_USER}
+Password: (As specified during installation)
+
+Enabled Protocols:
+$(for protocol in "${!PROTOCOLS[@]}"; do
+   if [ "${PROTOCOLS[$protocol]}" = true ]; then
+       echo "- $protocol (Port: ${PORTS[$protocol]})"
+   fi
+done)
+
+Additional Features:
+- HTTPS: ${ENABLE_HTTPS}
+- Monitoring: ${ENABLE_MONITORING}
+
+For more information, please check:
+- Logs: ${LOG_DIR}
+- Configuration: ${CONFIG_DIR}
+EOL
 }
 
-# Run main installation
+# Start installation
 main
