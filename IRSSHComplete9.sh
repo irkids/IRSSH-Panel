@@ -125,15 +125,18 @@ setup_python_env() {
     python3.8 -m venv .venv
     source .venv/bin/activate
     
-    # Remove all packages first
-    pip uninstall -y typing-extensions numpy tensorflow pandas networkx sqlalchemy fastapi pydantic pydantic-core
-
-    # Install packages with specific versions to avoid conflicts
+    # First install core dependencies with specific versions
     pip install --no-cache-dir \
         typing-extensions==4.12.2 \
-        pydantic>=2.10.6 \
-        fastapi>=0.115.8 \
-        sqlalchemy>=2.0.38 \
+        numpy==1.24.3 \
+        uvloop==0.17.0 \
+        || error "Failed to install core dependencies"
+
+    # Then install other packages that depend on typing-extensions
+    pip install --no-cache-dir \
+        pydantic==2.10.6 \
+        fastapi==0.115.8 \
+        sqlalchemy==2.0.38 \
         python-dotenv==1.0.0 \
         requests==2.31.0 \
         psutil==5.9.0 \
@@ -143,7 +146,7 @@ setup_python_env() {
         pyyaml==6.0.1 \
         pandas==2.0.3 \
         networkx==3.1 \
-        || error "Failed to install packages"
+        || error "Failed to install additional packages"
     
     deactivate
     
