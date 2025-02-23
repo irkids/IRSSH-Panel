@@ -181,6 +181,7 @@ setup_python_env() {
         asyncio==3.4.3 \
         aiohttp==3.8.4 \
         typing-extensions==4.12.2 \
+        pydantic==2.10.6 \
         || error "Failed to install Python packages"
     
     deactivate
