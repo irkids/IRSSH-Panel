@@ -1,55 +1,39 @@
 #!/bin/bash
 
-# IRSSH Panel Installation Script - Version 3.5.2
-VERSION="3.5.2"
-REPO_BASE="/opt/irssh-panel"
+# IRSSH Panel Installation Script
+# Version: 3.5.2
 
-# Directory structures
-declare -A DIRS=(
-    ["BACKEND_DIR"]="$REPO_BASE/backend"
-    ["FRONTEND_DIR"]="$REPO_BASE/frontend"
-    ["CONFIG_DIR"]="$REPO_BASE/config"
-    ["MODULES_DIR"]="$REPO_BASE/modules"
-    ["DOCS_DIR"]="$REPO_BASE/docs"
-    ["TESTS_DIR"]="$REPO_BASE/tests"
-    ["ANSIBLE_DIR"]="$REPO_BASE/ansible"
-    ["SCRIPTS_DIR"]="$REPO_BASE/scripts"
-    ["MONITORING_DIR"]="$REPO_BASE/monitoring"
-    ["SECURITY_DIR"]="$REPO_BASE/security"
-    ["IAC_DIR"]="$REPO_BASE/iac"
-    ["CI_CD_DIR"]="$REPO_BASE/ci_cd"
-    ["PROTOCOLS_DIR"]="$REPO_BASE/modules/protocols"
+# Base directory structure
+SCRIPT_PATH=$(readlink -f "${BASH_SOURCE[0]}")
+SCRIPT_DIR=$(dirname "$SCRIPT_PATH")
+
+# Core directories
+PANEL_DIR="/opt/irssh-panel"
+CONFIG_DIR="/etc/enhanced_ssh"
+LOG_DIR="/var/log/irssh"
+BACKUP_DIR="/opt/irssh-backups"
+TEMP_DIR="/tmp/irssh-install"
+
+# Protocol configuration
+declare -A PROTOCOLS=(
+    ["SSH"]=true
+    ["L2TP"]=true
+    ["IKEV2"]=true
+    ["CISCO"]=true
+    ["WIREGUARD"]=true
+    ["SINGBOX"]=true
 )
 
-declare -A PROD_DIRS=(
-    ["PROD_CONFIG"]="/etc/enhanced_ssh"
-    ["PROD_LOG"]="/var/log/irssh"
-    ["PROD_BACKUP"]="/opt/irssh-backups"
-    ["PROD_SSL"]="/etc/nginx/ssl"
-    ["PROD_METRICS"]="/var/log/irssh/metrics"
-)
-
-# Module URLs
-declare -A MODULE_URLS=(
-    ["vpnserver"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/vpnserver-script.py"
-    ["webport"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/webport-script.sh"
-    ["port"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/port-script.py"
-    ["dropbear"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/dropbear-script.sh"
-    ["ssh"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/ssh-script.py"
-    ["l2tp"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/l2tpv3-script.sh"
-    ["ikev2"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/ikev2-script.py"
-    ["cisco"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/cisco-script.sh"
-    ["wireguard"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/wire-script.sh"
-    ["singbox"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/singbox-script.sh"
-)
-
-# Colors for output
-declare -A COLORS=(
-    ["GREEN"]='\033[0;32m'
-    ["RED"]='\033[0;31m'
-    ["YELLOW"]='\033[1;33m'
-    ["BLUE"]='\033[0;34m'
-    ["NC"]='\033[0m'
+# Port configuration
+declare -A PORTS=(
+    ["SSH"]=22
+    ["SSH_TLS"]=443
+    ["L2TP"]=1701
+    ["IKEV2"]=500
+    ["CISCO"]=443
+    ["WIREGUARD"]=51820
+    ["SINGBOX"]=1080
+    ["WEB"]=8080
 )
 
 # Logging functions
@@ -57,319 +41,283 @@ log() {
     local level=$1
     local message=$2
     local timestamp=$(date +'%Y-%m-%d %H:%M:%S')
-    local color_code="${COLORS[${level}]:-${COLORS[NC]}}"
-    
-    mkdir -p "${PROD_DIRS[PROD_LOG]}"
-    echo -e "${color_code}[$timestamp] [$level] $message${COLORS[NC]}"
-    echo "[$timestamp] [$level] $message" >> "${PROD_DIRS[PROD_LOG]}/install.log"
+    echo "[$timestamp] [$level] $message"
+    echo "[$timestamp] [$level] $message" >> "$LOG_DIR/installation.log"
 }
 
-error() { log "ERROR" "$1"; [ "${2:-}" != "no-exit" ] && cleanup && exit 1; }
-info() { log "INFO" "$1"; }
-warn() { log "WARN" "$1"; }
-
-# System cleanup
-cleanup() {
-    info "Performing cleanup..."
-    rm -rf /tmp/irssh-install
+info() {
+    log "INFO" "$1"
 }
 
-# Pre-installation checks and setup
-prepare_system() {
-    info "Preparing system for installation..."
-    
-    export DEBIAN_FRONTEND=noninteractive
-    
-    # Add deadsnakes PPA for Python 3.8
-    apt-get update
-    apt-get install -y software-properties-common
-    add-apt-repository -y ppa:deadsnakes/ppa
-    apt-get update
-
-    # Install essential packages
-    apt-get install -y \
-        python3.8 \
-        python3.8-dev \
-        python3.8-venv \
-        python3.8-distutils \
-        python3-pip \
-        python3-apt \
-        curl \
-        wget \
-        git \
-        build-essential \
-        nginx \
-        || error "Failed to install essential packages"
-
-    # Fix pip
-    curl -sS https://bootstrap.pypa.io/get-pip.py | python3.8
-    
-    info "System preparation completed"
+error() {
+    log "ERROR" "$1"
+    if [[ "${2:-}" != "no-exit" ]]; then
+        cleanup
+        exit 1
+    fi
 }
 
-# Get user configuration
-get_config() {
-    info "Getting configuration details..."
-    
-    while [ -z "$ADMIN_USER" ]; do
-        read -p "Enter admin username: " ADMIN_USER
-    done
-    
-    while [ -z "$ADMIN_PASS" ]; do
-        read -s -p "Enter admin password: " ADMIN_PASS
-        echo
-        read -s -p "Confirm password: " ADMIN_PASS_CONFIRM
-        echo
-        [ "$ADMIN_PASS" = "$ADMIN_PASS_CONFIRM" ] || { 
-            error "Passwords don't match" "no-exit"
-            ADMIN_PASS=""
-        }
-    done
-    
-    while true; do
-        read -p "Enter web panel port (4-5 digits, Enter for random): " WEB_PORT
-        if [ -z "$WEB_PORT" ]; then
-            WEB_PORT=$(shuf -i 1234-65432 -n 1)
-            info "Generated random port: $WEB_PORT"
-            break
-        elif [[ "$WEB_PORT" =~ ^[0-9]{4,5}$ ]] && [ "$WEB_PORT" -ge 1234 ] && [ "$WEB_PORT" -le 65432 ]; then
-            break
-        fi
-        error "Invalid port number" "no-exit"
-    done
-    
-    read -p "Enable HTTPS? (y/N): " ENABLE_HTTPS
-    ENABLE_HTTPS=${ENABLE_HTTPS,,}
-    
-    read -p "Enable monitoring? (y/N): " ENABLE_MONITORING
-    ENABLE_MONITORING=${ENABLE_MONITORING,,}
-}
-
-# Initialize directories
-init_directories() {
-    info "Creating directories..."
-    
-    for dir in "${DIRS[@]}"; do
-        mkdir -p "$dir"
-        chmod 755 "$dir"
-    done
-    
-    for dir in "${PROD_DIRS[@]}"; do
-        mkdir -p "$dir"
-        chmod 700 "$dir"
-    done
-}
-
-# Setup Python virtual environment and install dependencies
-setup_python_env() {
-    info "Setting up Python environment for modules..."
-    
-    cd "${DIRS[MODULES_DIR]}" || error "Failed to access modules directory"
-    
-    # Create virtual environment
-    python3.8 -m venv .venv
-    source .venv/bin/activate
-    
-    # Install required packages with specific versions
-    pip install --no-cache-dir \
-        uvloop==0.17.0 \
-        python-dotenv==1.0.0 \
-        psutil==5.9.0 \
-        numpy==1.24.3 \
-        pandas==2.0.3 \
-        networkx==3.1 \
-        asyncio==3.4.3 \
-        aiohttp==3.8.4 \
-        typing-extensions==4.12.2 \
-        pydantic==2.10.6 \
-        || error "Failed to install Python packages"
-    
-    deactivate
-}
-
-# Install module
+# Installation module function
 install_module() {
     local module_name=$1
-    local script_url="${MODULE_URLS[$module_name]}"
-    local target_dir="${DIRS[MODULES_DIR]}/$module_name"
-    local script_ext="${script_url##*.}"
+    local module_script="$SCRIPT_DIR/modules/$module_name/install.sh"
+    
+    if [[ ! -f "$module_script" ]]; then
+        error "Module installation script not found: $module_script"
+        return 1
+    }
     
     info "Installing module: $module_name"
-    mkdir -p "$target_dir"
-    cd "$target_dir" || error "Failed to access module directory"
-
-    # Verify URL is valid
-    info "Downloading script from: $script_url"
-    if ! wget -q --spider "$script_url"; then
-        error "Invalid module URL: $script_url" "no-exit"
-        return 1
-    }
+    bash "$module_script"
+    local result=$?
     
-    # Download script with proper extension
-    local script_name="install.$script_ext"
-    wget -q "$script_url" -O "$script_name" || error "Failed to download $module_name script"
-    chmod +x "$script_name"
-
-    # Before executing, verify content exists
-    if [ ! -s "$script_name" ]; then
-        error "Downloaded script is empty" "no-exit"
+    if [[ $result -ne 0 ]]; then
+        error "Failed to install module: $module_name"
         return 1
-    }
+    fi
     
-    case "$script_ext" in
-        "py")
-            source "${DIRS[MODULES_DIR]}/.venv/bin/activate"
-            # Setup basic Python environment first
-            pip install uvloop python-dotenv psutil || error "Failed to install Python dependencies"
-            # Execute script
-            python3 "$script_name" 2>&1 | tee -a "${PROD_DIRS[PROD_LOG]}/module_install.log" || error "Failed to execute $module_name"
-            deactivate
-            ;;
-        "sh")
-            bash "$script_name" 2>&1 | tee -a "${PROD_DIRS[PROD_LOG]}/module_install.log" || error "Failed to execute $module_name"
-            ;;
-        *)
-            error "Unsupported script type: $script_ext"
-            ;;
-    esac
+    info "Successfully installed module: $module_name"
+    return 0
 }
 
-# Setup web server
-setup_nginx() {
-    info "Setting up web server..."
+# Protocol installation functions
+install_ssh() {
+    info "Installing SSH protocol..."
     
-    if [ "$ENABLE_HTTPS" = "y" ]; then
-        mkdir -p "${PROD_DIRS[PROD_SSL]}/nginx"
-        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-            -keyout "${PROD_DIRS[PROD_SSL]}/nginx/server.key" \
-            -out "${PROD_DIRS[PROD_SSL]}/nginx/server.crt" \
-            -subj "/CN=irssh-panel"
-    fi
+    # Install SSH packages
+    apt-get install -y openssh-server stunnel4 || error "Failed to install SSH packages"
+    
+    # Configure SSH
+    cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
+    cat > /etc/ssh/sshd_config << EOL
+Port ${PORTS[SSH]}
+PermitRootLogin yes
+PasswordAuthentication yes
+X11Forwarding yes
+PrintMotd no
 
-    cat > /etc/nginx/sites-available/irssh-panel << EOL
-server {
-    listen ${WEB_PORT};
-    server_name _;
-    root ${DIRS[FRONTEND_DIR]}/dist;
-    index index.html;
+MaxAuthTries 6
+LoginGraceTime 30
+PermitEmptyPasswords no
+ClientAliveInterval 300
+ClientAliveCountMax 3
 
-    location / {
-        try_files \$uri \$uri/ /index.html;
-    }
+SyslogFacility AUTH
+LogLevel INFO
+EOL
 
-    location /api {
-        proxy_pass http://localhost:8000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host \$host;
-    }
+    # Configure stunnel for SSL
+    mkdir -p /etc/stunnel
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout /etc/stunnel/stunnel.pem \
+        -out /etc/stunnel/stunnel.pem \
+        -subj "/CN=localhost"
+    
+    chmod 600 /etc/stunnel/stunnel.pem
+    
+    cat > /etc/stunnel/stunnel.conf << EOL
+pid = /var/run/stunnel4/stunnel.pid
+setuid = stunnel4
+setgid = stunnel4
+cert = /etc/stunnel/stunnel.pem
+socket = a:SO_REUSEADDR=1
+socket = l:TCP_NODELAY=1
+socket = r:TCP_NODELAY=1
+
+[ssh-tls]
+client = no
+accept = ${PORTS[SSH_TLS]}
+connect = 127.0.0.1:${PORTS[SSH]}
+EOL
+
+    systemctl restart ssh
+    systemctl enable stunnel4
+    systemctl restart stunnel4
+}
+
+install_l2tp() {
+    info "Installing L2TP/IPsec..."
+    
+    apt-get install -y strongswan xl2tpd || error "Failed to install L2TP packages"
+    
+    # Generate PSK
+    PSK=$(openssl rand -base64 32)
+    
+    # Configure strongSwan
+    cat > /etc/ipsec.conf << EOL
+config setup
+    charondebug="ike 2, knl 2"
+    uniqueids=no
+
+conn L2TP-PSK
+    authby=secret
+    auto=add
+    keyingtries=3
+    rekey=no
+    ikelifetime=8h
+    keylife=1h
+    type=transport
+    left=%defaultroute
+    leftprotoport=17/1701
+    right=%any
+    rightprotoport=17/%any
+EOL
+
+    echo ": PSK \"$PSK\"" > /etc/ipsec.secrets
+    chmod 600 /etc/ipsec.secrets
+    
+    systemctl restart strongswan
+    systemctl enable strongswan
+}
+
+install_wireguard() {
+    info "Installing WireGuard..."
+    
+    apt-get install -y wireguard || error "Failed to install WireGuard"
+    
+    # Generate keys
+    wg genkey | tee /etc/wireguard/server_private.key | wg pubkey > /etc/wireguard/server_public.key
+    chmod 600 /etc/wireguard/server_private.key
+    
+    # Configure WireGuard
+    cat > /etc/wireguard/wg0.conf << EOL
+[Interface]
+PrivateKey = $(cat /etc/wireguard/server_private.key)
+Address = 10.66.66.1/24
+ListenPort = ${PORTS[WIREGUARD]}
+PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+EOL
+
+    systemctl enable wg-quick@wg0
+    systemctl start wg-quick@wg0
+}
+
+install_singbox() {
+    info "Installing Sing-Box..."
+    
+    local ARCH="amd64"
+    local VERSION="1.7.0"
+    local URL="https://github.com/SagerNet/sing-box/releases/download/v${VERSION}/sing-box-${VERSION}-linux-${ARCH}.tar.gz"
+    
+    wget "$URL" -O /tmp/sing-box.tar.gz || error "Failed to download Sing-Box"
+    tar -xzf /tmp/sing-box.tar.gz -C /usr/local/bin/
+    chmod +x /usr/local/bin/sing-box
+    
+    # Configure Sing-Box
+    mkdir -p /etc/sing-box
+    cat > /etc/sing-box/config.json << EOL
+{
+    "log": {
+        "level": "info",
+        "output": "/var/log/sing-box.log"
+    },
+    "inbounds": [
+        {
+            "type": "mixed",
+            "listen": "::",
+            "listen_port": ${PORTS[SINGBOX]}
+        }
+    ]
 }
 EOL
 
-    ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
-    rm -f /etc/nginx/sites-enabled/default
-    
-    systemctl restart nginx
-    systemctl enable nginx
+    systemctl enable sing-box
+    systemctl start sing-box
 }
 
-# Setup security
-setup_security() {
-    info "Setting up security measures..."
-    
-    apt-get install -y fail2ban ufw || error "Failed to install security packages"
-    
-    ufw default deny incoming
-    ufw default allow outgoing
-    
-    # Allow configured ports
-    ufw allow "$WEB_PORT"
-    
-    echo "y" | ufw enable
-}
-
-# Setup monitoring if enabled
+# Setup monitoring
 setup_monitoring() {
     if [ "$ENABLE_MONITORING" != "y" ]; then
         return 0
     fi
     
-    info "Setting up monitoring system..."
+    apt-get install -y prometheus-node-exporter collectd || error "Failed to install monitoring tools"
     
-    apt-get install -y prometheus prometheus-node-exporter grafana || error "Failed to install monitoring tools"
-
-    systemctl restart prometheus grafana-server
-    systemctl enable prometheus grafana-server
-}
-
-# Save installation info
-save_install_info() {
-    local info_file="${PROD_DIRS[PROD_CONFIG]}/install_info.yml"
+    mkdir -p /var/log/irssh/metrics
     
-    cat > "$info_file" << EOL
-version: $VERSION
-install_date: $(date +'%Y-%m-%d %H:%M:%S')
-admin_user: $ADMIN_USER
-web_port: $WEB_PORT
-https_enabled: ${ENABLE_HTTPS:-n}
-monitoring_enabled: ${ENABLE_MONITORING:-n}
+    # Configure node exporter
+    cat > /etc/systemd/system/node-exporter.service << EOL
+[Unit]
+Description=Prometheus Node Exporter
+After=network.target
+
+[Service]
+Type=simple
+User=node_exporter
+ExecStart=/usr/bin/node_exporter
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
 EOL
 
-    chmod 600 "$info_file"
+    systemctl enable node-exporter
+    systemctl start node-exporter
 }
 
-# Main installation
+# Main setup function
+setup_panel() {
+    info "Setting up IRSSH Panel..."
+    
+    # Create directories
+    mkdir -p "$PANEL_DIR"/{frontend,backend,config}
+    
+    # Setup backend
+    cd "$PANEL_DIR/backend" || error "Failed to access backend directory"
+    npm install
+    
+    # Setup frontend
+    cd "$PANEL_DIR/frontend" || error "Failed to access frontend directory"
+    npm install
+    npm run build
+    
+    # Configure nginx
+    cat > /etc/nginx/sites-available/irssh-panel << EOL
+server {
+    listen ${PORTS[WEB]};
+    server_name _;
+    
+    root $PANEL_DIR/frontend/dist;
+    index index.html;
+    
+    location /api {
+        proxy_pass http://localhost:3000;
+    }
+}
+EOL
+
+    ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
+    systemctl restart nginx
+}
+
+# Main installation function
 main() {
-    trap cleanup EXIT
+    info "Starting IRSSH Panel installation..."
     
-    info "Starting IRSSH Panel installation v$VERSION"
+    # Initial setup
+    mkdir -p "$LOG_DIR"
+    mkdir -p "$CONFIG_DIR"
     
-    prepare_system
-    get_config
-    init_directories
-    setup_python_env
+    # Install base requirements
+    apt-get update
+    apt-get install -y nginx nodejs npm postgresql || error "Failed to install base requirements"
     
-    # Install all modules
-    for module in "${!MODULE_URLS[@]}"; do
-        install_module "$module" "${MODULE_URLS[$module]}"
+    # Install protocols
+    for protocol in "${!PROTOCOLS[@]}"; do
+        if [ "${PROTOCOLS[$protocol]}" = true ]; then
+            "install_${protocol,,}" || error "Failed to install $protocol"
+        fi
     done
     
-    setup_nginx
-    setup_security
+    # Setup panel
+    setup_panel
     
-    [ "$ENABLE_MONITORING" = "y" ] && setup_monitoring
-    
-    save_install_info
+    # Setup monitoring if enabled
+    setup_monitoring
     
     info "Installation completed successfully!"
-    
-    # Display installation summary
-    cat << EOL
-
-IRSSH Panel Installation Summary
-------------------------------
-Version: $VERSION
-Web Panel URL: http${ENABLE_HTTPS:+s}://YOUR-SERVER-IP:$WEB_PORT
-Admin Username: $ADMIN_USER
-
-Installation Locations:
-- Configuration: ${PROD_DIRS[PROD_CONFIG]}
-- Logs: ${PROD_DIRS[PROD_LOG]}
-- Backups: ${PROD_DIRS[PROD_BACKUP]}
-
-Enabled Features:
-- HTTPS: ${ENABLE_HTTPS:-n}
-- Monitoring: ${ENABLE_MONITORING:-n}
-
-Next Steps:
-1. Access the web panel using the URL above
-2. Log in with your admin credentials
-3. Configure additional users and settings
-4. Check the logs at ${PROD_DIRS[PROD_LOG]}
-
-EOL
 }
 
-# Start installation
+# Run main installation
 main
