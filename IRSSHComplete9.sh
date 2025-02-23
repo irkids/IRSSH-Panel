@@ -79,29 +79,13 @@ cleanup() {
 prepare_system() {
     info "Preparing system for installation..."
     
-    # Fix apt_pkg error first
-    rm -f /usr/lib/python3/dist-packages/apt_pkg.cpython*
-    rm -f /usr/lib/python3/dist-packages/command_not_found
-    apt-get remove -y python3-apt
-    apt-get install -y python3-apt --reinstall
-    
     export DEBIAN_FRONTEND=noninteractive
     
-    # Fix apt_pkg error
-    apt-get install -y -qq \
-        python3-apt \
-        python3-distutils \
-        python3-pkg-resources \
-        || error "Failed to install Python apt packages"
-
-    # Remove problematic Python packages
-    rm -rf /usr/lib/python3/dist-packages/command_not_found
-    
-    # Update package lists
+    # Fix sources first
     apt-get update -qq
     
-    # Install essential packages
-    apt-get install -y -qq \
+    # Install essential packages without removing existing ones
+    apt-get install -y --no-remove \
         software-properties-common \
         apt-transport-https \
         ca-certificates \
@@ -113,12 +97,16 @@ prepare_system() {
         python3.8-dev \
         python3.8-venv \
         python3.8-distutils \
+        python3-apt \
         || error "Failed to install essential packages"
 
-    # Create symbolic links
-    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.8 1
+    # Fix apt_pkg issues if they exist
+    if ! python3 -c "import apt_pkg" &> /dev/null; then
+        ln -sf /usr/lib/python3/dist-packages/apt_pkg.cpython-*-x86_64-linux-gnu.so \
+            /usr/lib/python3/dist-packages/apt_pkg.so
+    fi
 
-    # Fix pip issues
+    # Fix pip
     curl -sS https://bootstrap.pypa.io/get-pip.py | python3.8
     
     info "System preparation completed"
