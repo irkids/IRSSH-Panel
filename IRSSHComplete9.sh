@@ -80,15 +80,32 @@ prepare_system() {
     info "Preparing system for installation..."
     
     export DEBIAN_FRONTEND=noninteractive
-    
-    # Fix sources first
+
+    # Add default repository
+    cat > /etc/apt/sources.list << EOL
+deb http://archive.ubuntu.com/ubuntu/ jammy main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu/ jammy-updates main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu/ jammy-backports main restricted universe multiverse
+deb http://security.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse
+EOL
+
+    # Update package information
+    apt-get clean
     apt-get update -qq
     
-    # Install essential packages without removing existing ones
+    # Install essential packages
     apt-get install -y --no-remove \
         software-properties-common \
         apt-transport-https \
         ca-certificates \
+        ubuntu-keyring \
+        || error "Failed to install essential packages"
+
+    add-apt-repository -y universe
+    apt-get update -qq
+
+    # Now install Python and other required packages
+    apt-get install -y --no-remove \
         curl \
         wget \
         git \
@@ -98,13 +115,7 @@ prepare_system() {
         python3.8-venv \
         python3.8-distutils \
         python3-apt \
-        || error "Failed to install essential packages"
-
-    # Fix apt_pkg issues if they exist
-    if ! python3 -c "import apt_pkg" &> /dev/null; then
-        ln -sf /usr/lib/python3/dist-packages/apt_pkg.cpython-*-x86_64-linux-gnu.so \
-            /usr/lib/python3/dist-packages/apt_pkg.so
-    fi
+        || error "Failed to install Python packages"
 
     # Fix pip
     curl -sS https://bootstrap.pypa.io/get-pip.py | python3.8
