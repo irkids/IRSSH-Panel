@@ -67,11 +67,16 @@ cleanup() {
 }
 
 get_server_ip() {
-    SERVER_IP=$(curl -s ifconfig.me)
-    if [ -z "$SERVER_IP" ]; then
-        SERVER_IP=$(ip route get 8.8.8.8 | awk '{print $7; exit}')
+    # Get IPv4
+    SERVER_IPv4=$(curl -s4 ifconfig.me)
+    if [ -z "$SERVER_IPv4" ]; then
+        SERVER_IPv4=$(ip -4 route get 8.8.8.8 | awk '{print $7; exit}')
     fi
-    if [ -z "$SERVER_IP" ]; then
+
+    # Get IPv6 (optional)
+    SERVER_IPv6=$(curl -s6 ifconfig.me)
+    
+    if [ -z "$SERVER_IPv4" ] && [ -z "$SERVER_IPv6" ]; then
         error "Could not determine server IP address"
     fi
 }
@@ -397,10 +402,19 @@ install_singbox() {
     local URL="https://github.com/SagerNet/sing-box/releases/download/v${VERSION}/sing-box-${VERSION}-linux-${ARCH}.tar.gz"
     
     wget "$URL" -O /tmp/sing-box.tar.gz || error "Failed to download Sing-Box"
-    tar -xzf /tmp/sing-box.tar.gz -C /usr/local/bin/
-    chmod +x /usr/local/bin/sing-box
     
-    mkdir -p /etc/sing-box
+    # Create temp directory for extraction
+    mkdir -p /tmp/sing-box
+    tar -xzf /tmp/sing-box.tar.gz -C /tmp/sing-box
+    
+    # Find and copy the binary
+    find /tmp/sing-box -name "sing-box" -type f -exec cp {} /usr/local/bin/ \;
+    chmod +x /usr/local/bin/sing-box || error "Failed to set permissions for sing-box"
+    
+    # Verify installation
+    if ! [ -x "$(command -v sing-box)" ]; then
+        error "Sing-Box installation failed"
+    fi
     
     cat > /etc/sing-box/config.json << EOL
 {
@@ -533,7 +547,9 @@ main() {
 IRSSH Panel Installation Summary
 -------------------------------
 Panel Version: 3.5.2
-Web Interface: http://${SERVER_IP}:${PORTS[WEB]}
+Web Interface: 
+$([ ! -z "$SERVER_IPv4" ] && echo "IPv4: http://${SERVER_IPv4}:${PORTS[WEB]}")
+$([ ! -z "$SERVER_IPv6" ] && echo "IPv6: http://${SERVER_IPv6}:${PORTS[WEB]}")
 
 Admin Credentials:
 Username: ${ADMIN_USER}
