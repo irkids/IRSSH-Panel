@@ -190,26 +190,43 @@ setup_python_env() {
 # Install module
 install_module() {
     local module_name=$1
-    local script_url=$2
+    local script_url="${MODULE_URLS[$module_name]}"
     local target_dir="${DIRS[MODULES_DIR]}/$module_name"
     local script_ext="${script_url##*.}"
     
     info "Installing module: $module_name"
     mkdir -p "$target_dir"
     cd "$target_dir" || error "Failed to access module directory"
+
+    # Verify URL is valid
+    info "Downloading script from: $script_url"
+    if ! wget -q --spider "$script_url"; then
+        error "Invalid module URL: $script_url" "no-exit"
+        return 1
+    }
     
-    # Download script
-    wget -q "$script_url" -O "install.$script_ext" || error "Failed to download $module_name script"
-    chmod +x "install.$script_ext"
+    # Download script with proper extension
+    local script_name="install.$script_ext"
+    wget -q "$script_url" -O "$script_name" || error "Failed to download $module_name script"
+    chmod +x "$script_name"
+
+    # Before executing, verify content exists
+    if [ ! -s "$script_name" ]; then
+        error "Downloaded script is empty" "no-exit"
+        return 1
+    }
     
     case "$script_ext" in
         "py")
             source "${DIRS[MODULES_DIR]}/.venv/bin/activate"
-            python3 "install.$script_ext" || error "Failed to execute Python script: $module_name"
+            # Setup basic Python environment first
+            pip install uvloop python-dotenv psutil || error "Failed to install Python dependencies"
+            # Execute script
+            python3 "$script_name" 2>&1 | tee -a "${PROD_DIRS[PROD_LOG]}/module_install.log" || error "Failed to execute $module_name"
             deactivate
             ;;
         "sh")
-            bash "install.$script_ext" || error "Failed to execute shell script: $module_name"
+            bash "$script_name" 2>&1 | tee -a "${PROD_DIRS[PROD_LOG]}/module_install.log" || error "Failed to execute $module_name"
             ;;
         *)
             error "Unsupported script type: $script_ext"
