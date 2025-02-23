@@ -1,13 +1,4 @@
 #!/bin/bash
-import sys
-try:
-    from dotenv import load_dotenv
-except ImportError:
-    import pip
-    pip.main(['install', 'python-dotenv'])
-    from dotenv import load_dotenv
-
-load_dotenv()
 
 # Advanced L2TPv3/IPSec VPN Installation Script with Multi-Protocol Support
 # Version: 2.0.0
