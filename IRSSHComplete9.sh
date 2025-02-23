@@ -4,7 +4,7 @@
 VERSION="3.5.2"
 REPO_BASE="/opt/irssh-panel"
 
-# Directory structure
+# Directory structures
 declare -A DIRS=(
     ["BACKEND_DIR"]="$REPO_BASE/backend"
     ["FRONTEND_DIR"]="$REPO_BASE/frontend"
@@ -33,8 +33,8 @@ declare -A PROD_DIRS=(
 declare -A MODULE_URLS=(
     ["vpnserver"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/vpnserver-script.py"
     ["webport"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/webport-script.sh"
-    ["dropbear"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/dropbear-script.sh"
     ["port"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/port-script.py"
+    ["dropbear"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/dropbear-script.sh"
     ["ssh"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/ssh-script.py"
     ["l2tp"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/l2tpv3-script.sh"
     ["ikev2"]="https://raw.githubusercontent.com/irkids/IRSSH-Panel/refs/heads/main/modules/ikev2-script.py"
@@ -72,7 +72,6 @@ warn() { log "WARN" "$1"; }
 cleanup() {
     info "Performing cleanup..."
     rm -rf /tmp/irssh-install
-    apt-get clean
 }
 
 # Pre-installation checks and setup
@@ -80,114 +79,32 @@ prepare_system() {
     info "Preparing system for installation..."
     
     export DEBIAN_FRONTEND=noninteractive
-
-    # Update package information
-    apt-get update -qq
-
-    # Install basic requirements first
-    apt-get install -y --no-remove \
-        software-properties-common \
-        apt-transport-https \
-        ca-certificates \
-        curl \
-        wget \
-        git \
-        build-essential \
-        || error "Failed to install basic packages"
-
+    
     # Add deadsnakes PPA for Python 3.8
+    apt-get update
+    apt-get install -y software-properties-common
     add-apt-repository -y ppa:deadsnakes/ppa
-    apt-get update -qq
+    apt-get update
 
-    # Install Python packages
-    apt-get install -y --no-remove \
+    # Install essential packages
+    apt-get install -y \
         python3.8 \
         python3.8-dev \
         python3.8-venv \
         python3.8-distutils \
         python3-pip \
         python3-apt \
-        || error "Failed to install Python packages"
+        curl \
+        wget \
+        git \
+        build-essential \
+        nginx \
+        || error "Failed to install essential packages"
 
-    # Update pip
+    # Fix pip
     curl -sS https://bootstrap.pypa.io/get-pip.py | python3.8
     
     info "System preparation completed"
-}
-
-# Python environment setup
-setup_python_env() {
-    info "Setting up Python environment..."
-    
-    cd "${DIRS[MODULES_DIR]}" || error "Failed to access modules directory"
-    
-    # Create and activate virtual environment
-    python3.8 -m venv .venv
-    source .venv/bin/activate
-    
-    # First install core dependencies with specific versions
-    pip install --no-cache-dir \
-        typing-extensions==4.12.2 \
-        numpy==1.24.3 \
-        uvloop==0.17.0 \
-        || error "Failed to install core dependencies"
-
-    # Then install other packages that depend on typing-extensions
-    pip install --no-cache-dir \
-        pydantic==2.10.6 \
-        fastapi==0.115.8 \
-        sqlalchemy==2.0.38 \
-        python-dotenv==1.0.0 \
-        requests==2.31.0 \
-        psutil==5.9.0 \
-        pymongo==4.3.3 \
-        redis==4.5.1 \
-        aiohttp==3.8.4 \
-        pyyaml==6.0.1 \
-        pandas==2.0.3 \
-        networkx==3.1 \
-        || error "Failed to install additional packages"
-    
-    deactivate
-    
-    info "Python environment setup completed"
-}
-
-# Install module function
-install_module() {
-    local module_name=$1
-    local script_url="${MODULE_URLS[$module_name]}"
-    local target_dir="${DIRS[MODULES_DIR]}/$module_name"
-    
-    if [ -z "$script_url" ]; then
-        error "Module URL not found: $module_name" "no-exit"
-        return 1
-    fi
-    
-    info "Installing module: $module_name"
-    mkdir -p "$target_dir"
-    cd "$target_dir" || error "Failed to access module directory"
-    
-    local script_ext="${script_url##*.}"
-    local script_name="install.$script_ext"
-    wget -q "$script_url" -O "$script_name" || error "Failed to download $module_name script"
-    chmod +x "$script_name"
-    
-    case "$script_ext" in
-        "py")
-            source "${DIRS[MODULES_DIR]}/.venv/bin/activate"
-            python3 "$script_name"
-            local result=$?
-            deactivate
-            [ $result -ne 0 ] && error "Failed to execute Python script: $module_name"
-            ;;
-        "sh")
-            bash "$script_name" || error "Failed to execute shell script: $module_name"
-            ;;
-        *)
-            error "Unsupported script type: $script_ext"
-            ;;
-    esac
 }
 
 # Get user configuration
@@ -243,6 +160,131 @@ init_directories() {
     done
 }
 
+# Setup Python virtual environment and install dependencies
+setup_python_env() {
+    info "Setting up Python environment for modules..."
+    
+    cd "${DIRS[MODULES_DIR]}" || error "Failed to access modules directory"
+    
+    # Create virtual environment
+    python3.8 -m venv .venv
+    source .venv/bin/activate
+    
+    # Install required packages with specific versions
+    pip install --no-cache-dir \
+        uvloop==0.17.0 \
+        python-dotenv==1.0.0 \
+        psutil==5.9.0 \
+        numpy==1.24.3 \
+        pandas==2.0.3 \
+        networkx==3.1 \
+        asyncio==3.4.3 \
+        aiohttp==3.8.4 \
+        typing-extensions==4.12.2 \
+        || error "Failed to install Python packages"
+    
+    deactivate
+}
+
+# Install module
+install_module() {
+    local module_name=$1
+    local script_url=$2
+    local target_dir="${DIRS[MODULES_DIR]}/$module_name"
+    local script_ext="${script_url##*.}"
+    
+    info "Installing module: $module_name"
+    mkdir -p "$target_dir"
+    cd "$target_dir" || error "Failed to access module directory"
+    
+    # Download script
+    wget -q "$script_url" -O "install.$script_ext" || error "Failed to download $module_name script"
+    chmod +x "install.$script_ext"
+    
+    case "$script_ext" in
+        "py")
+            source "${DIRS[MODULES_DIR]}/.venv/bin/activate"
+            python3 "install.$script_ext" || error "Failed to execute Python script: $module_name"
+            deactivate
+            ;;
+        "sh")
+            bash "install.$script_ext" || error "Failed to execute shell script: $module_name"
+            ;;
+        *)
+            error "Unsupported script type: $script_ext"
+            ;;
+    esac
+}
+
+# Setup web server
+setup_nginx() {
+    info "Setting up web server..."
+    
+    if [ "$ENABLE_HTTPS" = "y" ]; then
+        mkdir -p "${PROD_DIRS[PROD_SSL]}/nginx"
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+            -keyout "${PROD_DIRS[PROD_SSL]}/nginx/server.key" \
+            -out "${PROD_DIRS[PROD_SSL]}/nginx/server.crt" \
+            -subj "/CN=irssh-panel"
+    fi
+
+    cat > /etc/nginx/sites-available/irssh-panel << EOL
+server {
+    listen ${WEB_PORT};
+    server_name _;
+    root ${DIRS[FRONTEND_DIR]}/dist;
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    location /api {
+        proxy_pass http://localhost:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+    }
+}
+EOL
+
+    ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
+    rm -f /etc/nginx/sites-enabled/default
+    
+    systemctl restart nginx
+    systemctl enable nginx
+}
+
+# Setup security
+setup_security() {
+    info "Setting up security measures..."
+    
+    apt-get install -y fail2ban ufw || error "Failed to install security packages"
+    
+    ufw default deny incoming
+    ufw default allow outgoing
+    
+    # Allow configured ports
+    ufw allow "$WEB_PORT"
+    
+    echo "y" | ufw enable
+}
+
+# Setup monitoring if enabled
+setup_monitoring() {
+    if [ "$ENABLE_MONITORING" != "y" ]; then
+        return 0
+    fi
+    
+    info "Setting up monitoring system..."
+    
+    apt-get install -y prometheus prometheus-node-exporter grafana || error "Failed to install monitoring tools"
+
+    systemctl restart prometheus grafana-server
+    systemctl enable prometheus grafana-server
+}
+
 # Save installation info
 save_install_info() {
     local info_file="${PROD_DIRS[PROD_CONFIG]}/install_info.yml"
@@ -265,23 +307,21 @@ main() {
     
     info "Starting IRSSH Panel installation v$VERSION"
     
-    # Initial setup
     prepare_system
     get_config
     init_directories
     setup_python_env
     
-    # Install base modules
-    for module in "vpnserver" "webport" "port" "dropbear"; do
-        install_module "$module"
+    # Install all modules
+    for module in "${!MODULE_URLS[@]}"; do
+        install_module "$module" "${MODULE_URLS[$module]}"
     done
     
-    # Install VPN protocols
-    for module in "ssh" "l2tp" "ikev2" "cisco" "wireguard" "singbox"; do
-        install_module "$module"
-    done
+    setup_nginx
+    setup_security
     
-    # Save installation info
+    [ "$ENABLE_MONITORING" = "y" ] && setup_monitoring
+    
     save_install_info
     
     info "Installation completed successfully!"
