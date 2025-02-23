@@ -121,19 +121,16 @@ setup_python_env() {
     
     cd "${DIRS[MODULES_DIR]}" || error "Failed to access modules directory"
     
-    # Create virtual environment
+    # Create and activate virtual environment
     python3.8 -m venv .venv
     source .venv/bin/activate
     
-    # Upgrade pip and install setuptools first
-    pip install --no-cache-dir --upgrade pip setuptools wheel
+    # Remove all packages first
+    pip uninstall -y typing-extensions numpy tensorflow pandas networkx sqlalchemy fastapi pydantic pydantic-core
 
-    # Remove all potentially conflicting packages
-    pip uninstall -y typing-extensions sqlalchemy fastapi pydantic pydantic-core tensorflow
-
-    # Install packages in correct order with compatible versions
+    # Install packages with specific versions to avoid conflicts
     pip install --no-cache-dir \
-        typing-extensions>=4.12.2 \
+        typing-extensions==4.12.2 \
         pydantic>=2.10.6 \
         fastapi>=0.115.8 \
         sqlalchemy>=2.0.38 \
@@ -146,8 +143,7 @@ setup_python_env() {
         pyyaml==6.0.1 \
         pandas==2.0.3 \
         networkx==3.1 \
-        uvloop==0.21.0 \
-        || error "Failed to install main Python packages"
+        || error "Failed to install packages"
     
     deactivate
     
