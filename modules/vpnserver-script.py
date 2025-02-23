@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
+import logging
+import os
 import sys
-try:
-    from dotenv import load_dotenv
-except ImportError:
-    import pip
-    pip.main(['install', 'python-dotenv'])
-    from dotenv import load_dotenv
+from dotenv import load_dotenv
 
-load_dotenv()
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('/var/log/irssh/vpnserver.log'),
+        logging.StreamHandler()
+    ]
+)
 
 def install_prerequisites():
     import subprocess
-    import sys
 
     prerequisites = [
         'uvloop',
