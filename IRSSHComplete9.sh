@@ -24,14 +24,13 @@ declare -A PROTOCOLS=(
 # Port configuration
 declare -A PORTS=(
     ["SSH"]=22
-    ["SSH_TLS"]=443
+    ["SSH_TLS"]=444
     ["WEBSOCKET"]=2082
     ["L2TP"]=1701
     ["IKEV2"]=500
-    ["CISCO"]=443
+    ["CISCO"]=85
     ["WIREGUARD"]=51820
     ["SINGBOX"]=1080
-    ["WEB"]=8080
     ["UDPGW"]=7300
 )
 
@@ -39,7 +38,7 @@ declare -A PORTS=(
 ADMIN_USER=""
 ADMIN_PASS=""
 ENABLE_MONITORING="n"
-ENABLE_HTTPS="n"
+SERVER_IP=""
 
 # Logging functions
 log() {
@@ -67,7 +66,16 @@ cleanup() {
     rm -rf "$TEMP_DIR"
 }
 
-# Get initial configuration
+get_server_ip() {
+    SERVER_IP=$(curl -s ifconfig.me)
+    if [ -z "$SERVER_IP" ]; then
+        SERVER_IP=$(ip route get 8.8.8.8 | awk '{print $7; exit}')
+    fi
+    if [ -z "$SERVER_IP" ]; then
+        error "Could not determine server IP address"
+    fi
+}
+
 get_config() {
     info "Getting initial configuration..."
     
@@ -82,15 +90,25 @@ get_config() {
         read -s -p "Password cannot be empty. Enter admin password: " ADMIN_PASS
         echo
     done
-    
-    read -p "Enable HTTPS? (y/N): " ENABLE_HTTPS
-    ENABLE_HTTPS=${ENABLE_HTTPS,,}
+
+    while true; do
+        read -p "Enter web panel port (4-5 digits) or press Enter for random port: " WEB_PORT
+        if [ -z "$WEB_PORT" ]; then
+            WEB_PORT=$(shuf -i 1234-65432 -n 1)
+            info "Generated random port: $WEB_PORT"
+            break
+        elif [[ "$WEB_PORT" =~ ^[0-9]{4,5}$ ]] && [ "$WEB_PORT" -ge 1234 ] && [ "$WEB_PORT" -le 65432 ]; then
+            break
+        else
+            error "Invalid port number. Must be between 1234 and 65432" "no-exit"
+        fi
+    done
+    PORTS["WEB"]=$WEB_PORT
     
     read -p "Enable monitoring? (y/N): " ENABLE_MONITORING
     ENABLE_MONITORING=${ENABLE_MONITORING,,}
 }
 
-# Protocol installation functions
 install_ssh() {
     info "Installing SSH protocol..."
     
@@ -138,7 +156,6 @@ accept = ${PORTS[SSH_TLS]}
 connect = 127.0.0.1:${PORTS[SSH]}
 EOL
 
-    # Configure WebSocket
     cat > /etc/systemd/system/websocket.service << EOL
 [Unit]
 Description=WebSocket for SSH
@@ -168,7 +185,6 @@ install_l2tp() {
     
     apt-get install -y strongswan xl2tpd || error "Failed to install L2TP packages"
     
-    # Generate PSK
     PSK=$(openssl rand -base64 32)
     
     cat > /etc/ipsec.conf << EOL
@@ -389,28 +405,28 @@ install_singbox() {
     cat > /etc/sing-box/config.json << EOL
 {
     "log": {
-        "level": "info",
-        "output": "/var/log/sing-box.log"
-    },
-    "inbounds": [
-        {
-            "type": "mixed",
-            "listen": "::",
-            "listen_port": ${PORTS[SINGBOX]},
-            "sniff": true,
-            "sniff_override_destination": false
-        }
-    ],
-    "outbounds": [
-        {
-            "type": "direct",
-            "tag": "direct"
-        }
-    ]
+       "level": "info",
+       "output": "/var/log/sing-box.log"
+   },
+   "inbounds": [
+       {
+           "type": "mixed",
+           "listen": "::",
+           "listen_port": ${PORTS[SINGBOX]},
+           "sniff": true,
+           "sniff_override_destination": false
+       }
+   ],
+   "outbounds": [
+       {
+           "type": "direct",
+           "tag": "direct"
+       }
+   ]
 }
 EOL
 
-    cat > /etc/systemd/system/sing-box.service << EOL
+   cat > /etc/systemd/system/sing-box.service << EOL
 [Unit]
 Description=Sing-Box Service
 After=network.target
@@ -425,11 +441,11 @@ Restart=always
 WantedBy=multi-user.target
 EOL
 
-    systemctl daemon-reload
-    systemctl enable sing-box
-    systemctl start sing-box
-    
-    info "Sing-Box installation completed"
+   systemctl daemon-reload
+   systemctl enable sing-box
+   systemctl start sing-box
+   
+   info "Sing-Box installation completed"
 }
 
 setup_monitoring() {
@@ -486,24 +502,20 @@ EOL
    info "Monitoring setup completed"
 }
 
-# Main installation function
 main() {
    info "Starting IRSSH Panel installation..."
    
-   # Create required directories
    mkdir -p "$LOG_DIR"
    mkdir -p "$CONFIG_DIR"
    mkdir -p "$PANEL_DIR"
    mkdir -p "$TEMP_DIR"
    
-   # Get initial configuration
+   get_server_ip
    get_config
    
-   # Install base requirements
    apt-get update || error "Failed to update package lists"
    apt-get install -y nginx nodejs npm postgresql || error "Failed to install base requirements"
    
-   # Install enabled protocols
    for protocol in "${!PROTOCOLS[@]}"; do
        if [ "${PROTOCOLS[$protocol]}" = true ]; then
            info "Installing ${protocol}..."
@@ -511,21 +523,17 @@ main() {
        fi
    done
    
-   # Setup monitoring if enabled
    setup_monitoring
-   
-   # Cleanup
    cleanup
    
    info "Installation completed successfully!"
    
-   # Display installation summary
    cat << EOL
 
 IRSSH Panel Installation Summary
 -------------------------------
 Panel Version: 3.5.2
-Web Interface: http${ENABLE_HTTPS:+"s"}://YOUR-SERVER-IP:${PORTS[WEB]}
+Web Interface: http://${SERVER_IP}:${PORTS[WEB]}
 
 Admin Credentials:
 Username: ${ADMIN_USER}
@@ -539,7 +547,6 @@ $(for protocol in "${!PROTOCOLS[@]}"; do
 done)
 
 Additional Features:
-- HTTPS: ${ENABLE_HTTPS}
 - Monitoring: ${ENABLE_MONITORING}
 
 For more information, please check:
@@ -548,5 +555,4 @@ For more information, please check:
 EOL
 }
 
-# Start installation
 main
