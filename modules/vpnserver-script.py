@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
+import uvloop
 import logging
 import os
 import sys
 from dotenv import load_dotenv
 
-# Setup logging
+# Setup logging first
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -13,6 +14,9 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+
+# Install uvloop
+uvloop.install()
 
 def install_prerequisites():
     import subprocess
