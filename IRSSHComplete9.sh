@@ -191,16 +191,30 @@ setup_database() {
     info "Database setup completed"
 }
 
-cd "$PANEL_DIR/frontend" || error "Failed to access frontend directory"
+setup_web_server() {
+    info "Setting up web server..."
 
-# Install primary dependencies
-npm install || error "Failed to install frontend dependencies"
+    # Clone repository into temporary directory
+    git clone "$REPO_URL" "$TEMP_DIR/repo" || error "Failed to clone repository"
 
-# Install missing packages to resolve module errors
-npm install --save @tanstack/react-query react-hot-toast lucide-react react-hook-form @hookform/resolvers zod date-fns
+    # Setup frontend
+    mkdir -p "$PANEL_DIR/frontend"
+    cp -r "$TEMP_DIR/repo/frontend/"* "$PANEL_DIR/frontend/"
+    cd "$PANEL_DIR/frontend" || error "Failed to access frontend directory"
 
-# Create the postcss.config.cjs file to resolve PostCSS config error
-cat > postcss.config.cjs << 'EOF'
+    # Install frontend dependencies
+    npm install || error "Failed to install frontend dependencies"
+
+    # Install missing packages for module resolution
+    npm install --save @tanstack/react-query react-hot-toast lucide-react react-hook-form @hookform/resolvers zod date-fns
+
+    # Rename existing PostCSS config if it exists
+    if [ -f postcss.config.js ]; then
+        mv postcss.config.js postcss.config.js.bak
+    fi
+
+    # Create a new PostCSS config file in CommonJS format
+    cat > postcss.config.cjs << 'EOF'
 module.exports = {
   plugins: {
     autoprefixer: {}
@@ -208,18 +222,17 @@ module.exports = {
 };
 EOF
 
-# Ensure the build script is executable
-chmod +x build-frontend.sh
+    # Ensure the build script is executable
+    chmod +x build-frontend.sh
 
-# Execute the build process using the new build script (which skips TypeScript type-check)
-bash build-frontend.sh || error "Failed to build frontend"
-    
+    # Build frontend using the new build script (which skips TypeScript type-check)
+    bash build-frontend.sh || error "Failed to build frontend"
+
     # Setup backend
     mkdir -p "$PANEL_DIR/backend"
     cp -r "$TEMP_DIR/repo/backend/"* "$PANEL_DIR/backend/"
-    
     cd "$PANEL_DIR/backend" || error "Failed to access backend directory"
-    
+
     # Create backend environment file
     cat > .env << EOL
 NODE_ENV=production
@@ -231,18 +244,18 @@ DB_USER=$ADMIN_USER
 DB_PASS=$ADMIN_PASS
 JWT_SECRET=$(openssl rand -base64 32)
 EOL
-    
+
     # Install backend dependencies
     npm install || error "Failed to install backend dependencies"
-    
+
     # Initialize database schema
     npm run migrate || error "Failed to initialize database schema"
-    
+
     # Create admin user in database
     HASHED_PASSWORD=$(node -e "console.log(require('bcrypt').hashSync('${ADMIN_PASS}', 10))")
     psql -U "$ADMIN_USER" "$DB_NAME" -c "INSERT INTO users (username, password, role) VALUES ('${ADMIN_USER}', '${HASHED_PASSWORD}', 'admin');"
-    
-    # Configure nginx
+
+    # Configure nginx for frontend and API proxy
     cat > /etc/nginx/sites-available/irssh-panel << EOL
 server {
     listen ${PORTS[WEB]};
@@ -271,7 +284,7 @@ server {
 }
 EOL
 
-    # Setup backend service
+    # Setup systemd service for backend API
     cat > /etc/systemd/system/irssh-api.service << EOL
 [Unit]
 Description=IRSSH Panel API Server
@@ -290,20 +303,19 @@ Environment=PORT=3000
 WantedBy=multi-user.target
 EOL
 
-    # Enable and start services
+    # Enable and restart nginx and backend service
     ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
     rm -f /etc/nginx/sites-enabled/default
-    
     systemctl daemon-reload
     systemctl enable irssh-api
     systemctl start irssh-api
     systemctl restart nginx
     systemctl enable nginx
-    
-    # Set permissions
+
+    # Set permissions for frontend
     chown -R www-data:www-data "$PANEL_DIR/frontend"
     chmod -R 755 "$PANEL_DIR/frontend"
-    
+
     info "Web server setup completed"
 }
 
