@@ -121,7 +121,16 @@ setup_dependencies() {
     # Update system
     apt-get update || error "Failed to update package lists"
     
-    # Install required packages (excluding nodejs temporarily)
+    # Remove old Node.js completely
+    apt-get remove -y nodejs npm node-*
+    apt-get purge -y nodejs npm
+    apt-get autoremove -y
+    rm -rf /usr/local/lib/node_modules
+    rm -rf /usr/local/bin/node
+    rm -rf /usr/local/bin/npm
+    rm -rf /etc/apt/sources.list.d/nodesource.list*
+    
+    # Install required packages
     apt-get install -y \
         nginx \
         postgresql \
@@ -133,20 +142,13 @@ setup_dependencies() {
         python3-pip \
         || error "Failed to install dependencies"
     
-    # Install Node.js 20.x from NodeSource
-    info "Installing Node.js 20.x..."
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - || error "Failed to setup Node.js repository"
-    apt-get install -y nodejs || error "Failed to install Node.js"
+    # Install Node.js 20.x
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    apt-get install -y nodejs
     
-    # Verify Node.js version
-    node_version=$(node -v)
-    info "Node.js version: $node_version"
-    
-    # Update npm to latest
-    npm install -g npm@latest || error "Failed to update npm"
-    
-    # Install PM2 for process management
-    npm install -g pm2 || error "Failed to install PM2"
+    # Install development tools
+    npm install -g npm@latest
+    npm install -g pm2
     
     info "Dependencies installation completed"
 }
