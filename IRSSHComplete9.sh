@@ -121,25 +121,32 @@ setup_dependencies() {
     # Update system
     apt-get update || error "Failed to update package lists"
     
-    # Install required packages
+    # Install required packages (excluding nodejs temporarily)
     apt-get install -y \
         nginx \
         postgresql \
         postgresql-contrib \
-        nodejs \
-        npm \
         git \
         curl \
         build-essential \
         python3 \
         python3-pip \
         || error "Failed to install dependencies"
-        
-    # Update npm
-    npm install -g npm@latest
+    
+    # Install Node.js 20.x from NodeSource
+    info "Installing Node.js 20.x..."
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - || error "Failed to setup Node.js repository"
+    apt-get install -y nodejs || error "Failed to install Node.js"
+    
+    # Verify Node.js version
+    node_version=$(node -v)
+    info "Node.js version: $node_version"
+    
+    # Update npm to latest
+    npm install -g npm@latest || error "Failed to update npm"
     
     # Install PM2 for process management
-    npm install -g pm2
+    npm install -g pm2 || error "Failed to install PM2"
     
     info "Dependencies installation completed"
 }
