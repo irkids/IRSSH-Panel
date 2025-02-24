@@ -203,14 +203,18 @@ setup_web_server() {
     
     cd "$PANEL_DIR/frontend" || error "Failed to access frontend directory"
 
-# Install frontend dependencies
+# نصب وابستگی‌های موجود در پوشه‌ی frontend (اگر از قبل نصب نشده‌اند)
 npm install || error "Failed to install frontend dependencies"
 
-# Make the build script executable
+# نصب بسته‌های مفقود مورد نیاز برای رفع خطاهای TypeScript
+npm install --save @tanstack/react-query react-hot-toast lucide-react react-hook-form @hookform/resolvers zod date-fns
+
+# اطمینان از اجرایی بودن فایل build-frontend.sh
 chmod +x build-frontend.sh
 
-# Build frontend using the new build script and custom tsconfig.build.json
+# اجرای فرآیند build با استفاده از اسکریپت جدید (فقط vite build، بدون type-check)
 bash build-frontend.sh || error "Failed to build frontend"
+
     
     # Setup backend
     mkdir -p "$PANEL_DIR/backend"
