@@ -5,7 +5,11 @@
     "outDir": "./build",
     "skipLibCheck": true,
     "noEmitOnError": true,
-    "isolatedModules": false
+    "isolatedModules": false,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
   },
   "include": [
     "src/**/*.ts",
