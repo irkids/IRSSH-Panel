@@ -191,30 +191,28 @@ setup_database() {
     info "Database setup completed"
 }
 
-setup_web_server() {
-    info "Setting up web server..."
-    
-    # Clone repository
-    git clone "$REPO_URL" "$TEMP_DIR/repo" || error "Failed to clone repository"
-    
-    # Setup frontend
-    mkdir -p "$PANEL_DIR/frontend"
-    cp -r "$TEMP_DIR/repo/frontend/"* "$PANEL_DIR/frontend/"
-    
-    cd "$PANEL_DIR/frontend" || error "Failed to access frontend directory"
+cd "$PANEL_DIR/frontend" || error "Failed to access frontend directory"
 
-# نصب وابستگی‌های موجود در پوشه‌ی frontend (اگر از قبل نصب نشده‌اند)
+# Install primary dependencies
 npm install || error "Failed to install frontend dependencies"
 
-# نصب بسته‌های مفقود مورد نیاز برای رفع خطاهای TypeScript
+# Install missing packages to resolve module errors
 npm install --save @tanstack/react-query react-hot-toast lucide-react react-hook-form @hookform/resolvers zod date-fns
 
-# اطمینان از اجرایی بودن فایل build-frontend.sh
+# Create the postcss.config.cjs file to resolve PostCSS config error
+cat > postcss.config.cjs << 'EOF'
+module.exports = {
+  plugins: {
+    autoprefixer: {}
+  }
+};
+EOF
+
+# Ensure the build script is executable
 chmod +x build-frontend.sh
 
-# اجرای فرآیند build با استفاده از اسکریپت جدید (فقط vite build، بدون type-check)
+# Execute the build process using the new build script (which skips TypeScript type-check)
 bash build-frontend.sh || error "Failed to build frontend"
-
     
     # Setup backend
     mkdir -p "$PANEL_DIR/backend"
