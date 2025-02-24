@@ -40,8 +40,10 @@ ADMIN_PASS=""
 ENABLE_MONITORING="n"
 SERVER_IPv4=""
 SERVER_IPv6=""
+DB_NAME="irssh"
+REPO_URL="https://github.com/irkids/IRSSH-Panel.git"
 
-# System functions
+# Logging functions
 log() {
     local level=$1
     local message=$2
@@ -113,25 +115,101 @@ get_config() {
     ENABLE_MONITORING=${ENABLE_MONITORING,,}
 }
 
+setup_dependencies() {
+    info "Installing system dependencies..."
+    
+    # Update system
+    apt-get update || error "Failed to update package lists"
+    
+    # Install required packages
+    apt-get install -y \
+        nginx \
+        postgresql \
+        postgresql-contrib \
+        nodejs \
+        npm \
+        git \
+        curl \
+        build-essential \
+        python3 \
+        python3-pip \
+        || error "Failed to install dependencies"
+        
+    # Update npm
+    npm install -g npm@latest
+    
+    # Install PM2 for process management
+    npm install -g pm2
+    
+    info "Dependencies installation completed"
+}
+
+setup_database() {
+    info "Setting up database..."
+    
+    # Start PostgreSQL if not running
+    systemctl start postgresql
+    systemctl enable postgresql
+    
+    # Create database and user
+    su - postgres -c "psql -c \"CREATE DATABASE $DB_NAME;\"" || error "Failed to create database"
+    su - postgres -c "psql -c \"CREATE USER ${ADMIN_USER} WITH PASSWORD '${ADMIN_PASS}';\""
+    su - postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO ${ADMIN_USER};\""
+    
+    # Wait for database to be ready
+    until su - postgres -c "psql -l" | grep -q "$DB_NAME"; do
+        info "Waiting for database to be ready..."
+        sleep 1
+    done
+    
+    info "Database setup completed"
+}
+
 setup_web_server() {
     info "Setting up web server..."
     
-    apt-get install -y nginx || error "Failed to install nginx"
+    # Clone repository
+    git clone "$REPO_URL" "$TEMP_DIR/repo" || error "Failed to clone repository"
     
-    mkdir -p "$PANEL_DIR/frontend/dist"
-    cat > "$PANEL_DIR/frontend/dist/index.html" << EOL
-<!DOCTYPE html>
-<html>
-<head>
-    <title>IRSSH Panel</title>
-</head>
-<body>
-    <h1>IRSSH Panel</h1>
-    <p>Installation successful. Please complete the panel setup.</p>
-</body>
-</html>
+    # Setup frontend
+    mkdir -p "$PANEL_DIR/frontend"
+    cp -r "$TEMP_DIR/repo/frontend/"* "$PANEL_DIR/frontend/"
+    
+    cd "$PANEL_DIR/frontend" || error "Failed to access frontend directory"
+    
+    # Install frontend dependencies and build
+    npm install || error "Failed to install frontend dependencies"
+    npm run build || error "Failed to build frontend"
+    
+    # Setup backend
+    mkdir -p "$PANEL_DIR/backend"
+    cp -r "$TEMP_DIR/repo/backend/"* "$PANEL_DIR/backend/"
+    
+    cd "$PANEL_DIR/backend" || error "Failed to access backend directory"
+    
+    # Create backend environment file
+    cat > .env << EOL
+NODE_ENV=production
+PORT=3000
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=$DB_NAME
+DB_USER=$ADMIN_USER
+DB_PASS=$ADMIN_PASS
+JWT_SECRET=$(openssl rand -base64 32)
 EOL
-
+    
+    # Install backend dependencies
+    npm install || error "Failed to install backend dependencies"
+    
+    # Initialize database schema
+    npm run migrate || error "Failed to initialize database schema"
+    
+    # Create admin user in database
+    HASHED_PASSWORD=$(node -e "console.log(require('bcrypt').hashSync('${ADMIN_PASS}', 10))")
+    psql -U "$ADMIN_USER" "$DB_NAME" -c "INSERT INTO users (username, password, role) VALUES ('${ADMIN_USER}', '${HASHED_PASSWORD}', 'admin');"
+    
+    # Configure nginx
     cat > /etc/nginx/sites-available/irssh-panel << EOL
 server {
     listen ${PORTS[WEB]};
@@ -152,21 +230,46 @@ server {
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection 'upgrade';
         proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_cache_bypass \$http_upgrade;
     }
 }
 EOL
 
+    # Setup backend service
+    cat > /etc/systemd/system/irssh-api.service << EOL
+[Unit]
+Description=IRSSH Panel API Server
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$PANEL_DIR/backend
+ExecStart=/usr/bin/npm start
+Restart=always
+Environment=NODE_ENV=production
+Environment=PORT=3000
+
+[Install]
+WantedBy=multi-user.target
+EOL
+
+    # Enable and start services
     ln -sf /etc/nginx/sites-available/irssh-panel /etc/nginx/sites-enabled/
     rm -f /etc/nginx/sites-enabled/default
     
-    chown -R www-data:www-data "$PANEL_DIR/frontend"
-    chmod -R 755 "$PANEL_DIR/frontend"
-    
-    nginx -t || error "Nginx configuration test failed"
-    
+    systemctl daemon-reload
+    systemctl enable irssh-api
+    systemctl start irssh-api
     systemctl restart nginx
     systemctl enable nginx
+    
+    # Set permissions
+    chown -R www-data:www-data "$PANEL_DIR/frontend"
+    chmod -R 755 "$PANEL_DIR/frontend"
     
     info "Web server setup completed"
 }
@@ -344,29 +447,29 @@ conn ikev2-vpn
     leftcert=server-cert.pem
     leftsendcert=always
     leftsubnet=0.0.0.0/0
-    right=%any
-    rightauth=eap-mschapv2
-    rightsourceip=10.20.20.0/24
-    rightdns=8.8.8.8,8.8.4.4
+   right=%any
+   rightauth=eap-mschapv2
+   rightsourceip=10.20.20.0/24
+   rightdns=8.8.8.8,8.8.4.4
 EOL
 
-    systemctl restart strongswan
-    systemctl enable strongswan
-    
-    info "IKEv2 installation completed"
+   systemctl restart strongswan
+   systemctl enable strongswan
+   
+   info "IKEv2 installation completed"
 }
 
 install_cisco() {
-    info "Installing OpenConnect (Cisco AnyConnect)..."
-    
-    apt-get install -y ocserv gnutls-bin || error "Failed to install OpenConnect packages"
-    
-    mkdir -p /etc/ocserv/ssl
-    cd /etc/ocserv/ssl || error "Failed to access OpenConnect SSL directory"
-    
-    certtool --generate-privkey --outfile ca-key.pem
-    
-    cat > ca.tmpl << EOL
+   info "Installing OpenConnect (Cisco AnyConnect)..."
+   
+   apt-get install -y ocserv gnutls-bin || error "Failed to install OpenConnect packages"
+   
+   mkdir -p /etc/ocserv/ssl
+   cd /etc/ocserv/ssl || error "Failed to access OpenConnect SSL directory"
+   
+   certtool --generate-privkey --outfile ca-key.pem
+   
+   cat > ca.tmpl << EOL
 cn = "VPN CA"
 organization = "IRSSH Panel"
 serial = 1
@@ -377,12 +480,12 @@ cert_signing_key
 crl_signing_key
 EOL
 
-    certtool --generate-self-signed --load-privkey ca-key.pem \
-        --template ca.tmpl --outfile ca-cert.pem
-    
-    certtool --generate-privkey --outfile server-key.pem
-    
-    cat > server.tmpl << EOL
+   certtool --generate-self-signed --load-privkey ca-key.pem \
+       --template ca.tmpl --outfile ca-cert.pem
+   
+   certtool --generate-privkey --outfile server-key.pem
+   
+   cat > server.tmpl << EOL
 cn = "VPN Server"
 organization = "IRSSH Panel"
 expiration_days = 3650
@@ -391,11 +494,11 @@ encryption_key
 tls_www_server
 EOL
 
-    certtool --generate-certificate --load-privkey server-key.pem \
-        --load-ca-certificate ca-cert.pem --load-ca-privkey ca-key.pem \
-        --template server.tmpl --outfile server-cert.pem
-    
-    cat > /etc/ocserv/ocserv.conf << EOL
+   certtool --generate-certificate --load-privkey server-key.pem \
+       --load-ca-certificate ca-cert.pem --load-ca-privkey ca-key.pem \
+       --template server.tmpl --outfile server-cert.pem
+   
+   cat > /etc/ocserv/ocserv.conf << EOL
 auth = "plain[passwd=/etc/ocserv/ocpasswd]"
 tcp-port = ${PORTS[CISCO]}
 udp-port = ${PORTS[CISCO]}
@@ -415,24 +518,24 @@ try-mtu-discovery = true
 server-stats-reset-time = 604800
 EOL
 
-    systemctl restart ocserv
-    systemctl enable ocserv
-    
-    info "OpenConnect installation completed"
+   systemctl restart ocserv
+   systemctl enable ocserv
+   
+   info "OpenConnect installation completed"
 }
 
 install_wireguard() {
-    info "Installing WireGuard..."
-    
-    apt-get install -y wireguard || error "Failed to install WireGuard"
-    
-    mkdir -p /etc/wireguard
-    cd /etc/wireguard || error "Failed to access WireGuard directory"
-    
-    wg genkey | tee server_private.key | wg pubkey > server_public.key
-    chmod 600 server_private.key
-    
-    cat > /etc/wireguard/wg0.conf << EOL
+   info "Installing WireGuard..."
+   
+   apt-get install -y wireguard || error "Failed to install WireGuard"
+   
+   mkdir -p /etc/wireguard
+   cd /etc/wireguard || error "Failed to access WireGuard directory"
+   
+   wg genkey | tee server_private.key | wg pubkey > server_public.key
+   chmod 600 server_private.key
+   
+   cat > /etc/wireguard/wg0.conf << EOL
 [Interface]
 PrivateKey = $(cat server_private.key)
 Address = 10.66.66.1/24
@@ -577,10 +680,8 @@ main() {
    
    get_server_ip
    get_config
-   
-   apt-get update || error "Failed to update package lists"
-   apt-get install -y nginx nodejs npm postgresql || error "Failed to install base requirements"
-   
+   setup_dependencies
+   setup_database
    setup_web_server
    
    for protocol in "${!PROTOCOLS[@]}"; do
