@@ -160,16 +160,33 @@ setup_database() {
     systemctl start postgresql
     systemctl enable postgresql
     
-    # Create database and user
-    su - postgres -c "psql -c \"CREATE DATABASE $DB_NAME;\"" || error "Failed to create database"
-    su - postgres -c "psql -c \"CREATE USER ${ADMIN_USER} WITH PASSWORD '${ADMIN_PASS}';\""
-    su - postgres -c "psql -c \"GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO ${ADMIN_USER};\""
+    # Switch to postgres home directory to avoid permission warnings
+    cd /var/lib/postgresql || error "Failed to access PostgreSQL directory"
     
-    # Wait for database to be ready
-    until su - postgres -c "psql -l" | grep -q "$DB_NAME"; do
-        info "Waiting for database to be ready..."
-        sleep 1
-    done
+    # Check if database exists and create if needed
+    if ! sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
+        info "Creating new database: $DB_NAME"
+        sudo -u postgres createdb "$DB_NAME" || error "Failed to create database"
+        
+        # Create user and grant privileges
+        sudo -u postgres psql -c "CREATE USER ${ADMIN_USER} WITH PASSWORD '${ADMIN_PASS}';" || error "Failed to create database user"
+        sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${ADMIN_USER};" || error "Failed to grant privileges"
+    else
+        info "Database '$DB_NAME' already exists"
+        
+        # Update user password if it exists, create if it doesn't
+        sudo -u postgres psql -c "DO \$\$
+        BEGIN
+            IF EXISTS (SELECT FROM pg_roles WHERE rolname = '${ADMIN_USER}') THEN
+                ALTER USER ${ADMIN_USER} WITH PASSWORD '${ADMIN_PASS}';
+            ELSE
+                CREATE USER ${ADMIN_USER} WITH PASSWORD '${ADMIN_PASS}';
+            END IF;
+        END
+        \$\$;" || error "Failed to update database user"
+        
+        sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${ADMIN_USER};" || error "Failed to grant privileges"
+    fi
     
     info "Database setup completed"
 }
