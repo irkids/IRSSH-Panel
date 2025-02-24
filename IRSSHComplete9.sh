@@ -202,10 +202,15 @@ setup_web_server() {
     cp -r "$TEMP_DIR/repo/frontend/"* "$PANEL_DIR/frontend/"
     
     cd "$PANEL_DIR/frontend" || error "Failed to access frontend directory"
-    
-    # Install frontend dependencies and build
-    npm install || error "Failed to install frontend dependencies"
-    npm run build || error "Failed to build frontend"
+
+# Install frontend dependencies
+npm install || error "Failed to install frontend dependencies"
+
+# Make the build script executable
+chmod +x build-frontend.sh
+
+# Build frontend using the new build script and custom tsconfig.build.json
+bash build-frontend.sh || error "Failed to build frontend"
     
     # Setup backend
     mkdir -p "$PANEL_DIR/backend"
