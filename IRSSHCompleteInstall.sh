@@ -1618,6 +1618,14 @@ EOL
     chown -R www-data:www-data "$PANEL_DIR/frontend"
     chmod -R 755 "$PANEL_DIR/frontend"
 
+# Update admin credentials in HTML file
+if [ -f "$PANEL_DIR/frontend/dist/index.html" ]; then
+    info "Updating credentials in HTML file..."
+    # Replace username and password variables
+    sed -i "s/const ADMIN_USERNAME = '.*';/const ADMIN_USERNAME = '${ADMIN_USER}';/" "$PANEL_DIR/frontend/dist/index.html"
+    sed -i "s/const ADMIN_PASSWORD = '.*';/const ADMIN_PASSWORD = '${ADMIN_PASS}';/" "$PANEL_DIR/frontend/dist/index.html"
+fi
+
     info "Web server setup completed"
 }
 
