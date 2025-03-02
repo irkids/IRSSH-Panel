@@ -22017,27 +22017,7 @@ function main() {
     
     # Complete installation with final steps
     complete_installation
+    
 }
 
 main
-
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
-}
