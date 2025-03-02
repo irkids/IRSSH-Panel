@@ -22016,8 +22016,7 @@ function main() {
     cleanup
     
     # Complete installation with final steps
-    complete_installation
-    
+    complete_installation 
 }
 
 main
