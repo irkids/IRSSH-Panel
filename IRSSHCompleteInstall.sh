@@ -3712,7 +3712,7 @@ EOL
     fi
 
     info "Enhanced web server setup completed"
-
+    
 # Install SSH with advanced features and optimizations
 install_ssh() {
     info "Installing SSH protocol with advanced optimizations..."
