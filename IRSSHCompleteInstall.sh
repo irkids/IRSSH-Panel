@@ -1834,7 +1834,6 @@ ENABLE_SWAGGER=false
 # TELEGRAM_BOT_TOKEN=your_bot_token
 # TELEGRAM_ADMIN_CHAT=your_admin_chat_id
 EOF
-    }
 
     # Setup frontend with enhanced UI
     info "Setting up enhanced frontend files..."
