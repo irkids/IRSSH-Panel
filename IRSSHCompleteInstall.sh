@@ -5483,7 +5483,6 @@ EOF
     "$SCRIPTS_DIR/ikev2/ikev2_user_manager.sh" cert "$ADMIN_USER"
     
     info "IKEv2/IPsec installation completed successfully with client certificates"
-}
 
 # Install Cisco AnyConnect compatible server with modern security
 install_cisco() {
