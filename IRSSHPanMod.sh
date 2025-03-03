@@ -3330,13 +3330,17 @@ get_user_config() {
         read -p "Username cannot be empty. Enter admin username: " ADMIN_USER
     done
     
-    # Admin password
-    read -s -p "Enter admin password: " ADMIN_PASS
-    echo
-    while [ -z "$ADMIN_PASS" ]; then
+# Admin password
+read -s -p "Enter admin password: " ADMIN_PASS
+echo
+
+if [ -z "$ADMIN_PASS" ]; then
+    # Fixed: properly closed the while loop
+    while [ -z "$ADMIN_PASS" ]; do
         read -s -p "Password cannot be empty. Enter admin password: " ADMIN_PASS
         echo
-    fi
+    done
+fi
     
     # Database information
     DB_NAME="irssh_panel"
