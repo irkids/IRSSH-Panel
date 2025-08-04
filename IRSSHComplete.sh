@@ -21966,6 +21966,7 @@ function main() {
     # Setup web server
     setup_web_server
     
+main() {
     # Install protocols
     for protocol in "${!PROTOCOLS[@]}"; do
         if [ "${PROTOCOLS[$protocol]}" = true ]; then
@@ -21992,38 +21993,17 @@ function main() {
             esac
         fi
     done
-    
-    # Setup additional modules (Dropbear, BadVPN UDP Gateway)
+
     setup_additional_modules
-    
-    # Install SSL-VPN protocol
     install_ssl_vpn
-    
-    # Install NordWhisper protocol
     install_nordwhisper
-    
-    # Setup advanced monitoring
     setup_advanced_monitoring
-    
-    # Enhance security
     enhance_security
-    
-    # Setup Docker
     setup_docker
-    
-    # Setup Ansible
     setup_ansible
-    
-    # Enhanced frontend
     enhance_frontend
-    
-    # Install user management if requested
     install_user_management
-    
-    # Clean up temporary files
     cleanup
-    
-    # Complete installation with final steps
     complete_installation
 }
 
