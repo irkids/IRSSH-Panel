@@ -158,18 +158,21 @@ optimize_system() {
         info "Applying low-resource system optimizations"
         
         # Decrease PostgreSQL memory settings
-        # BEGIN patched: robust postgresql.conf detection (replaces brittle -f with quoted glob)
-        pgconf=$(find /etc/postgresql -name postgresql.conf -print -quit)
-        if [ -n "$pgconf" ]; then
-            sed -i 's/^#\?shared_buffers =.*/shared_buffers = 128MB/' "$pgconf"
-        else
-            echo "postgresql.conf not found" >&2
+# BEGIN patched: robust postgresql.conf detection (replaces brittle -f with quoted glob)
+pgconf=$(find /etc/postgresql -name postgresql.conf -print -quit)
+if [ -n "$pgconf" ]; then
+    # use the first found postgresql.conf safely
+    sed -i 's/^#\?shared_buffers =.*/shared_buffers = 128MB/' "$pgconf"
+else
+    echo "postgresql.conf not found" >&2
+fi
+# END patched block
+pgconf=$(find /etc/postgresql -name postgresql.conf -print -quit)  # patched to return single file
+            sed -i "s/^#\?shared_buffers =.*/shared_buffers = 128MB/" $pgconf
+            sed -i "s/^#\?work_mem =.*/work_mem = 4MB/" $pgconf
+            sed -i "s/^#\?maintenance_work_mem =.*/maintenance_work_mem = 32MB/" $pgconf
+            sed -i "s/^#\?effective_cache_size =.*/effective_cache_size = 256MB/" $pgconf
         fi
-        # END patched block
-
-        sed -i "s/^#\?work_mem =.*/work_mem = 4MB/" "$pgconf"
-        sed -i "s/^#\?maintenance_work_mem =.*/maintenance_work_mem = 32MB/" "$pgconf"
-        sed -i "s/^#\?effective_cache_size =.*/effective_cache_size = 256MB/" "$pgconf"
         
         # Decrease Nginx worker processes and connections
         if [ -f "/etc/nginx/nginx.conf" ]; then
@@ -179,16 +182,15 @@ optimize_system() {
         
         # Set Node.js memory limit lower for API and services
         echo "NODE_OPTIONS=--max_old_space_size=384" >> /etc/environment
-    else
-        # BEGIN patched: robust postgresql.conf detection (replaces brittle -f with quoted glob)
-        pgconf=$(find /etc/postgresql -name postgresql.conf -print -quit)
-        if [ -n "$pgconf" ]; then
-            sed -i "s/^#\?shared_buffers =.*/shared_buffers = 128MB/" "$pgconf"
-        else
-            echo "postgresql.conf not found" >&2
-        fi
-        # END patched block
-
+# BEGIN patched: robust postgresql.conf detection (replaces brittle -f with quoted glob)
+pgconf=$(find /etc/postgresql -name postgresql.conf -print -quit)
+if [ -n "$pgconf" ]; then
+    # use the first found postgresql.conf safely
+    sed -i 's/^#\?shared_buffers =.*/shared_buffers = 128MB/' "$pgconf"
+else
+    echo "postgresql.conf not found" >&2
+fi
+# END patched block
         info "Applying standard system optimizations"
         
         # Calculate optimal PostgreSQL settings
@@ -196,12 +198,12 @@ optimize_system() {
         if [ $PG_SHARED_BUFFERS -lt 1 ]; then PG_SHARED_BUFFERS=1; fi
         
         # Set PostgreSQL memory settings
-        pgconf=$(find /etc/postgresql -name postgresql.conf -print -quit)
-        if [ -n "$pgconf" ]; then
-            sed -i "s/^#\?shared_buffers =.*/shared_buffers = ${PG_SHARED_BUFFERS}GB/" "$pgconf"
-            sed -i "s/^#\?work_mem =.*/work_mem = 16MB/" "$pgconf"
-            sed -i "s/^#\?maintenance_work_mem =.*/maintenance_work_mem = 256MB/" "$pgconf"
-            sed -i "s/^#\?effective_cache_size =.*/effective_cache_size = ${RAM_GB}GB/" "$pgconf"
+        if [ -f "/etc/postgresql/*/main/postgresql.conf" ]; then
+pgconf=$(find /etc/postgresql -name postgresql.conf -print -quit)  # patched to return single file
+            sed -i "s/^#\?shared_buffers =.*/shared_buffers = ${PG_SHARED_BUFFERS}GB/" $pgconf
+            sed -i "s/^#\?work_mem =.*/work_mem = 16MB/" $pgconf
+            sed -i "s/^#\?maintenance_work_mem =.*/maintenance_work_mem = 256MB/" $pgconf
+            sed -i "s/^#\?effective_cache_size =.*/effective_cache_size = ${RAM_GB}GB/" $pgconf
         fi
         
         # Set Nginx worker processes to number of cores and increase connections
@@ -211,10 +213,6 @@ optimize_system() {
         fi
         
         # Set Node.js memory limit based on available RAM
-        echo "NODE_OPTIONS=--max_old_space_size=$((RAM_GB * 1024 / 2))" >> /etc/environment
-    fi
-}
-
 # BEGIN patched: calculate NODE_MEM from RAM_MB and update /etc/environment idempotently
 NODE_MEM=$((RAM_MB / 4))  # allocate ~1/4 of RAM in MB to Node heap
 if grep -q "^NODE_OPTIONS=" /etc/environment 2>/dev/null; then
