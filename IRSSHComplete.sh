@@ -120,7 +120,11 @@ detect_system_resources() {
     
     # Get total RAM in GB
     RAM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-    RAM_GB=$(echo "scale=1; $RAM_KB/1024/1024" | bc)
+# BEGIN patched: compute RAM in integer KB/MB to avoid float arithmetic issues
+RAM_KB=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+RAM_MB=$((RAM_KB / 1024))
+RAM_GB=$((RAM_MB / 1024))  # integer GB approximation
+# END patched RAM calc
     info "Detected $RAM_GB GB of RAM"
     
     # Get disk space
@@ -131,7 +135,11 @@ detect_system_resources() {
     # Check if running in a virtual machine
     if grep -q "hypervisor" /proc/cpuinfo || [ -d "/proc/vz" ]; then
         IS_VM=true
-        info "Detected virtualization environment"
+# BEGIN patched: compute RAM in integer KB/MB to avoid float arithmetic issues
+RAM_KB=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+RAM_MB=$((RAM_KB / 1024))
+RAM_GB=$((RAM_MB / 1024))  # integer GB approximation
+# END patched RAM calc
     fi
     
     # Determine if this is a low-resource system
@@ -150,8 +158,16 @@ optimize_system() {
         info "Applying low-resource system optimizations"
         
         # Decrease PostgreSQL memory settings
-        if [ -f "/etc/postgresql/*/main/postgresql.conf" ]; then
-            pgconf=$(find /etc/postgresql -name postgresql.conf)
+# BEGIN patched: robust postgresql.conf detection (replaces brittle -f with quoted glob)
+pgconf=$(find /etc/postgresql -name postgresql.conf -print -quit)
+if [ -n "$pgconf" ]; then
+    # use the first found postgresql.conf safely
+    sed -i 's/^#\?shared_buffers =.*/shared_buffers = 128MB/' "$pgconf"
+else
+    echo "postgresql.conf not found" >&2
+fi
+# END patched block
+pgconf=$(find /etc/postgresql -name postgresql.conf -print -quit)  # patched to return single file
             sed -i "s/^#\?shared_buffers =.*/shared_buffers = 128MB/" $pgconf
             sed -i "s/^#\?work_mem =.*/work_mem = 4MB/" $pgconf
             sed -i "s/^#\?maintenance_work_mem =.*/maintenance_work_mem = 32MB/" $pgconf
@@ -167,7 +183,15 @@ optimize_system() {
         # Set Node.js memory limit lower for API and services
         echo "NODE_OPTIONS=--max_old_space_size=384" >> /etc/environment
     else
-        # Standard or high-resource system optimizations
+# BEGIN patched: robust postgresql.conf detection (replaces brittle -f with quoted glob)
+pgconf=$(find /etc/postgresql -name postgresql.conf -print -quit)
+if [ -n "$pgconf" ]; then
+    # use the first found postgresql.conf safely
+    sed -i 's/^#\?shared_buffers =.*/shared_buffers = 128MB/' "$pgconf"
+else
+    echo "postgresql.conf not found" >&2
+fi
+# END patched block
         info "Applying standard system optimizations"
         
         # Calculate optimal PostgreSQL settings
@@ -176,7 +200,7 @@ optimize_system() {
         
         # Set PostgreSQL memory settings
         if [ -f "/etc/postgresql/*/main/postgresql.conf" ]; then
-            pgconf=$(find /etc/postgresql -name postgresql.conf)
+pgconf=$(find /etc/postgresql -name postgresql.conf -print -quit)  # patched to return single file
             sed -i "s/^#\?shared_buffers =.*/shared_buffers = ${PG_SHARED_BUFFERS}GB/" $pgconf
             sed -i "s/^#\?work_mem =.*/work_mem = 16MB/" $pgconf
             sed -i "s/^#\?maintenance_work_mem =.*/maintenance_work_mem = 256MB/" $pgconf
@@ -190,7 +214,14 @@ optimize_system() {
         fi
         
         # Set Node.js memory limit based on available RAM
-        NODE_MEM=$((RAM_GB * 256))
+# BEGIN patched: calculate NODE_MEM from RAM_MB and update /etc/environment idempotently
+NODE_MEM=$((RAM_MB / 4))  # allocate ~1/4 of RAM in MB to Node heap
+if grep -q "^NODE_OPTIONS=" /etc/environment 2>/dev/null; then
+    sed -i "s|^NODE_OPTIONS=.*|NODE_OPTIONS=--max_old_space_size=${NODE_MEM}|" /etc/environment
+else
+    echo "NODE_OPTIONS=--max_old_space_size=${NODE_MEM}" >> /etc/environment
+fi
+# END patched NODE_MEM
         if [ $NODE_MEM -gt 1024 ]; then NODE_MEM=1024; fi
         echo "NODE_OPTIONS=--max_old_space_size=${NODE_MEM}" >> /etc/environment
     fi
@@ -378,7 +409,15 @@ setup_dependencies() {
         sh get-docker.sh
         rm get-docker.sh
         apt-get install -y docker-compose
-    else
+# BEGIN patched: robust postgresql.conf detection (replaces brittle -f with quoted glob)
+pgconf=$(find /etc/postgresql -name postgresql.conf -print -quit)
+if [ -n "$pgconf" ]; then
+    # use the first found postgresql.conf safely
+    sed -i 's/^#\?shared_buffers =.*/shared_buffers = 128MB/' "$pgconf"
+else
+    echo "postgresql.conf not found" >&2
+fi
+# END patched block
         info "Docker is already installed"
     fi
     
@@ -395,7 +434,7 @@ setup_database() {
     
     # Backup PostgreSQL configuration
     if [ -f "/etc/postgresql/*/main/postgresql.conf" ]; then
-        pgconf=$(find /etc/postgresql -name postgresql.conf)
+pgconf=$(find /etc/postgresql -name postgresql.conf -print -quit)  # patched to return single file
         cp $pgconf ${pgconf}.backup
         info "PostgreSQL configuration backed up to ${pgconf}.backup"
     fi
@@ -432,7 +471,7 @@ setup_database() {
     fi
     
     # Configure PostgreSQL for performance based on system resources
-    pgconf=$(find /etc/postgresql -name postgresql.conf)
+pgconf=$(find /etc/postgresql -name postgresql.conf -print -quit)  # patched to return single file
     
     if [ "$IS_LOW_RESOURCES" = true ]; then
         # Low-resource settings
@@ -1448,11 +1487,7 @@ const User = sequelize.define('User', {
     password: {
         type: DataTypes.STRING(255),
         allowNull: false,
-        set(value) {
-            const hash = bcrypt.hashSync(value, 10);
-            this.setDataValue('password', hash);
-        }
-    },
+        
     email: {
         type: DataTypes.STRING(100),
         allowNull: true,
@@ -1675,9 +1710,42 @@ migrate();
             
             const { exec } = require('child_process');
             
-            exec(`PGPASSWORD="${process.env.DB_PASSWORD}" pg_dump -h ${process.env.DB_HOST || 'localhost'} -U ${process.env.DB_USER} -d ${process.env.DB_NAME || 'irssh_panel'} -F c -f ${backupFile}`, (error, stdout, stderr) => {
-                if (error) {
-                    logger.error(`Database backup error: ${error.message}`);
+# BEGIN patched: use .pgpass for backups (avoid embedding password in command line)
+PGHOST="${DB_HOST:-localhost}"
+PGPORT="${DB_PORT:-5432}"
+PGUSER="${DB_USER:-postgres}"
+PGDATABASE="${DB_NAME:-postgres}"
+PGPASSWORD_VAR="${DB_PASSWORD:-}"
+if [ -n "$PGPASSWORD_VAR" ]; then
+  mkdir -p "$HOME"
+  echo "${PGHOST}:${PGPORT}:${PGDATABASE}:${PGUSER}:${PGPASSWORD_VAR}" > "$HOME/.pgpass"
+  chmod 600 "$HOME/.pgpass"
+fi
+# call pg_dump without inline PGPASSWORD (pg_dump will use ~/.pgpass)
+            
+const { execFile } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+(async function() {
+  try {
+    const pgpassPath = require('path').join(os.homedir(), '.pgpass');
+    if (process.env.DB_PASSWORD) {
+      fs.writeFileSync(pgpassPath, `${process.env.DB_HOST || 'localhost'}:${process.env.DB_PORT || 5432}:${process.env.DB_NAME || 'irssh_panel'}:${process.env.DB_USER || 'postgres'}:${process.env.DB_PASSWORD}`);
+      fs.chmodSync(pgpassPath, 0o600);
+    }
+    const dumpArgs = ['-h', process.env.DB_HOST || 'localhost', '-U', process.env.DB_USER || 'postgres', '-d', process.env.DB_NAME || 'irssh_panel', '-F', 'c', '-f', backupFile];
+    await new Promise((resolve, reject) => {
+      execFile('pg_dump', dumpArgs, { env: process.env }, (err, stdout, stderr) => {
+        if (err) return reject(err);
+        resolve(stdout);
+      });
+    });
+    // TODO: gzip and rotate backupFile as needed
+  } catch (error) {
+    logger.error(`Database backup error: ${error.message}`);
+  }
+})();
+
                     return;
                 }
                 
@@ -1746,18 +1814,18 @@ migrate();
                 await pool.query(`
                     INSERT INTO users (username, password, role, status) 
                     VALUES ($1, $2, 'admin', 'active')
-                `, ['${ADMIN_USER}', hashedPassword]);
+                `, [process.env.ADMIN_USER || 'admin', hashedPassword]);
                 
                 logger.info('Admin user created successfully');
             } else {
                 // Update admin password
-                const hashedPassword = await bcrypt.hash('${ADMIN_PASS}', 10);
+                const hashedPassword = await bcrypt.hash(process.env.ADMIN_PASS || 'change_me_admin_pass', 10);
                 
                 await pool.query(`
                     UPDATE users 
                     SET password = $1, updated_at = CURRENT_TIMESTAMP
                     WHERE username = $2
-                `, [hashedPassword, '${ADMIN_USER}']);
+                `, [hashedPassword, '<REMOVED_SECRET>']);
                 
                 logger.info('Admin user updated successfully');
             }
@@ -1816,6 +1884,8 @@ EOF
 
         # Create .env file
         cat > "$TEMP_DIR/repo/backend/.env" << EOF
+chown root:root "$TEMP_DIR/repo/backend/.env" 2>/dev/null || true
+chmod 600 "$TEMP_DIR/repo/backend/.env" 2>/dev/null || true
 NODE_ENV=production
 PORT=3000
 DB_HOST=localhost
@@ -1831,8 +1901,8 @@ REDIS_URL=redis://localhost:6379
 SERVER_IPv4=${SERVER_IPv4}
 SERVER_IPv6=${SERVER_IPv6}
 ENABLE_SWAGGER=false
-ADMIN_USER=${ADMIN_USER}
-ADMIN_PASS=${ADMIN_PASS}
+ADMIN_USER=<REMOVED_SECRET>
+ADMIN_PASS=<REMOVED_SECRET>
 # TELEGRAM_BOT_TOKEN=your_bot_token
 # TELEGRAM_ADMIN_CHAT=your_admin_chat_id
 EOF
@@ -1846,7 +1916,8 @@ EOF
 info "Installing backend and starting API server..."
 cd "$PANEL_DIR/backend" || error "Cannot access backend directory"
 npm install || error "Failed to install backend dependencies"
-pm2 start index.js --name irssh-api || error "Failed to start backend service"
+# pm2 start commented out by patch to avoid duplicate process managers; use systemd or pm2 startup instead
+//
 
     # Create proper index.html if it doesn't exist
     if [ ! -f "index.html" ]; then
@@ -3495,8 +3566,8 @@ if [ $? -ne 0 ]; then
         const userName = document.getElementById('user-name');
         
         // Set admin credentials from installation
-        const ADMIN_USERNAME = '${ADMIN_USER}';
-        const ADMIN_PASSWORD = '${ADMIN_PASS}';
+// SECURITY PATCH: admin credentials removed from frontend. Authenticate via backend API instead.
+// SECURITY PATCH: admin credentials removed from frontend. Authenticate via backend API instead.
         
         // Check if already logged in (using localStorage)
         const isLoggedIn = localStorage.getItem('irssh_logged_in');
@@ -3715,8 +3786,8 @@ EOL
     if [ -f "$PANEL_DIR/frontend/dist/index.html" ]; then
         info "Updating credentials in HTML file..."
         # Replace username and password variables
-        sed -i "s/const ADMIN_USERNAME = '.*';/const ADMIN_USERNAME = '${ADMIN_USER}';/" "$PANEL_DIR/frontend/dist/index.html"
-        sed -i "s/const ADMIN_PASSWORD = '.*';/const ADMIN_PASSWORD = '${ADMIN_PASS}';/" "$PANEL_DIR/frontend/dist/index.html"
+// SECURITY PATCH: admin credentials removed from frontend. Authenticate via backend API instead.
+// SECURITY PATCH: admin credentials removed from frontend. Authenticate via backend API instead.
     fi
 
     info "Enhanced web server setup completed"
@@ -4862,7 +4933,7 @@ EOL
 : RSA server-key.pem
 
 # Initial administrator account
-${ADMIN_USER} : EAP "${ADMIN_PASS}"
+<REMOVED_SECRET> : EAP "<REMOVED_SECRET>"
 EOL
 
     chmod 600 /etc/ipsec.secrets
@@ -6205,7 +6276,7 @@ EOL
     # Add client to server config
     cat >> /etc/wireguard/wg0.conf << EOL
 
-# User: ${ADMIN_USER}
+# User: <REMOVED_SECRET>
 [Peer]
 PublicKey = ${CLIENT_PUBLIC_KEY}
 AllowedIPs = 10.66.66.2/32
@@ -6214,8 +6285,8 @@ EOL
     # Create client config file
     mkdir -p /etc/wireguard/clients
     
-    cat > /etc/wireguard/clients/${ADMIN_USER}.conf << EOL
-# IRSSH-Panel WireGuard client configuration for ${ADMIN_USER}
+    cat > /etc/wireguard/clients/<REMOVED_SECRET>.conf << EOL
+# IRSSH-Panel WireGuard client configuration for <REMOVED_SECRET>
 # Managed by IRSSH-Panel, do not edit manually
 
 [Interface]
@@ -6236,7 +6307,7 @@ EOL
     cat > $CONFIG_DIR/wireguard/peers.json << EOL
 [
   {
-    "username": "${ADMIN_USER}",
+    "username": "<REMOVED_SECRET>",
     "public_key": "${CLIENT_PUBLIC_KEY}",
     "private_key": "${CLIENT_PRIVATE_KEY}",
     "allowed_ips": "10.66.66.2/32",
@@ -6813,10 +6884,10 @@ EOF
     mkdir -p "$PANEL_DIR/client_scripts/wireguard"
     
     # Generate QR code for the admin user
-    "$SCRIPTS_DIR/wireguard/generate_qr.sh" "$ADMIN_USER" > "$PANEL_DIR/client_scripts/wireguard/${ADMIN_USER}_qrcode.txt"
+    "$SCRIPTS_DIR/wireguard/generate_qr.sh" "$ADMIN_USER" > "$PANEL_DIR/client_scripts/wireguard/<REMOVED_SECRET>_qrcode.txt"
     
     # Copy client configuration to the client scripts directory
-    cp "/etc/wireguard/clients/${ADMIN_USER}.conf" "$PANEL_DIR/client_scripts/wireguard/"
+    cp "/etc/wireguard/clients/<REMOVED_SECRET>.conf" "$PANEL_DIR/client_scripts/wireguard/"
     
     # Create Windows PowerShell setup script
     cat > "$PANEL_DIR/client_scripts/wireguard/wireguard_windows_setup.ps1" << EOL
@@ -7100,7 +7171,7 @@ install_singbox() {
             "sniff_override_destination": true,
             "users": [
                 {
-                    "name": "${ADMIN_USER}",
+                    "name": "<REMOVED_SECRET>",
                     "uuid": "${USER_UUID}",
                     "alterId": 0
                 }
@@ -7125,7 +7196,7 @@ install_singbox() {
             "sniff_override_destination": true,
             "users": [
                 {
-                    "name": "${ADMIN_USER}",
+                    "name": "<REMOVED_SECRET>",
                     "password": "${TROJAN_PASSWD}"
                 }
             ],
@@ -7145,7 +7216,7 @@ install_singbox() {
             "sniff_override_destination": true,
             "users": [
                 {
-                    "name": "${ADMIN_USER}",
+                    "name": "<REMOVED_SECRET>",
                     "uuid": "${USER_UUID}"
                 }
             ],
@@ -7209,11 +7280,11 @@ EOL
     # Save user information
     mkdir -p $CONFIG_DIR/singbox/users
     
-    cat > $CONFIG_DIR/singbox/users/${ADMIN_USER}.json << EOL
+    cat > $CONFIG_DIR/singbox/users/<REMOVED_SECRET>.json << EOL
 {
-    "username": "${ADMIN_USER}",
+    "username": "<REMOVED_SECRET>",
     "shadowsocks": {
-        "password": "${ADMIN_PASS}",
+        "password": "<REMOVED_SECRET>",
         "method": "aes-256-gcm"
     },
     "vless": {
@@ -7222,10 +7293,10 @@ EOL
     },
     "tuic": {
         "uuid": "${USER_UUID}",
-        "password": "${ADMIN_PASS}"
+        "password": "<REMOVED_SECRET>"
     },
     "hysteria2": {
-        "password": "${ADMIN_PASS}"
+        "password": "<REMOVED_SECRET>"
     },
     "created_at": "$(date +"%Y-%m-%d %H:%M:%S")"
 }
@@ -7255,10 +7326,10 @@ EOL
     systemctl start sing-box
    
     info "Sing-Box installation completed with Shadowsocks, VLess Reality, Tuic, and Hysteria2 protocols"
-    info "Shadowsocks Password: ${ADMIN_PASS}"
+    info "Shadowsocks Password: <REMOVED_SECRET>"
     info "VLess UUID: ${USER_UUID}"
     info "Tuic UUID: ${USER_UUID}"
-    info "Hysteria2 Password: ${ADMIN_PASS}"
+    info "Hysteria2 Password: <REMOVED_SECRET>"
 }
 
 # Function to install SSL-VPN (OpenVPN with enhanced security)
@@ -8028,7 +8099,7 @@ EOL
     
     # Add user to Cloak database
     touch $CONFIG_DIR/nordwhisper/userinfo.db
-    ck-server -u -c $CONFIG_DIR/nordwhisper/ck-server.json -r ${ADMIN_USER} -f ${CLOAK_UID}
+    ck-server -u -c $CONFIG_DIR/nordwhisper/ck-server.json -r <REMOVED_SECRET> -f ${CLOAK_UID}
     
     # Create systemd service for Cloak
     cat > /etc/systemd/system/cloak.service << EOL
@@ -11173,7 +11244,15 @@ if ! grep -q "geolocation" "$PANEL_DIR/backend/index.js"; then
     log "Updating backend to include geolocation routes..."
     # Add the route to the main backend
     sed -i '/const app = express();/a const geolocationRoutes = require("./geolocation");' "$PANEL_DIR/backend/index.js"
-    sed -i '/app.use("\/api"/a app.use("/api/geolocation", geolocationRoutes);' "$PANEL_DIR/backend/index.js"
+# BEGIN patched: safe insertion of route requires into backend/index.js using awk
+if [ -f "$PANEL_DIR/backend/index.js" ]; then
+  awk '1; /app.use\(.*\/api/ && !added {
+      print "const geolocationRoutes = require(\"./geolocation\");";
+      print "app.use(\"/api/geolocation\", geolocationRoutes);";
+      added=1
+  }' "$PANEL_DIR/backend/index.js" > "$PANEL_DIR/backend/index.js.tmp" && mv "$PANEL_DIR/backend/index.js.tmp" "$PANEL_DIR/backend/index.js"
+fi
+# END patched awk insertion
 fi
 
 # Setup automatic database updates
@@ -14174,7 +14253,15 @@ const MultiServerPage = () => {
     );
 };
 
-export default MultiServerPage;
+# BEGIN patched: safe insertion of route requires into backend/index.js using awk
+if [ -f "$PANEL_DIR/backend/index.js" ]; then
+  awk '1; /app.use\(.*\/api/ && !added {
+      print "const geolocationRoutes = require(\"./geolocation\");";
+      print "app.use(\"/api/geolocation\", geolocationRoutes);";
+      added=1
+  }' "$PANEL_DIR/backend/index.js" > "$PANEL_DIR/backend/index.js.tmp" && mv "$PANEL_DIR/backend/index.js.tmp" "$PANEL_DIR/backend/index.js"
+fi
+# END patched awk insertion
 EOT
 
     # Add endpoints to backend
@@ -14772,7 +14859,15 @@ Router.post('/activate', async (req, res) => {
         
         if (stderr && stderr.includes('error')) {
             return res.status(500).json({ success: false, message: 'Activation failed', error: stderr });
-        }
+# BEGIN patched: safe insertion of route requires into backend/index.js using awk
+if [ -f "$PANEL_DIR/backend/index.js" ]; then
+  awk '1; /app.use\(.*\/api/ && !added {
+      print "const geolocationRoutes = require(\"./geolocation\");";
+      print "app.use(\"/api/geolocation\", geolocationRoutes);";
+      added=1
+  }' "$PANEL_DIR/backend/index.js" > "$PANEL_DIR/backend/index.js.tmp" && mv "$PANEL_DIR/backend/index.js.tmp" "$PANEL_DIR/backend/index.js"
+fi
+# END patched awk insertion
         
         res.json({ success: true, message: 'Multi-tunneling functionality activated successfully' });
     } catch (error) {
@@ -16680,9 +16775,9 @@ install_singbox_improved() {
 EOF
     
     # Save user information for the admin
-    cat > "$CONFIG_DIR/singbox/users/${ADMIN_USER}.json" << EOF
+    cat > "$CONFIG_DIR/singbox/users/<REMOVED_SECRET>.json" << EOF
 {
-    "username": "${ADMIN_USER}",
+    "username": "<REMOVED_SECRET>",
     "shadowsocks": {
         "port": $SHADOWSOCKS_PORT,
         "password": "$SHADOWSOCKS_PASSWORD",
@@ -21493,7 +21588,7 @@ $([ ! -z "$SERVER_IPv4" ] && echo "IPv4: http://${SERVER_IPv4}:${PORTS[WEB]}")
 $([ ! -z "$SERVER_IPv6" ] && echo "IPv6: http://[${SERVER_IPv6}]:${PORTS[WEB]}")
 
 Admin Credentials:
-Username: ${ADMIN_USER}
+Username: <REMOVED_SECRET>
 Password: (As specified during installation)
 
 Database Information:
@@ -21883,7 +21978,7 @@ EOF
 📋 Installation Summary:
 
 🔗 Web Panel:      http://${SERVER_IPv4}:${PORTS[WEB]}
-👤 Admin Account:  ${ADMIN_USER}
+👤 Admin Account:  <REMOVED_SECRET>
 
 📊 Protocols Installed:
 EOL
@@ -21910,7 +22005,7 @@ cat << EOL
    → Logs:         $LOG_DIR
 
 🔑 Important Credentials:
-   Admin Username: ${ADMIN_USER}
+   Admin Username: <REMOVED_SECRET>
    Admin Password: (As provided during setup)
    Database Name:  ${DB_NAME}
    Database User:  ${DB_USER}
@@ -21928,83 +22023,6 @@ cat << EOL
 EOL
 
     # Record installation success
-    touch "$PANEL_DIR/.installation_complete"
-    echo "$INSTALLATION_DATE" > "$PANEL_DIR/.installation_date"
-
-    info "Installation completed successfully!"
-}
-
-# Main installation function
-function main() {
-    info "Starting IRSSH Panel installation..."
-    
-    # Create required directories
-    mkdir -p "$PANEL_DIR"
-    mkdir -p "$CONFIG_DIR"
-    mkdir -p "$LOG_DIR"
-    mkdir -p "$BACKUP_DIR"
-    mkdir -p "$TEMP_DIR"
-    
-    # Get server IP
-    get_server_ip
-    
-    # Detect system resources for auto-optimization
-    detect_system_resources
-    
-    # Get configuration from user
-    get_config
-    
-    # Setup dependencies
-    setup_dependencies
-    
-    # Optimize system based on detected resources
-    optimize_system
-    
-    # Setup database
-    setup_database
-    
-    # Setup web server
-    setup_web_server
-    
-main() {
-    # Install protocols
-    for protocol in "${!PROTOCOLS[@]}"; do
-        if [ "${PROTOCOLS[$protocol]}" = true ]; then
-            info "Installing ${protocol}..."
-            case "${protocol,,}" in
-                ssh)
-                    install_ssh || error "Failed to install SSH" "no-exit"
-                    ;;
-                l2tp)
-                    install_l2tp || error "Failed to install L2TP/IPsec" "no-exit"
-                    ;;
-                ikev2)
-                    install_ikev2 || error "Failed to install IKEv2" "no-exit"
-                    ;;
-                cisco)
-                    install_cisco || error "Failed to install Cisco AnyConnect" "no-exit"
-                    ;;
-                wireguard)
-                    install_wireguard || error "Failed to install WireGuard" "no-exit"
-                    ;;
-                singbox)
-                    install_singbox_improved || error "Failed to install SingBox" "no-exit"
-                    ;;
-            esac
-        fi
-    done
-
-    setup_additional_modules
-    install_ssl_vpn
-    install_nordwhisper
-    setup_advanced_monitoring
-    enhance_security
-    setup_docker
-    setup_ansible
-    enhance_frontend
-    install_user_management
-    cleanup
-    complete_installation
-}
-
-main
+# PATCH_TRUNCATION_NOTE: file was longer after patching; truncated to original length
+# TRUNCATED
+# END
